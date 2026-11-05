@@ -1,0 +1,132 @@
+import { describe, expect, it } from "vitest";
+import { FLOW_WINDOW_MS, parseMonitorCaseSummary } from "../src/index.js";
+
+type Obj = Record<string, unknown>;
+
+const base = (): Obj => ({
+  case_id: "case-monitor-1",
+  window_start: "2026-11-05T12:00:00.000Z",
+  window_end: "2026-11-05T12:05:00.000Z",
+  n: 10,
+  u: 4,
+  s: 0.2,
+  h: false,
+  confidence: 0.55,
+  reasons: ["n", "u"],
+  top_dst_ports: [
+    { port: 443, count: 5 },
+    { port: 80, count: 3 },
+    { port: 22, count: 2 },
+  ],
+  port_ranges: { well_known: 7, registered: 2, dynamic: 1 },
+  app_count: 1,
+  sensor_count: 1,
+  bytes_out: { min: 0, median: 100, max: 1000 },
+  packets: { min: 1, median: 5, max: 20 },
+  src_scope: "private",
+});
+
+const patch = (p: Obj): Obj => ({ ...base(), ...p });
+
+describe("MonitorCaseSummarySchema 合法與多欄", () => {
+  it("合法完整 fixture → ok", () => {
+    const r = parseMonitorCaseSummary(base());
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value.n).toBe(10);
+      expect(r.value.src_scope).toBe("private");
+    }
+    expect(FLOW_WINDOW_MS).toBe(300_000);
+    expect(
+      Date.parse("2026-11-05T12:05:00.000Z") - Date.parse("2026-11-05T12:00:00.000Z"),
+    ).toBe(FLOW_WINDOW_MS);
+  });
+
+  it.each([
+    ["src_ip", { src_ip: "192.0.2.10" }],
+    ["note", { note: "free text" }],
+    ["app_id", { app_id: "orders-app" }],
+    ["sensor_id", { sensor_id: "sensor-1" }],
+  ] as const)("多欄 %s → 拒", (_n, extra) => {
+    const r = parseMonitorCaseSummary(patch(extra));
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.errors.length).toBeGreaterThan(0);
+      expect(JSON.stringify(r.errors)).not.toMatch(/192\.0\.2\.10|free text|orders-app|sensor-1/);
+    }
+  });
+});
+
+describe("MonitorCaseSummarySchema 結構約束", () => {
+  it("top_dst_ports >5 → 拒", () => {
+    const ports = [1, 2, 3, 4, 5, 6].map((i) => ({ port: i, count: 10 - i }));
+    const r = parseMonitorCaseSummary(
+      patch({
+        top_dst_ports: ports,
+        n: 39,
+        port_ranges: { well_known: 39, registered: 0, dynamic: 0 },
+      }),
+    );
+    expect(r.ok).toBe(false);
+  });
+
+  it("top_dst_ports 未按 count 降序 → 拒", () => {
+    const r = parseMonitorCaseSummary(
+      patch({
+        top_dst_ports: [
+          { port: 80, count: 2 },
+          { port: 443, count: 5 },
+        ],
+      }),
+    );
+    expect(r.ok).toBe(false);
+  });
+
+  it("port_ranges 加總 ≠ n → 拒", () => {
+    const r = parseMonitorCaseSummary(
+      patch({ port_ranges: { well_known: 1, registered: 1, dynamic: 1 } }),
+    );
+    expect(r.ok).toBe(false);
+  });
+
+  it("bytes_out min/median/max 順序錯 → 拒", () => {
+    const r = parseMonitorCaseSummary(
+      patch({ bytes_out: { min: 10, median: 5, max: 20 } }),
+    );
+    expect(r.ok).toBe(false);
+  });
+
+  it("packets min/median/max 順序錯 → 拒", () => {
+    const r = parseMonitorCaseSummary(
+      patch({ packets: { min: 1, median: 20, max: 10 } }),
+    );
+    expect(r.ok).toBe(false);
+  });
+});
+
+describe("MonitorCaseSummarySchema 時間與分數", () => {
+  it("時間窗不是剛好 5 分鐘 → 拒", () => {
+    const r = parseMonitorCaseSummary(
+      patch({ window_end: "2026-11-05T12:04:00.000Z" }),
+    );
+    expect(r.ok).toBe(false);
+  });
+
+  it("reasons 重複 → 拒", () => {
+    expect(parseMonitorCaseSummary(patch({ reasons: ["n", "n"] })).ok).toBe(false);
+  });
+
+  it("reasons 不在清單 → 拒", () => {
+    expect(parseMonitorCaseSummary(patch({ reasons: ["x"] })).ok).toBe(false);
+  });
+
+  it("confidence 超出 0..1 → 拒", () => {
+    expect(parseMonitorCaseSummary(patch({ confidence: 1.1 })).ok).toBe(false);
+    expect(parseMonitorCaseSummary(patch({ confidence: -0.01 })).ok).toBe(false);
+  });
+
+  it("app_count／sensor_count =0 → 拒", () => {
+    expect(parseMonitorCaseSummary(patch({ app_count: 0 })).ok).toBe(false);
+    expect(parseMonitorCaseSummary(patch({ sensor_count: 0 })).ok).toBe(false);
+  });
+});

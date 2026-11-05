@@ -4,6 +4,7 @@ import { FlowMetadataEventSchema } from "./flow-metadata-event.js";
 import { BlocklistEntrySchema } from "./blocklist-entry.js";
 import { BlocklistSnapshotSchema } from "./blocklist-snapshot.js";
 import { AllowlistEntrySchema } from "./allowlist-entry.js";
+import { MonitorCaseSummarySchema } from "./monitor-case-summary.js";
 import { Id, NonNegInt } from "./primitives.js";
 
 export const CONTRACTS_PACKAGE = "@semantic-defense/contracts";
@@ -173,3 +174,10 @@ export function toCaseSummary(
 }
 
 export * from "./flow-verdict.js";
+
+export {
+  MonitorCaseSummarySchema,
+  type MonitorCaseSummary,
+} from "./monitor-case-summary.js";
+export const parseMonitorCaseSummary = (input: unknown) =>
+  safeParse(MonitorCaseSummarySchema, input);
