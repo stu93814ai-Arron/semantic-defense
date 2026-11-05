@@ -9,3 +9,5 @@ tools/bin/
 playwright-report/
 test-results/
 coverage/
+!.ci/e2e-seconds
+!.ci/required-seconds
