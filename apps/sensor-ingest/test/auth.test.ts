@@ -81,6 +81,26 @@ describe("sensor-ingest ③b 認證（requireHttps:false 以 inject 驗認證邏
   });
 });
 
+describe("sensor-ingest ③b DoS 面（onRequest 認證、bodyLimit）", () => {
+  it("DoS：未帶 token＋壞 JSON body → 401（認證先於 body 解析）", async () => {
+    const app = await buildIngest({ db, requireHttps: false });
+    const r = await app.inject({ method: "POST", url: "/v1/flows", remoteAddress: IN,
+      headers: { "content-type": "application/json" }, payload: "{bad json" });
+    expect(r.statusCode).toBe(401);
+    await app.close();
+  });
+
+  it("DoS：body 超過 256KB 上限 → 413", async () => {
+    const app = await buildIngest({ db, requireHttps: false });
+    const t = await seedToken(db, ["10.0.0.0/8"]);
+    const r = await app.inject({ method: "POST", url: "/v1/flows", remoteAddress: IN,
+      headers: { ...auth(t), "content-type": "application/json" },
+      payload: JSON.stringify({ flows: "x".repeat(256 * 1024 + 1) }) });
+    expect(r.statusCode).toBe(413);
+    await app.close();
+  });
+});
+
 describe("sensor-ingest ③b HTTPS 強制（預設 requireHttps:true）", () => {
   it("明文 HTTP（含偽造 x-forwarded-proto: https）→ 426", async () => {
     const app = await buildIngest({ db });

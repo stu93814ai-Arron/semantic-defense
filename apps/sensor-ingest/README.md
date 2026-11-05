@@ -2,7 +2,7 @@
 
 獨立程序、獨立埠（預設 8443，見 `deploy/sensor/`）。只依賴 `@semantic-defense/sensor-auth`（token 解析／SHA-256＋timingSafeEqual／`findSensorByToken`／CIDR 判定）與共用 DB 表 `sensor_tokens`；不 import control-api／console。
 
-## 認證順序（路由 preHandler）
+## 認證順序（路由 onRequest，先於 body 解析；bodyLimit 256KB，超過 → 413）
 1. HTTPS：`req.protocol !== "https"` → **426**。不信任 proxy（`trustProxy:false`），`x-forwarded-proto` 無效；生產以 `https: { key, cert }` 由本程序終結 TLS。
 2. `Authorization: Bearer sdst_<sensor_id>.<secret>`；缺／錯／已撤銷 → **401**。
 3. 來源 IP（socket remoteAddress，不讀 X-Forwarded-For）不在 `allowed_cidrs` → **403**。
