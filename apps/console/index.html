@@ -1,6 +1,17 @@
 <!doctype html>
-<html lang="zh-Hant">
+<html lang="zh-Hant" data-theme="nordic">
   <head>
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem("sd.theme");
+          document.documentElement.dataset.theme =
+            t === "italian" || t === "nordic" ? t : "nordic";
+        } catch (e) {
+          document.documentElement.dataset.theme = "nordic";
+        }
+      })();
+    </script>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>應用語意防禦</title>

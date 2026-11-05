@@ -1,0 +1,85 @@
+/* Design System v1.0 tokens — 見 docs/design/DESIGN_SYSTEM.md §7 */
+:root,
+[data-theme="nordic"] {
+  --color-bg: #f4efe6;
+  --color-surface: #fbf8f2;
+  --color-surface-2: #ece4d6;
+  --color-border: #d9cdb8;
+  --color-text: #2e2a24;
+  --color-text-muted: #5f574b;
+  --color-primary: #4f6b57;
+  --color-on-primary: #ffffff;
+  --color-danger: #9e3b2c;
+  --color-warning: #8a5a12;
+  --color-success: #3f6b4a;
+  --color-info: #3e5f78;
+  --color-neutral: #6b6358;
+  --radius-md: 18px;
+  --radius-control: 999px;
+  --font-serif: "Cormorant Garamond", "Noto Serif CJK TC", "Noto Serif TC", serif;
+  --color-wood-from: #d2b288;
+  --color-wood-to: #c6a072;
+  --color-on-wood: #2e2a24;
+  --color-on-wood-muted: #33291f;
+  --texture-wood: repeating-linear-gradient(
+    92deg,
+    rgba(90, 60, 30, 0.08) 0 3px,
+    transparent 3px 19px
+  );
+  --font-title-weight: 600;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 40px;
+  --space-8: 56px;
+  --space-9: 72px;
+  --space-10: 96px;
+  --text-eyebrow: 12px;
+  --text-sm: 13px;
+  --text-body: 15px;
+  --text-banner: 18px;
+  --text-title: 40px;
+}
+
+[data-theme="italian"] {
+  --color-bg: #faf8f5;
+  --color-surface: #ffffff;
+  --color-surface-2: #f1ede8;
+  --color-border: #e2dcd4;
+  --color-text: #1e1c1a;
+  --color-text-muted: #5e5751;
+  --color-primary: #a4472c;
+  --color-on-primary: #ffffff;
+  --color-danger: #a3262a;
+  --color-warning: #87570f;
+  --color-success: #3b6b52;
+  --color-info: #3b5675;
+  --color-neutral: #6a635d;
+  --radius-md: 0px;
+  --radius-control: 0;
+  --font-serif: "Playfair Display", "Noto Serif CJK TC", "Noto Serif TC", serif;
+  --color-wood-from: #1e1c1a;
+  --color-wood-to: #1e1c1a;
+  --color-on-wood: #ffffff;
+  --color-on-wood-muted: #e2dcd4;
+  --texture-wood: none;
+  --font-title-weight: 500;
+}
+
+:root {
+  --font-sans: "Noto Sans TC", "Noto Sans CJK TC", "PingFang TC",
+    "Microsoft JhengHei", sans-serif;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 3px;
+}
+
+.tag[data-tone="danger"] {
+  color: var(--color-danger);
+  background: color-mix(in srgb, var(--color-danger) 10%, var(--color-surface));
+}
