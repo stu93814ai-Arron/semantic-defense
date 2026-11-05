@@ -33,7 +33,7 @@ describe("apiGet / fetchMe / logout", () => {
       data: { items: [] },
     });
     vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(404, { error: "x" }));
-    await expect(apiGet("/api/x")).resolves.toEqual({ status: 404, data: null });
+    await expect(apiGet("/api/x")).resolves.toEqual({ status: 404, data: null, error: "x" });
   });
 
   it("apiGet 401 觸發 unauthorized handler", async () => {
@@ -137,5 +137,45 @@ describe("loginRequestSync", () => {
       "/api/session/login",
       "/api/session/me",
     ]);
+  });
+});
+
+describe("apiGet 429／404", () => {
+  beforeEach(() => {
+    setUnauthorizedHandler(null);
+    vi.stubGlobal("fetch", vi.fn());
+  });
+
+  afterEach(() => {
+    setUnauthorizedHandler(null);
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("429 帶回後端原文（含稍後再試），不改寫", async () => {
+    const verbatim = "帳號或密碼錯誤，請稍後再試";
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: verbatim }), {
+        status: 429,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    const r = await apiGet("/api/session/me");
+    expect(r).toEqual({ status: 429, data: null, error: verbatim });
+    expect(r.error).toContain("稍後再試");
+  });
+
+  it("404 帶回後端 error 原文", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: "查無應用" }), {
+        status: 404,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    await expect(apiGet("/api/apps/x/map")).resolves.toEqual({
+      status: 404,
+      data: null,
+      error: "查無應用",
+    });
   });
 });

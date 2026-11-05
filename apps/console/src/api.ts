@@ -10,13 +10,40 @@ export function setUnauthorizedHandler(handler: (() => void) | null): void {
   onUnauthorized = handler;
 }
 
-export async function apiGet<T>(url: string): Promise<{ status: number; data: T | null }> {
+export type ApiGetResult<T> = {
+  status: number;
+  data: T | null;
+  /** 後端 error 原文（429／4xx JSON） */
+  error?: string;
+};
+
+async function readError(res: Response): Promise<string | undefined> {
+  try {
+    const body = (await res.json()) as { error?: string; message?: string };
+    return body.error ?? body.message;
+  } catch {
+    return undefined;
+  }
+}
+
+export async function apiGet<T>(url: string): Promise<ApiGetResult<T>> {
   const res = await fetch(url, { credentials: "include" });
   if (res.status === 401) {
     onUnauthorized?.();
     return { status: 401, data: null };
   }
-  if (!res.ok) return { status: res.status, data: null };
+  if (res.status === 429) {
+    const error = (await readError(res)) ?? "帳號或密碼錯誤，請稍後再試";
+    return { status: 429, data: null, error };
+  }
+  if (res.status === 404) {
+    const error = await readError(res);
+    return { status: 404, data: null, error };
+  }
+  if (!res.ok) {
+    const error = await readError(res);
+    return { status: res.status, data: null, error };
+  }
   try {
     return { status: res.status, data: (await res.json()) as T };
   } catch {
@@ -79,6 +106,11 @@ export function loginRequestSync(username: string, password: string): LoginResul
     xhr.send(JSON.stringify({ username, password }));
   } catch {
     return { ok: false, status: 0, message: "帳號或密碼錯誤" };
+  }
+  if (xhr.status === 429) {
+    // 後端原文已含「請稍後再試」，UI 原樣顯示、不改寫
+    const msg = parseError(xhr.responseText) ?? "帳號或密碼錯誤，請稍後再試";
+    return { ok: false, status: 429, message: msg };
   }
   if (xhr.status < 200 || xhr.status >= 300) {
     const msg = parseError(xhr.responseText) ?? "帳號或密碼錯誤";
