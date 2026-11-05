@@ -1,0 +1,25 @@
+{
+  "name": "semantic-defense",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "pnpm -r --if-present test",
+    "typecheck": "pnpm -r exec tsc --noEmit -p .",
+    "lint": "eslint .",
+    "dup": "jscpd packages",
+    "audit": "pnpm audit --audit-level high",
+    "secrets": "bash scripts/secrets.sh",
+    "sbom": "mkdir -p reports && pnpm licenses list --prod --json > reports/third-party.json",
+    "ci": "bash scripts/ci.sh",
+    "gate": "bash scripts/gate.sh"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "eslint": "^9.39.5",
+    "eslint-plugin-security": "^4.2.1",
+    "jscpd": "^5.4.2",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.72.1",
+    "vitest": "^5.1.0"
+  }
+}

@@ -1,0 +1,1 @@
+{ "threshold": 3, "minTokens": 50, "reporters": ["console"], "ignore": ["**/dist/**", "**/node_modules/**"], "exitCode": 1 }
