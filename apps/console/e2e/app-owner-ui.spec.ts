@@ -11,9 +11,7 @@ test.describe("準則2：應用負責人 UI 隔離", () => {
     await page.goto("/apps/app-beta/map");
     const denied = page.getByTestId("no-permission");
     const empty = page.getByTestId("empty-state");
-    const deniedVisible = await denied.isVisible().catch(() => false);
-    const emptyVisible = await empty.isVisible().catch(() => false);
-    expect(deniedVisible || emptyVisible).toBe(true);
+    await expect(denied.or(empty).first()).toBeVisible();
     await expect(page.locator("body")).not.toContainText(/app-beta-secret/i);
     await expect(page.locator("body")).not.toContainText(/應用 beta 專屬/i);
   });
