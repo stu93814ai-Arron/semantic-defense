@@ -203,3 +203,77 @@ describe("MonitorCaseSummarySchema 埠／u／count 一致性", () => {
     expect(r.ok).toBe(false);
   });
 });
+
+describe("MonitorCaseSummarySchema reasons 與特徵一致", () => {
+  it("reasons 含 h 但 h 為 false → 拒", () => {
+    const r = parseMonitorCaseSummary(patch({ reasons: ["h"], h: false }));
+    expect(r.ok).toBe(false);
+  });
+
+  it("reasons 含 h 但 n < 5 → 拒", () => {
+    const r = parseMonitorCaseSummary(
+      patch({
+        n: 4,
+        u: 2,
+        h: true,
+        reasons: ["h"],
+        port_ranges: { well_known: 4, registered: 0, dynamic: 0 },
+        top_dst_ports: [
+          { port: 443, count: 2 },
+          { port: 80, count: 2 },
+        ],
+      }),
+    );
+    expect(r.ok).toBe(false);
+  });
+
+  it("reasons 含 s 但 s 為 0 → 拒", () => {
+    const r = parseMonitorCaseSummary(patch({ reasons: ["s"], s: 0 }));
+    expect(r.ok).toBe(false);
+  });
+
+  it("reasons 含 s 但 n < 5 → 拒", () => {
+    const r = parseMonitorCaseSummary(
+      patch({
+        n: 4,
+        u: 2,
+        s: 0.5,
+        reasons: ["s"],
+        port_ranges: { well_known: 4, registered: 0, dynamic: 0 },
+        top_dst_ports: [
+          { port: 443, count: 2 },
+          { port: 80, count: 2 },
+        ],
+      }),
+    );
+    expect(r.ok).toBe(false);
+  });
+
+  it("reasons 含 n 但 n 為 0 → 拒", () => {
+    const r = parseMonitorCaseSummary(
+      patch({
+        n: 0,
+        u: 0,
+        s: 0,
+        h: false,
+        reasons: ["n"],
+        top_dst_ports: [],
+        port_ranges: { well_known: 0, registered: 0, dynamic: 0 },
+        bytes_out: { min: 0, median: 0, max: 0 },
+        packets: { min: 0, median: 0, max: 0 },
+      }),
+    );
+    expect(r.ok).toBe(false);
+  });
+
+  it("reasons 含 u 但 u 為 0 → 拒", () => {
+    const r = parseMonitorCaseSummary(
+      patch({
+        u: 0,
+        reasons: ["u"],
+        top_dst_ports: [],
+      }),
+    );
+    expect(r.ok).toBe(false);
+  });
+});

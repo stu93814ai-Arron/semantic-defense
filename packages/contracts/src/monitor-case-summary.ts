@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { FLOW_WINDOW_MS } from "./flow-verdict.js";
+import { FLOW_WINDOW_MS, MIN_N_FOR_SH } from "./flow-verdict.js";
 import { Id, NonNegInt, Port, Rfc3339 } from "./primitives.js";
 
 const Reason = z.enum(["n", "u", "s", "h"]);
@@ -37,6 +37,19 @@ function uniqueReasons(rs: readonly string[]): boolean {
 
 function uniquePorts(rows: readonly { port: number }[]): boolean {
   return new Set(rows.map((r) => r.port)).size === rows.length;
+}
+
+
+type Feat = { n: number; u: number; s: number; h: boolean; reasons: readonly string[] };
+
+function reasonsMatchFeatures(v: Feat): boolean {
+  const has = (r: string) => v.reasons.includes(r);
+  return (
+    (!has("n") || v.n > 0) &&
+    (!has("u") || v.u > 0) &&
+    (!has("s") || (v.s > 0 && v.n >= MIN_N_FOR_SH)) &&
+    (!has("h") || (v.h && v.n >= MIN_N_FOR_SH))
+  );
 }
 
 /** PLAN-ADDENDUM-MONITOR：監看成案摘要（意圖模型唯一輸入；strict，禁 IP／自由文字／原 id）。 */
@@ -87,6 +100,10 @@ export const MonitorCaseSummarySchema = z
     { message: "port_ranges_sum", path: ["port_ranges"] },
   )
   .refine((v) => ordered(v.bytes_out), { message: "bytes_out_order", path: ["bytes_out"] })
-  .refine((v) => ordered(v.packets), { message: "packets_order", path: ["packets"] });
+  .refine((v) => ordered(v.packets), { message: "packets_order", path: ["packets"] })
+  .refine((v) => reasonsMatchFeatures(v), {
+    message: "reasons_features",
+    path: ["reasons"],
+  });
 
 export type MonitorCaseSummary = z.infer<typeof MonitorCaseSummarySchema>;
