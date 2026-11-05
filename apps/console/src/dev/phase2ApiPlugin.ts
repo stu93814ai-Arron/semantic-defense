@@ -5,6 +5,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 type Role = "operator" | "app_owner" | "platform_admin";
 type User = { username: string; password: string; role: Role; appIds: string[] };
 type Session = { username: string; role: Role; appIds: string[]; lastAccess: number };
+type Failure = { count: number; windowStartedAt: number };
 
 const USERS: User[] = [
   { username: "operator1", password: "pass-operator-1", role: "operator", appIds: [] },
@@ -15,6 +16,7 @@ const USERS: User[] = [
 
 const LOGIN_ERROR = "帳號或密碼錯誤";
 const RATE_MSG = "帳號或密碼錯誤，請稍後再試";
+const RID_COOKIE = "sd_rid";
 
 function idleMs(): number {
   const raw = process.env.VITE_IDLE_TIMEOUT_MS ?? process.env.IDLE_TIMEOUT_MS;
@@ -25,6 +27,11 @@ function idleMs(): number {
 function rateMax(): number {
   const n = Number(process.env.LOGIN_RATE_MAX ?? "5");
   return Number.isFinite(n) && n > 0 ? n : 5;
+}
+
+function rateWindowMs(): number {
+  const n = Number(process.env.LOGIN_RATE_WINDOW_MS ?? "60000");
+  return Number.isFinite(n) && n > 0 ? n : 60_000;
 }
 
 function readBody(req: IncomingMessage): Promise<string> {
@@ -59,43 +66,27 @@ function json(
   res.end(payload);
 }
 
-function clearCookieHeaders(): string[] {
-  return [
-    "sd_session=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0",
-    "sd_hint=; Path=/; Secure; SameSite=Strict; Max-Age=0",
-  ];
+function clearSessionCookie(): string {
+  return "sd_session=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0";
 }
 
-function encodeHint(user: User): string {
-  return encodeURIComponent(
-    JSON.stringify({
-      username: user.username,
-      role: user.role,
-      appIds: user.appIds,
-    }),
-  );
+function sessionCookie(token: string): string {
+  return `sd_session=${token}; Path=/; HttpOnly; Secure; SameSite=Strict`;
 }
 
-function sessionCookieHeaders(token: string, user: User): string[] {
-  return [
-    `sd_session=${token}; Path=/; HttpOnly; Secure; SameSite=Strict`,
-    `sd_hint=${encodeHint(user)}; Path=/; Secure; SameSite=Strict`,
-  ];
+function ridCookie(rid: string): string {
+  return `${RID_COOKIE}=${rid}; Path=/; HttpOnly; Secure; SameSite=Strict`;
 }
 
-/** 開發／E2E 用：對齊 control-api 第 2 階段測試面契約（非正式控制程序）。 */
+/** 開發／E2E 用：對齊 control-api 第 2 階段契約（非正式控制程序）。 */
 export function phase2ApiPlugin(): Plugin {
   const sessions = new Map<string, Session>();
-  const failures = new Map<string, number>();
+  const failures = new Map<string, Failure>();
 
   return {
     name: "phase2-api",
     configureServer(server) {
       server.middlewares.use((req, _res, next) => {
-        const url = req.url?.split("?")[0] ?? "";
-        if ((req.method ?? "GET").toUpperCase() === "GET" && url === "/login") {
-          failures.clear();
-        }
         touchOrExpire(req, sessions);
         next();
       });
@@ -132,7 +123,7 @@ async function handle(
   res: ServerResponse,
   url: string,
   sessions: Map<string, Session>,
-  failures: Map<string, number>,
+  failures: Map<string, Failure>,
 ): Promise<void> {
   const method = (req.method ?? "GET").toUpperCase();
 
@@ -142,28 +133,57 @@ async function handle(
   if (method === "POST" && url === "/api/session/logout") {
     const token = parseCookie(req.headers.cookie, "sd_session");
     if (token) sessions.delete(token);
-    return json(res, 200, { ok: true }, { "Set-Cookie": clearCookieHeaders() });
+    return json(res, 200, { ok: true }, { "Set-Cookie": clearSessionCookie() });
   }
 
   const session = requireSession(req, res, sessions);
   if (!session) return;
 
   if (method === "GET" && url === "/api/session/me") {
-    return json(res, 200, {
-      username: session.username,
-      role: session.role,
-      appIds: session.appIds,
-    });
+    return json(res, 200, { username: session.username, role: session.role });
   }
 
   return handleAuthedGet(method, url, session, res);
+}
+
+function ensureRid(
+  req: IncomingMessage,
+  setCookies: string[],
+): string {
+  const existing = parseCookie(req.headers.cookie, RID_COOKIE);
+  if (existing) return existing;
+  const rid = randomBytes(12).toString("hex");
+  setCookies.push(ridCookie(rid));
+  return rid;
+}
+
+function rateKey(username: string, rid: string, ip: string): string {
+  // 以瀏覽器 context 的 sd_rid 隔離 E2E 計數，避免跨測試污染且不需在 GET /login 重置
+  return `${username}|${rid}|${ip}`;
+}
+
+function isBlocked(failures: Map<string, Failure>, key: string, now: number): boolean {
+  const row = failures.get(key);
+  if (!row) return false;
+  if (row.windowStartedAt <= now - rateWindowMs()) return false;
+  return row.count >= rateMax();
+}
+
+function recordFail(failures: Map<string, Failure>, key: string, now: number): void {
+  const cutoff = now - rateWindowMs();
+  const row = failures.get(key);
+  if (!row || row.windowStartedAt <= cutoff) {
+    failures.set(key, { count: 1, windowStartedAt: now });
+    return;
+  }
+  failures.set(key, { count: row.count + 1, windowStartedAt: row.windowStartedAt });
 }
 
 async function handleLogin(
   req: IncomingMessage,
   res: ServerResponse,
   sessions: Map<string, Session>,
-  failures: Map<string, number>,
+  failures: Map<string, Failure>,
 ): Promise<void> {
   const raw = await readBody(req);
   let username = "";
@@ -176,17 +196,20 @@ async function handleLogin(
     return json(res, 401, { error: LOGIN_ERROR });
   }
 
+  const setCookies: string[] = [];
+  const rid = ensureRid(req, setCookies);
   const ip = req.socket.remoteAddress ?? "local";
-  const key = `${username}|${ip}`;
-  const count = failures.get(key) ?? 0;
-  if (count >= rateMax()) {
-    return json(res, 429, { error: RATE_MSG });
+  const key = rateKey(username, rid, ip);
+  const now = Date.now();
+
+  if (isBlocked(failures, key, now)) {
+    return json(res, 429, { error: RATE_MSG }, setCookies.length ? { "Set-Cookie": setCookies } : undefined);
   }
 
   const user = USERS.find((u) => u.username === username && u.password === password);
   if (!user) {
-    failures.set(key, count + 1);
-    return json(res, 401, { error: LOGIN_ERROR });
+    recordFail(failures, key, now);
+    return json(res, 401, { error: LOGIN_ERROR }, setCookies.length ? { "Set-Cookie": setCookies } : undefined);
   }
 
   failures.delete(key);
@@ -195,14 +218,10 @@ async function handleLogin(
     username: user.username,
     role: user.role,
     appIds: user.appIds,
-    lastAccess: Date.now(),
+    lastAccess: now,
   });
-  return json(
-    res,
-    200,
-    { username: user.username, role: user.role, appIds: user.appIds },
-    { "Set-Cookie": sessionCookieHeaders(token, user) },
-  );
+  setCookies.push(sessionCookie(token));
+  return json(res, 200, { ok: true }, { "Set-Cookie": setCookies });
 }
 
 function requireSession(
@@ -212,43 +231,72 @@ function requireSession(
 ): Session | null {
   const token = parseCookie(req.headers.cookie, "sd_session");
   if (!token) {
-    json(res, 401, { error: "未登入" }, { "Set-Cookie": clearCookieHeaders() });
+    json(res, 401, { error: "未登入" }, { "Set-Cookie": clearSessionCookie() });
     return null;
   }
   const session = sessions.get(token);
   if (!session) {
-    json(res, 401, { error: "未登入" }, { "Set-Cookie": clearCookieHeaders() });
+    json(res, 401, { error: "未登入" }, { "Set-Cookie": clearSessionCookie() });
     return null;
   }
   const now = Date.now();
   if (now - session.lastAccess > idleMs()) {
     sessions.delete(token);
-    json(res, 401, { error: "工作階段已逾時" }, { "Set-Cookie": clearCookieHeaders() });
+    json(res, 401, { error: "工作階段已逾時" }, { "Set-Cookie": clearSessionCookie() });
     return null;
   }
   session.lastAccess = now;
   return session;
 }
 
-function allowOperator(session: Session, res: ServerResponse): void {
-  if (session.role === "operator") json(res, 200, []);
-  else json(res, 403, { error: "無權限" });
+function deny403(res: ServerResponse): void {
+  json(res, 403, { error: "權限不足" });
 }
 
-function allowAdmin(session: Session, res: ServerResponse): void {
-  if (session.role === "platform_admin") json(res, 200, []);
-  else json(res, 403, { error: "無權限" });
+function emptyItems(res: ServerResponse): void {
+  json(res, 200, { items: [] });
 }
 
-function allowOwnerApp(url: string, session: Session, res: ServerResponse): boolean {
-  const app = /^\/api\/apps\/([^/]+)(?:\/map)?$/.exec(url);
-  if (!app) return false;
-  const appId = app[1]!;
-  if (session.role !== "app_owner" || !session.appIds.includes(appId)) {
-    json(res, 403, { error: "無權限" });
-  } else {
-    json(res, 200, {});
+function requireRole(session: Session, role: Role, res: ServerResponse): boolean {
+  if (session.role === role) return true;
+  deny403(res);
+  return false;
+}
+
+function handleOperatorGet(url: string, session: Session, res: ServerResponse): boolean {
+  const lists = url === "/api/judgments" || url === "/api/judgments/history" || url === "/api/constraints";
+  const caseGet = /^\/api\/judgments\/[^/]+$/.test(url);
+  if (!lists && !caseGet) return false;
+  if (!requireRole(session, "operator", res)) return true;
+  if (lists) emptyItems(res);
+  else json(res, 404, { error: "查無案件" });
+  return true;
+}
+
+function handleAdminGet(url: string, session: Session, res: ServerResponse): boolean {
+  const lists = url === "/api/admin/users" || url === "/api/audit" || url === "/api/versions";
+  if (lists) {
+    if (requireRole(session, "platform_admin", res)) emptyItems(res);
+    return true;
   }
+  if (url === "/api/health") {
+    if (requireRole(session, "platform_admin", res)) json(res, 200, { status: "ok" });
+    return true;
+  }
+  return false;
+}
+
+function handleOwnerGet(url: string, session: Session, res: ServerResponse): boolean {
+  const appMatch = /^\/api\/apps\/([^/]+)(\/map)?$/.exec(url);
+  if (!appMatch) return false;
+  if (!requireRole(session, "app_owner", res)) return true;
+  const appId = appMatch[1]!;
+  if (!session.appIds.includes(appId)) {
+    json(res, 404, { error: "查無應用" });
+    return true;
+  }
+  if (appMatch[2]) json(res, 200, { appId, items: [] });
+  else json(res, 200, { id: appId });
   return true;
 }
 
@@ -259,22 +307,11 @@ function handleAuthedGet(
   res: ServerResponse,
 ): void {
   if (method !== "GET") {
-    json(res, 404, { error: "不存在" });
+    json(res, 404, { error: "Not Found" });
     return;
   }
-  if (url.startsWith("/api/judgments") || url === "/api/constraints") {
-    allowOperator(session, res);
-    return;
-  }
-  if (
-    url === "/api/admin/users" ||
-    url === "/api/audit" ||
-    url === "/api/versions" ||
-    url === "/api/health"
-  ) {
-    allowAdmin(session, res);
-    return;
-  }
-  if (allowOwnerApp(url, session, res)) return;
-  json(res, 404, { error: "不存在" });
+  if (handleOperatorGet(url, session, res)) return;
+  if (handleAdminGet(url, session, res)) return;
+  if (handleOwnerGet(url, session, res)) return;
+  json(res, 404, { error: "Not Found" });
 }
