@@ -96,6 +96,9 @@ importers:
 
   apps/control-api:
     dependencies:
+      '@semantic-defense/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
       argon2:
         specifier: ^0.45.2
         version: 0.45.2
