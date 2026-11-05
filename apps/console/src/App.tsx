@@ -6,7 +6,6 @@ import { BlacklistListedPage } from "./pages/BlacklistListedPage";
 import { BlacklistReviewPage } from "./pages/BlacklistReviewPage";
 import { EmptyDataPage } from "./pages/EmptyDataPage";
 import { LoginPage } from "./pages/LoginPage";
-import { ModePage } from "./pages/ModePage";
 import { NoPermissionPage } from "./pages/NoPermissionPage";
 import { WhitelistPage } from "./pages/WhitelistPage";
 import { ThemeSwitch } from "./theme/ThemeSwitch";
@@ -126,14 +125,6 @@ export function App() {
             element={
               <ProtectedRoute>
                 <WhitelistPage />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/mode"
-            element={
-              <ProtectedRoute>
-                <ModePage />
               </ProtectedRoute>
             }
           />

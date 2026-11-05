@@ -21,8 +21,7 @@ function isAdminPath(path: string): boolean {
     path === "/audit" ||
     path === "/versions" ||
     path === "/health" ||
-    path === "/whitelist" ||
-    path === "/mode"
+    path === "/whitelist"
   );
 }
 
@@ -54,7 +53,6 @@ const TITLES: Record<string, string> = {
   "/blacklist/review": "黑名單審核",
   "/blacklist": "黑名單撤回",
   "/whitelist": "白名單",
-  "/mode": "模式切換",
 };
 
 function staticTitle(path: string): string | undefined {
