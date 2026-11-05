@@ -20,11 +20,22 @@
 | `/versions` | 版本與影子流量 |
 | `/health` | 平台健康 |
 
-## 角色可見頁（PLAN）
+## 監看模式路由（PLAN-ADDENDUM-MONITOR.md §7a，提交 `96f29d9`）
 
-- `operator`：`/judgments*`、`/constraints`
+附錄路由表**優先於** PLAN.md「角色與路由」表。E2E 已納入第 3 階段三條；**不含**第 5 階段 `/mode`（總召裁示）。
+
+| 路徑 | 說明 | 角色 | 階段 |
+| --- | --- | --- | --- |
+| `/blacklist/review` | 黑名單待審（核准／退回） | `operator` | 3 |
+| `/blacklist` | 已上榜黑名單（可撤銷） | `operator` | 3 |
+| `/whitelist` | 白名單維護 | `platform_admin` | 3 |
+| `/mode` | 模式切換（本階段**不**測） | `platform_admin` | 5 |
+
+## 角色可見頁（PLAN ＋ 附錄第 3 階段）
+
+- `operator`：`/judgments*`、`/constraints`、`/blacklist/review`、`/blacklist`
 - `app_owner`：`/apps/new`、`/apps/:appId/map`（僅己應用）
-- `platform_admin`：`/admin/users`、`/audit`、`/versions`、`/health`
+- `platform_admin`：`/admin/users`、`/audit`、`/versions`、`/health`、`/whitelist`
 
 未授權路由 → **無權限**頁（`data-testid="no-permission"`），**不是**空白頁。
 
