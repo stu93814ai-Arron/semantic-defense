@@ -103,9 +103,26 @@ main {
 .btn:disabled,
 .btn[aria-disabled="true"] {
   background: var(--color-surface-2);
-  color: var(--color-neutral);
+  color: var(--color-text-muted);
   cursor: not-allowed;
+  opacity: 1;
 }
+
+.btn:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 3px;
+}
+
+input:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 3px;
+}
+
+.theme-switch__option:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 3px;
+}
+
 
 input {
   width: 100%;
