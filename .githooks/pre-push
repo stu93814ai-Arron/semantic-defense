@@ -1,2 +1,7 @@
 #!/usr/bin/env bash
-exec bash scripts/gate.sh
+# 推送前快速檢查：與閘門步驟 2–3 相同（typecheck、eslint --max-warnings=0）。完整閘門請跑 pnpm gate:clean。
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+echo "pre-push: 型別檢查"; pnpm run -s typecheck
+echo "pre-push: eslint"; pnpm run -s lint --max-warnings=0
+echo "pre-push: OK"
