@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import { FlowMetadataEventSchema } from "./flow-metadata-event.js";
 
 export const CONTRACTS_PACKAGE = "@semantic-defense/contracts";
 
@@ -76,6 +77,13 @@ function safeParse<T>(schema: z.ZodType<T>, input: unknown): ParseResult<T> {
 export const parseRequestEvent = (input: unknown) => safeParse(RequestEventSchema, input);
 export const parseCaseSummary = (input: unknown) => safeParse(CaseSummarySchema, input);
 export const parseConstraintDraft = (input: unknown) => safeParse(ConstraintDraftSchema, input);
+
+export {
+  FlowMetadataEventSchema,
+  type FlowMetadataEvent,
+} from "./flow-metadata-event.js";
+export const parseFlowMetadataEvent = (input: unknown) =>
+  safeParse(FlowMetadataEventSchema, input);
 
 const ORDER: readonly Family[] = ["read", "write", "auth", "admin"];
 const rank = (f: Family): number => ORDER.indexOf(f);
