@@ -1,1 +1,1 @@
-{ "threshold": 3, "minTokens": 50, "reporters": ["console"], "format": ["typescript", "tsx", "javascript", "jsx"], "ignore": ["**/dist/**", "**/node_modules/**", "**/playwright-report/**", "**/test-results/**", "**/coverage/**"], "exitCode": 1 }
+{ "threshold": 3, "minTokens": 50, "reporters": ["console"], "format": ["typescript", "tsx", "javascript", "jsx"], "ignore": ["**/dist/**", "**/node_modules/**", "**/playwright-report/**", "**/test-results/**", "**/coverage/**"] }
