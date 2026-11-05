@@ -17,7 +17,10 @@ export default defineConfig({
     passWithNoTests: false,
     projects: [
       { extends: true, test: { name: "node", environment: "node", exclude: E2E, testTimeout: 60_000, hookTimeout: 60_000, // 與 apps/control-api/vitest.config.ts 一致（Postgres 啟動）
-        include: ["packages/*/{src,test}/**/*.test.ts", "apps/control-api/{src,test}/**/*.test.ts"] } },
+        include: ["packages/*/{src,test}/**/*.test.ts"] } },
+      // control-api 測試共用同一個拋棄式 Postgres（DATABASE_URL），檔案間不並行以免互相污染
+      { extends: true, test: { name: "control-api", environment: "node", exclude: E2E, testTimeout: 60_000, hookTimeout: 60_000,
+        fileParallelism: false, include: ["apps/control-api/{src,test}/**/*.test.ts"] } },
       { extends: true, test: { name: "console", environment: "jsdom", exclude: E2E,
         include: ["apps/console/{src,test}/**/*.test.{ts,tsx}"] } },
     ],
