@@ -22,6 +22,10 @@ function isAdminPath(path: string): boolean {
   );
 }
 
+function isOwnerPath(path: string): boolean {
+  return path === "/apps/new" || /^\/apps\/[^/]+\/map$/.test(path);
+}
+
 /**
  * 角色層閘門。應用地圖的「是否己應用」改由 API 404/403 決定，不在此用 appIds。
  */
@@ -29,9 +33,7 @@ export function accessFor(path: string, user: SessionUser | null): "ok" | "login
   if (path === "/login" || path.startsWith("/login?")) return "ok";
   if (!user) return "login";
   if (isOperatorPath(path)) return user.role === "operator" ? "ok" : "deny";
-  if (path === "/apps/new" || /^\/apps\/[^/]+\/map$/.test(path)) {
-    return user.role === "app_owner" ? "ok" : "deny";
-  }
+  if (isOwnerPath(path)) return user.role === "app_owner" ? "ok" : "deny";
   if (isAdminPath(path)) return user.role === "platform_admin" ? "ok" : "deny";
   return "deny";
 }

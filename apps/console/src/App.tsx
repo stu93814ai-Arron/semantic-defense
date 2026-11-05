@@ -7,18 +7,35 @@ import { LoginPage } from "./pages/LoginPage";
 import { NoPermissionPage } from "./pages/NoPermissionPage";
 import { apiGet } from "./api";
 
-function probeUrl(path: string): string | null {
+function probeExact(path: string): string | null {
   if (path === "/judgments" || path === "/judgments/history") return "/api/judgments";
-  if (/^\/judgments\/[^/]+$/.test(path)) return `/api/judgments/${path.slice("/judgments/".length)}`;
   if (path === "/constraints") return "/api/constraints";
   if (path === "/admin/users") return "/api/admin/users";
   if (path === "/audit") return "/api/audit";
   if (path === "/versions") return "/api/versions";
   if (path === "/health") return "/api/health";
-  if (path === "/apps/new") return null;
-  const m = /^\/apps\/([^/]+)\/map$/.exec(path);
-  if (m) return `/api/apps/${m[1]}/map`;
   return null;
+}
+
+function probeUrl(path: string): string | null {
+  if (path === "/apps/new") return null;
+  const exact = probeExact(path);
+  if (exact) return exact;
+  if (/^\/judgments\/[^/]+$/.test(path)) {
+    return `/api/judgments/${path.slice("/judgments/".length)}`;
+  }
+  const m = /^\/apps\/([^/]+)\/map$/.exec(path);
+  return m ? `/api/apps/${m[1]}/map` : null;
+}
+
+function decideApiGate(
+  status: number,
+  path: string,
+): "ok" | "deny" | "ignore" {
+  if (status === 401) return "ignore";
+  if (status === 403) return "deny";
+  if (status === 404 && isAppMapPath(path)) return "deny";
+  return "ok";
 }
 
 function ProtectedEmpty({ hint }: { hint: string }) {
@@ -45,17 +62,8 @@ function ProtectedEmpty({ hint }: { hint: string }) {
     setApiGate("pending");
     void apiGet(url).then((r) => {
       if (cancelled) return;
-      if (r.status === 401) return;
-      if (r.status === 403) {
-        setApiGate("deny");
-        return;
-      }
-      // 應用地圖：非己應用為 404 → 無權限；案件 404 仍顯示空狀態
-      if (r.status === 404 && isAppMapPath(location.pathname)) {
-        setApiGate("deny");
-        return;
-      }
-      setApiGate("ok");
+      const next = decideApiGate(r.status, location.pathname);
+      if (next !== "ignore") setApiGate(next);
     });
     return () => {
       cancelled = true;
