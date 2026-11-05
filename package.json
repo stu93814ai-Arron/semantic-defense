@@ -3,18 +3,21 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "pnpm -r --if-present test",
+    "test": "node scripts/tests.mjs",
     "typecheck": "pnpm -r exec tsc --noEmit -p .",
     "lint": "eslint .",
     "dup": "jscpd packages",
-    "audit": "pnpm audit --audit-level high",
+    "audit": "bash scripts/audit.sh",
     "secrets": "bash scripts/secrets.sh",
-    "sbom": "mkdir -p reports && pnpm licenses list --prod --json > reports/third-party.json",
+    "sbom": "bash scripts/sbom.sh",
     "ci": "bash scripts/ci.sh",
-    "gate": "bash scripts/gate.sh"
+    "gate": "bash scripts/gate.sh",
+    "test:once": "vitest run",
+    "coverage": "vitest run --coverage"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",
+    "@vitest/coverage-v8": "5.1.0",
     "eslint": "^9.39.5",
     "eslint-plugin-security": "^4.2.1",
     "jscpd": "^5.4.2",

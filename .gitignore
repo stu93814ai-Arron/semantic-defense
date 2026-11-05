@@ -3,4 +3,6 @@ dist/
 *.tsbuildinfo
 reports/
 tools/bin/
-.ci/
+.ci/*
+!.ci/gate-history.csv
+!.ci/flaky.json
