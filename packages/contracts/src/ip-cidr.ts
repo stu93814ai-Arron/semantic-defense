@@ -124,16 +124,19 @@ function reservedV6(parts: number[]): boolean {
   return (parts[0]! & 0xffc0) === 0xfe80;
 }
 
-function prefixInRange(version: 4 | 6, prefix: number): boolean {
-  return version === 4 ? prefix >= 24 && prefix <= 32 : prefix >= 64 && prefix <= 128;
+/** wide=true：白名單可寬於 /24、/64；仍拒 /0。 */
+function prefixInRange(version: 4 | 6, prefix: number, wide: boolean): boolean {
+  if (prefix < 1) return false;
+  if (version === 4) return prefix <= 32 && (wide || prefix >= 24);
+  return prefix <= 128 && (wide || prefix >= 64);
 }
 
 /** 拒前導 0（如 024）；無斜線 → 主機前綴。 */
-function parsePrefix(prefixTok: string | null, version: 4 | 6): number | null {
+function parsePrefix(prefixTok: string | null, version: 4 | 6, wide: boolean): number | null {
   if (prefixTok === null) return version === 4 ? 32 : 128;
   if (!/^[1-9]\d*$/.test(prefixTok)) return null;
   const prefix = Number(prefixTok);
-  if (!prefixInRange(version, prefix)) return null;
+  if (!prefixInRange(version, prefix, wide)) return null;
   return prefix;
 }
 
@@ -152,26 +155,37 @@ function checkV6(address: string, prefix: number): ParsedCidr | null {
   return { version: 6, address, prefix };
 }
 
-/**
- * 解析並檢查黑名單／白名單用 IP 或 CIDR。
- * 無前綴 → /32 或 /128；IPv4 ≥/24；IPv6 ≥/64；拒 /0、主機位非零、保留位址、%、
- * 非 RFC5952 字面、IPv4-mapped。
- */
-export function parseCidr(raw: string): ParsedCidr | null {
+function parseCidrMode(raw: string, wide: boolean): ParsedCidr | null {
   if (typeof raw !== "string" || raw.includes("%") || raw.includes(" ")) return null;
   const slash = raw.indexOf("/");
   const address = slash === -1 ? raw : raw.slice(0, slash);
   const prefixTok = slash === -1 ? null : raw.slice(slash + 1);
   const version = isIP(address) as 0 | 4 | 6;
   if (version === 0) return null;
-  const prefix = parsePrefix(prefixTok, version);
+  const prefix = parsePrefix(prefixTok, version, wide);
   if (prefix === null) return null;
   return version === 4 ? checkV4(address, prefix) : checkV6(address, prefix);
 }
 
-/** 供 schema refine：合法且通過契約 IP 規則則 true。 */
+/**
+ * 黑名單用 IP／CIDR：無前綴 → /32|/128；IPv4 ≥/24；IPv6 ≥/64；
+ * 拒 /0、主機位非零、保留、%、非 RFC5952、IPv4-mapped。
+ */
+export function parseCidr(raw: string): ParsedCidr | null {
+  return parseCidrMode(raw, false);
+}
+
+/** 供 schema refine：合法且通過黑名單 IP 規則則 true。 */
 export function assertIpOrCidr(raw: string): boolean {
   return parseCidr(raw) !== null;
+}
+
+/**
+ * 白名單 CIDR：可比黑名單寬（允許 < /24、< /64），仍拒 /0、主機位非零、
+ * 保留、%、非 canonical、IPv4-mapped。
+ */
+export function assertAllowlistCidr(raw: string): boolean {
+  return parseCidrMode(raw, true) !== null;
 }
 
 /** auto 來源僅允許主機前綴 /32、/128（含無斜線寫法）。 */
