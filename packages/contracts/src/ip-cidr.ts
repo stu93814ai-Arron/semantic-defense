@@ -197,3 +197,17 @@ export function isHostPrefix(raw: string): boolean {
   const p = parseCidr(raw);
   return p !== null && ((p.version === 4 && p.prefix === 32) || (p.version === 6 && p.prefix === 128));
 }
+
+/**
+ * 流量紀錄用單一 IP：拒 /、%、空白；IPv6 須 RFC5952 canonical 且非 IPv4-mapped。
+ * 與黑名單同一套字面規則，但**不**拒保留位址（流量紀錄非封鎖對象）。
+ */
+export function assertFlowSingleIp(raw: string): boolean {
+  if (typeof raw !== "string" || raw.includes("/") || raw.includes("%") || raw.includes(" ")) return false;
+  const version = isIP(raw);
+  if (version === 4) return true;
+  if (version !== 6) return false;
+  const parts = expandIpv6(raw);
+  if (!parts) return false;
+  return formatCanonicalIpv6(parts) === raw && !isIpv4Mapped(parts);
+}

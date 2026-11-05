@@ -54,6 +54,23 @@ describe("FlowMetadataEventSchema", () => {
     ["空 IP", patch({ dst_ip: "" }), false],
     ["壞 uuid", patch({ flow_id: "not-uuid" }), false],
     ["壞 ts", patch({ ts: "2026-11-05" }), false],
+    // 資安殘留 harden：與 ip-cidr 同規則（canonical、拒 mapped），但保留位址可過
+    ["保留 v4 loopback", patch({ src_ip: "127.0.0.1" }), true],
+    ["保留 v4 未指定", patch({ src_ip: "0.0.0.0" }), true],
+    ["保留 v4 link-local", patch({ dst_ip: "169.254.1.1" }), true],
+    ["保留 v4 multicast", patch({ dst_ip: "224.0.0.1" }), true],
+    ["保留 v4 broadcast", patch({ dst_ip: "255.255.255.255" }), true],
+    ["私有 v4", patch({ src_ip: "10.0.0.1" }), true],
+    ["保留 v6 loopback", patch({ src_ip: "::1", dst_ip: "::1" }), true],
+    ["保留 v6 未指定", patch({ src_ip: "::", dst_ip: "::1" }), true],
+    ["保留 v6 link-local", patch({ src_ip: "fe80::1", dst_ip: "fe80::2" }), true],
+    ["保留 v6 multicast", patch({ src_ip: "2001:db8::1", dst_ip: "ff02::1" }), true],
+    ["v6 非 canonical 大寫", patch({ src_ip: "2001:0DB8::1" }), false],
+    ["v6 非 canonical 大寫 hex", patch({ src_ip: "2001:DB8::1" }), false],
+    ["v6 非 canonical 未壓縮", patch({ src_ip: "2001:db8:0:0:0:0:0:1" }), false],
+    ["v6 非 canonical 前導零", patch({ dst_ip: "2001:db8::01" }), false],
+    ["v6 IPv4-mapped 點分", patch({ src_ip: "::ffff:192.0.2.1" }), false],
+    ["v6 IPv4-mapped hex", patch({ dst_ip: "::ffff:c000:201" }), false],
   ])("%s → ok=%s", (_n, input, ok) => {
     const r = parseFlowMetadataEvent(input);
     expect(r.ok).toBe(ok);
