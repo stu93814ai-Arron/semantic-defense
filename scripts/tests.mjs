@@ -4,10 +4,10 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 mkdirSync("reports", { recursive: true }); mkdirSync(".ci", { recursive: true });
 function run(i, cov) {
   const out = `reports/vitest-run${i}.json`;
-  const args = ["vitest", "run", "--reporter=json", `--outputFile=${out}`];
+  const args = ["scripts/with-pg.mjs", "npx", "vitest", "run", "--reporter=json", `--outputFile=${out}`];
   if (cov) args.push("--coverage");
   let covFail = false;
-  try { execFileSync("npx", args, { stdio: "inherit" }); } catch { covFail = true; }
+  try { execFileSync("node", args, { stdio: "inherit" }); } catch { covFail = true; }
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- out 由本檔固定樣板產生，非外部輸入
   const r = JSON.parse(readFileSync(out, "utf8"));
   const m = new Map();

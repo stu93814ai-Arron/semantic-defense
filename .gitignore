@@ -6,3 +6,6 @@ tools/bin/
 .ci/*
 !.ci/gate-history.csv
 !.ci/flaky.json
+playwright-report/
+test-results/
+coverage/
