@@ -53,3 +53,9 @@
 ## 開發伺服器
 
 實作完成後 `pnpm dev` 應啟動 Vite。目前 Playwright `webServer` 暫以空靜態目錄佔位，使案例可執行並紅燈；合併實作時改回 Vite。
+
+## 總召已確認
+
+- Cookie 名 `sd_session`；登入 body 用 `username`
+- 短閒置 E2E 可用 **`VITE_IDLE_TIMEOUT_MS`（僅測試建置）**；**伺服器端 idle 為權威**
+- 緊急暫停獨立 API **延至第 4 階段**

@@ -2,12 +2,14 @@
 
 本目錄只寫紅燈驗收測試。實作須滿足下列測試可呼叫的表面；**不**新增 PLAN 未列的產品欄位。
 
-## 技術（總召選定）
+## 技術（總召選定／已確認）
 
 - Fastify + Postgres；測試用 **PGlite**（記憶體／檔案均可，須 <10 分鐘跑完）
 - 密碼：**argon2**
 - 工作階段：伺服器端 session；Cookie 名 **`sd_session`**；屬性 **HttpOnly; Secure; SameSite=Strict**
 - 閒置逾時：由 `buildApp` 組態 **`idleTimeoutMs`** 控制（測試可設極短）
+- **權威閒置判定在伺服器端**；前端 `VITE_IDLE_TIMEOUT_MS` **僅測試建置**用來縮短 E2E 等待，不得取代伺服器逾時
+- **緊急暫停（emergency stop）獨立 API 延至第 4 階段**；本階段只涵蓋登入／角色／空狀態與上表 GET
 
 ## 工廠與種子
 
@@ -19,8 +21,13 @@ const app = await buildApp({
   loginRateLimit: { maxFailures: 5, windowMs: 60_000 },
 });
 await seedPhase2Fixtures(app); // 固定帳號／應用（見下）
-// Fastify inject：
-await app.inject({ method: "POST", url: "/api/session/login", payload: {...} });
+// Fastify inject（可帶 remoteAddress 模擬來源）：
+await app.inject({
+  method: "POST",
+  url: "/api/session/login",
+  payload: { username, password },
+  remoteAddress: "198.51.100.1",
+});
 await app.close();
 ```
 
@@ -35,7 +42,7 @@ await app.close();
 | `owner2` | `pass-owner-2` | `app_owner` | `app-beta` |
 | `admin1` | `pass-admin-1` | `platform_admin` | — |
 
-## HTTP 表面（對齊 PLAN 頁／角色；路徑為測試面約定）
+## HTTP 表面（對齊 PLAN 頁／角色；路徑為測試面約定，總召已確認）
 
 | 方法 | 路徑 | 允許角色 |
 | --- | --- | --- |
@@ -55,10 +62,13 @@ await app.close();
 
 未登入 → **401**；已登入但角色不符或非己應用 → **403**。
 
-## 登入錯誤與速率
+## 登入錯誤與速率（總召已確認）
 
-- 未知帳號與密碼錯誤：**同一**繁中訊息 `帳號或密碼錯誤`（不揭露帳號是否存在）
-- 連續失敗達 **`loginRateLimit.maxFailures`（預設 5）** → **429**，訊息仍不得用於枚舉帳號
+- 未知帳號與密碼錯誤：**同一**繁中訊息 `帳號或密碼錯誤`（不揭露帳號是否存在）；**回應本文須位元組一致**
+- 連續失敗達 **`loginRateLimit.maxFailures`（預設 5）／`windowMs`（預設 60s）** → **429**
+- **計數鍵：`username` + 來源位址**（inject 以 `remoteAddress` 模擬）。不存在的 username 與既有帳號**同一套計數與 429 本文**
+- 不同 `remoteAddress`、同一 username → **分開計數**
+- **回應時間一致性**（未知帳號不得明顯快於既有帳號以致可枚舉）：列為**審查項**，不寫易碎的自動時間斷言；實作審查時抽樣比較中位數即可
 
 ## 空資料 API
 
