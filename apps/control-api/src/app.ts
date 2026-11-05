@@ -18,12 +18,24 @@ export type BuildAppOptions = {
   now?: () => number;
   /** 僅綁管理平面 listen；port 0 = 系統指派。不得另開流量 listener。 */
   management?: { host: string; port: number };
+  /** 測試用：ready／listen 前掛額外路由（例如無 roles 探針）。 */
+  beforeReady?: (app: ControlApi) => void | Promise<void>;
 };
 
 export type ControlApi = FastifyInstance;
 
+export type AuthRouteAuditEntry = {
+  method: string;
+  url: string;
+  roles: Role[] | "public" | "any" | undefined;
+};
+
 declare module "fastify" {
-  interface FastifyInstance { db: Db }
+  interface FastifyInstance {
+    db: Db;
+    /** onRoute 收集的已掛路由 roles 稽核表（測試用）。 */
+    authRouteAudit: AuthRouteAuditEntry[];
+  }
   interface FastifyRequest { user?: import("./auth.js").SessionUser }
   interface FastifyContextConfig { roles?: Role[] | "public" | "any" }
 }
@@ -147,6 +159,24 @@ function allowEmptyJson(app: ControlApi): void {
   );
 }
 
+
+/** onRoute 收集已掛路由的 method／url／roles，供稽核測試斷言。 */
+function installRouteAudit(app: ControlApi): void {
+  const audit: AuthRouteAuditEntry[] = [];
+  app.decorate("authRouteAudit", audit);
+  app.addHook("onRoute", (route) => {
+    const methods = Array.isArray(route.method) ? route.method : [route.method];
+    for (const method of methods) {
+      if (method === "HEAD") continue;
+      audit.push({
+        method,
+        url: route.url,
+        roles: route.config?.roles,
+      });
+    }
+  });
+}
+
 export async function buildApp(opts: BuildAppOptions = {}): Promise<ControlApi> {
   const idleTimeoutMs = opts.idleTimeoutMs ?? 30 * 60_000;
   const rl = opts.loginRateLimit ?? { maxFailures: 5, windowMs: 60_000 };
@@ -156,6 +186,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<ControlApi> 
   const app = Fastify({ trustProxy: opts.trustProxy ?? false });
   allowEmptyJson(app);
   app.decorate("db", db);
+  installRouteAudit(app);
   app.addHook("onClose", async () => { await db.close(); });
   app.addHook("preHandler", createAuthPreHandler(db, idleTimeoutMs, now));
   registerLogin(app, db, limiter, now);
@@ -163,6 +194,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<ControlApi> 
   registerRoleRoutes(app);
   registerOwnerRoutes(app, db);
   app.setNotFoundHandler((_req, reply) => reply.code(404).send({ error: "Not Found" }));
+  if (opts.beforeReady) await opts.beforeReady(app);
   if (opts.management) {
     await app.listen({ host: opts.management.host, port: opts.management.port });
   } else {

@@ -24,6 +24,7 @@ export type BuildAppOptions = ImplBuildAppOptions & {
   now?: () => number;
   /** 管理平面 listen；port 0 = 系統指派。傳入時 buildApp 回傳前須已 listening。 */
   management?: { host: string; port: number };
+  beforeReady?: (app: ControlApi) => void | Promise<void>;
 };
 
 export async function buildApp(
