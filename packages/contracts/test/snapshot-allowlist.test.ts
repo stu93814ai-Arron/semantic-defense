@@ -50,7 +50,7 @@ describe("BlocklistSnapshotSchema", () => {
     ["合法空 entries", snapPatch({ entries: [] }), true],
     ["合法含一筆", snapBase(), true],
     ["sha 大寫 hex", snapPatch({ entries_sha256: "A".repeat(64) }), false],
-    ["sha 混合大小寫", snapPatch({ entries_sha256: "Ab" + "c" * 62 }), false],
+    ["sha 混合大小寫", snapPatch({ entries_sha256: "Ab" + "c".repeat(62) }), false],
     ["signature 含 padding", snapPatch({ signature: `${SIG}==` }), false],
     ["signature 單 padding", snapPatch({ signature: `${SIG}=` }), false],
     ["version 0", snapPatch({ version: 0 }), false],
