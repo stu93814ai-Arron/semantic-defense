@@ -100,3 +100,31 @@
 審查員：資安審查員  
 對象 PR／變更：______________  
 日期（Asia/Taipei）：______________
+
+---
+
+## 簽核紀錄
+
+### 2026-11-05（Asia/Taipei）— 准予合併（附殘留風險）
+
+- 對象：`packages/contracts`，請求審 `21793dd`（父 `80c7738`）；審核當下 HEAD 因 CI 閘門紀錄成為 `b8514b5`（僅 `.ci/gate-history.csv` +1）。
+- 差異相對 `9ffeda9..21793dd`：+386/−6，範圍僅 contracts fixtures/src/test。
+- 測試：74 全綠；`pnpm run ci` GREEN；gitleaks 無洩漏。
+- A／B／C／D／E／F／G：通過（A9 數值無下限為次要）。
+- **R1（第 2 階段前必須修，不擋本階段）：** `app_id`／`actor_id`／`session_id`／`param_roles.name|type`／`route_family`／`subject.id` 為不限字元集與長度的自由字串；指示文字可經 `actor_id`／`session_id` 原樣進入案件摘要（未來模型輸入）。要求：識別欄固定格式（如 `^[A-Za-z0-9._:-]{1,64}$`），`param_roles.type` 改列舉，並補測試。
+- **R2（建議同步修）：** `distance`／`count`／`normal_neighbor_count` 加 nonnegative；後兩者改 int。
+- 結論：**准予合併**。
+
+審查員：資安審查員
+
+### 2026-11-05（Asia/Taipei）— R1／R2 收窄：准予合併（附後續）
+
+- 對象程式：`fd782b5`（`packages/contracts/src/index.ts` +15/−12）；測試先前提交含 `test/r1-r2-narrowing.test.ts`。
+- R1：`Id` = min1 max128 + `/^[A-Za-z0-9_.:-]+$/` 套用於 app_id／actor_id／session_id／param_roles.name／route_family／subject.id；`param_roles.type` = enum string|number|boolean。指示文句經 actor_id 實測被拒且錯誤不回原文。長度 128（非 64）可接受。
+- R2：distance nonnegative；count／normal_neighbor_count = int nonnegative。解析路徑通過。
+- 測試宣稱 201／201、ci GREEN（審查員抽核源碼與煙測通過）。
+- **N1（第 2 階段前必修，不擋本次；由 A 組修，修完再簽）：** `toCaseSummary` 未驗證 `opts`／輸出，可回傳負 distance 或非整數 normal_neighbor_count。請對 opts 或輸出跑 `CaseSummarySchema`。
+- **N3：** 程式收窄已單獨提交為 `fd782b5`；本檔簽核紀錄另以 docs commit 入庫。
+- 結論：**准予合併**。
+
+審查員：資安審查員
