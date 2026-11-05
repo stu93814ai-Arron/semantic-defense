@@ -6,7 +6,10 @@
     "jsx": "react-jsx",
     "types": ["node"],
     "noEmit": true,
-    "lib": ["ES2022", "DOM", "DOM.Iterable"]
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "allowImportingTsExtensions": false
   },
   "include": ["e2e", "src", "playwright.config.ts", "vite.config.ts"]
 }

@@ -1,6 +1,7 @@
 import { defineConfig } from "vite";
 
-/** 第 2 階段實作前僅佔位；E2E 預期由此啟動。 */
+/** React JSX 由 esbuild 自動處理；E2E／開發用登入面於下一個 commit 掛上。 */
 export default defineConfig({
-  server: { port: 5173, strictPort: true },
+  server: { host: "127.0.0.1", port: 5173, strictPort: true },
+  esbuild: { jsx: "automatic" },
 });
