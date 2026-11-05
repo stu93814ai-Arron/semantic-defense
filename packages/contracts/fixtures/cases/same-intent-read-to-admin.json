@@ -8,7 +8,7 @@
       "from_family": "read",
       "to_family": "admin",
       "distance": 0.82,
-      "count": 4
+      "count": 1
     }
   ],
   "privileged_target": "admin",

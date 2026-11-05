@@ -3,15 +3,13 @@ import { describe, expect, it } from "vitest";
 import { parseCaseSummary, parseConstraintDraft, parseRequestEvent, toCaseSummary } from "../src/index.js";
 
 type Obj = Record<string, unknown>;
-type Res = { ok: boolean; errors?: unknown[] };
+type Res = { ok: boolean; errors?: unknown[]; value?: unknown };
 type Case = [string, () => Res];
 const ROOT = new URL("../fixtures/", import.meta.url);
 // eslint-disable-next-line security/detect-non-literal-fs-filename -- 路徑僅來自本檔固定清單
 const text = (p: string) => readFileSync(new URL(p, ROOT), "utf8");
 const load = <T = Obj>(p: string): T => JSON.parse(text(p)) as T;
-const meta = load<{ attack_text: string; forbidden_substrings: string[]; param_name: string }>(
-  "meta/instruction-attack-raw.json",
-);
+const meta = load<{ attack_text: string; forbidden_substrings: string[]; param_name: string }>("meta/instruction-attack-raw.json");
 const noLeak = (s: string) => [meta.attack_text, ...meta.forbidden_substrings].every((x) => !s.includes(x));
 
 const EVENTS = ["same-intent-a-read", "same-intent-b-read", "same-intent-c-read", "same-intent-admin-export",
@@ -54,12 +52,12 @@ describe("準則2：列舉限制", () => {
     ...vals(["log", "deny"], "action", (action) => parseConstraintDraft({ ...draft(), action })),
   ])("接受 %s", (_n, run) => expect(run().ok).toBe(true));
   it.each<Case>([
-    ...vals(["delete", "READ", "", "admin ", 1, null], "response_class", (v) => parseRequestEvent({ ...ev(), response_class: v })),
+    ...vals(["delete", "READ", "", "admin ", 1, null, "Execute"], "response_class", (v) => parseRequestEvent({ ...ev(), response_class: v })),
     ["from_family", () => parseCaseSummary({ ...cs(), transitions: [{ ...t0(), from_family: "superuser" }] })],
     ["to_family", () => parseCaseSummary({ ...cs(), transitions: [{ ...t0(), to_family: "root" }] })],
     ["privileged_target", () => parseCaseSummary({ ...cs(), privileged_target: "everything" })],
-    ...vals(["user", "Actor", "", null], "subject.type", (type) => parseConstraintDraft({ ...draft(), subject: { type, id: "x" } })),
-    ...vals(["allow", "DENY", "", null], "action", (action) => parseConstraintDraft({ ...draft(), action })),
+    ...vals(["user", "Actor", "", null, "role"], "subject.type", (type) => parseConstraintDraft({ ...draft(), subject: { type, id: "x" } })),
+    ...vals(["allow", "DENY", "", null, "block"], "action", (action) => parseConstraintDraft({ ...draft(), action })),
     ["from_state", () => parseConstraintDraft({ ...draft(), from_state: "unknown" })],
     ["to_state", () => parseConstraintDraft({ ...draft(), to_state: "sudo" })],
   ])("拒絕 %s 且不拋例外", (_n, run) => {
@@ -89,14 +87,31 @@ describe("準則3＋5：參數原文不得進事件／摘要", () => {
       expect(parseRequestEvent({ ...base, ...bad }).ok).toBe(false);
     }
   });
-  it("toCaseSummary 不洩漏、結構合法、三模板收成單一 read→admin", () => {
+  it("toCaseSummary 不洩漏、與 fixture deep-equal、三模板相異", () => {
     const events = EVENTS.slice(0, 4).map(parsedEvent);
     const all = toCaseSummary([...events, parsedEvent("events/instruction-attempt-sanitized.json")]);
-    expect(noLeak(JSON.stringify(all))).toBe(true);
-    const s = toCaseSummary(events);
-    expect(parseCaseSummary(s).ok).toBe(true);
-    expect(s.transitions).toEqual([expect.objectContaining({ from_family: "read", to_family: "admin", count: 1 })]);
-    expect(s.privileged_target).toBe("admin");
+    expect(all.ok && noLeak(JSON.stringify(all.value))).toBe(true);
+    const s = toCaseSummary(events, { distance: 0.82, normal_neighbor_count: 1200 });
+    expect(s.ok).toBe(true);
+    if (!s.ok) return;
+    expect(parseCaseSummary(s.value).ok).toBe(true);
+    const got = { ...s.value } as Obj; delete got.case_id;
+    const want = { ...load("cases/same-intent-read-to-admin.json") }; delete want.case_id;
+    expect(got).toEqual(want);
+    expect(new Set(events.slice(0, 3).map((e) => e.route_template)).size).toBe(3);
+    expect(events.slice(0, 3).map((e) => e.response_class)).toEqual(["read", "read", "read"]);
+    expect(events[3]?.response_class).toBe("admin");
+  });
+  it("toCaseSummary([]) 錯誤；單事件 transitions=[]", () => {
+    const empty = toCaseSummary([]);
+    expect(empty.ok).toBe(false);
+    if (!empty.ok) expect(empty.errors.length).toBeGreaterThan(0);
+    const one = toCaseSummary([parsedEvent("events/normal-read.json")]);
+    expect(one.ok).toBe(true);
+    if (one.ok) {
+      expect(one.value.transitions).toEqual([]);
+      expect(one.value.privileged_target).toBe("read");
+    }
   });
 });
 

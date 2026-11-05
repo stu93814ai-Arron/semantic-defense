@@ -28,10 +28,7 @@ export const RequestEventSchema = z.strictObject({
 export type RequestEvent = z.infer<typeof RequestEventSchema>;
 
 const Transition = z.strictObject({
-  from_family: Family,
-  to_family: Family,
-  distance: z.number(),
-  count: z.number(),
+  from_family: Family, to_family: Family, distance: z.number(), count: z.number(),
 });
 
 export const CaseSummarySchema = z.strictObject({
@@ -57,9 +54,7 @@ export const ConstraintDraftSchema = z.strictObject({
 export type ConstraintDraft = z.infer<typeof ConstraintDraftSchema>;
 
 export type ParseError = { path: string; message: string };
-export type ParseResult<T> =
-  | { ok: true; value: T }
-  | { ok: false; errors: ParseError[] };
+export type ParseResult<T> = { ok: true; value: T } | { ok: false; errors: ParseError[] };
 
 function safeParse<T>(schema: z.ZodType<T>, input: unknown): ParseResult<T> {
   try {
@@ -68,22 +63,16 @@ function safeParse<T>(schema: z.ZodType<T>, input: unknown): ParseResult<T> {
     // 只回路徑與訊息，不回輸入值，避免把原文帶進錯誤。
     return {
       ok: false,
-      errors: r.error.issues.map((i) => ({
-        path: i.path.map(String).join("."),
-        message: i.code,
-      })),
+      errors: r.error.issues.map((i) => ({ path: i.path.map(String).join("."), message: i.code })),
     };
   } catch {
     return { ok: false, errors: [{ path: "", message: "parse_failed" }] };
   }
 }
 
-export const parseRequestEvent = (input: unknown) =>
-  safeParse(RequestEventSchema, input);
-export const parseCaseSummary = (input: unknown) =>
-  safeParse(CaseSummarySchema, input);
-export const parseConstraintDraft = (input: unknown) =>
-  safeParse(ConstraintDraftSchema, input);
+export const parseRequestEvent = (input: unknown) => safeParse(RequestEventSchema, input);
+export const parseCaseSummary = (input: unknown) => safeParse(CaseSummarySchema, input);
+export const parseConstraintDraft = (input: unknown) => safeParse(ConstraintDraftSchema, input);
 
 const ORDER: readonly Family[] = ["read", "write", "auth", "admin"];
 const rank = (f: Family): number => ORDER.indexOf(f);
@@ -95,11 +84,10 @@ function stableUuid(seed: string): string {
 }
 
 export type CaseSummaryOptions = { distance?: number; normal_neighbor_count?: number };
+type Row = CaseSummary["transitions"][number];
 
-type Transition = CaseSummary["transitions"][number];
-
-function aggregate(sorted: RequestEvent[], distance: number): Transition[] {
-  const map = new Map<string, Transition>();
+function aggregate(sorted: RequestEvent[], distance: number): Row[] {
+  const map = new Map<string, Row>();
   sorted.forEach((cur, i) => {
     const prev = sorted.at(i - 1);
     if (i === 0 || !prev || prev.response_class === cur.response_class) return;
@@ -112,26 +100,24 @@ function aggregate(sorted: RequestEvent[], distance: number): Transition[] {
 }
 
 function highest(events: RequestEvent[]): Family {
-  return events.reduce<Family>(
-    (acc, e) => (rank(e.response_class) > rank(acc) ? e.response_class : acc),
-    "read",
-  );
+  return events.reduce<Family>((acc, e) => (rank(e.response_class) > rank(acc) ? e.response_class : acc), "read");
 }
 
-/** 最小聚合：依時間排序，相同家族連續事件收成一段，依 (from,to) 合併 count。只輸出契約欄位。 */
 export function toCaseSummary(
   events: RequestEvent[],
   opts: CaseSummaryOptions = {},
-): CaseSummary {
+): ParseResult<CaseSummary> {
+  if (!events.length) return { ok: false, errors: [{ path: "", message: "empty_events" }] };
   const sorted = [...events].sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts));
-  const { app_id = "", actor_id = "", session_id = "" } = sorted[0] ?? {};
+  const { app_id, actor_id, session_id } = sorted[0]!;
   return {
-    case_id: stableUuid(`${app_id}|${actor_id}|${session_id}`),
-    app_id,
-    actor_id,
-    session_id,
-    transitions: aggregate(sorted, opts.distance ?? 0),
-    privileged_target: highest(sorted),
-    normal_neighbor_count: opts.normal_neighbor_count ?? 0,
+    ok: true,
+    value: {
+      case_id: stableUuid(`${app_id}|${actor_id}|${session_id}`),
+      app_id, actor_id, session_id,
+      transitions: aggregate(sorted, opts.distance ?? 0),
+      privileged_target: highest(sorted),
+      normal_neighbor_count: opts.normal_neighbor_count ?? 0,
+    },
   };
 }
