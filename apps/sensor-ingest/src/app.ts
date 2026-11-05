@@ -1,5 +1,7 @@
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
+import { parseFlowMetadataEvent } from "@semantic-defense/contracts";
 import { findSensorByToken, ipAllowed, type SensorDb } from "@semantic-defense/sensor-auth";
+import { ensureFlowSchema, insertFlow, purgeExpired } from "./store.js";
 
 /**
  * sensor-ingest（流量平面）③b：認證面。
@@ -7,12 +9,15 @@ import { findSensorByToken, ipAllowed, type SensorDb } from "@semantic-defense/s
  *   生產以 `https: { key, cert }` 直接終結 TLS；requireHttps:false 只給測試以 inject 驗認證邏輯。
  * - 認證：Authorization: Bearer sdst_<sensor_id>.<secret> → 401；來源 IP（socket，不讀 X-Forwarded-For）不在 allowed_cidrs → 403。
  * - 無 session、無管理／登入路由；未宣告路徑一律 404（認證掛在路由 onRequest：先於 body 解析，未認證請求不解析 body；不影響 404）。
- * - 存入（FlowMetadata）屬 ③c，本階段 POST /v1/flows 只驗認證與拒自報 sensor_id，回 501。
+ * - ③c：POST /v1/flows body＝單一 FlowMetadataEvent（contracts strict 驗證），sensor_id 取自 token → 201；
+ *   自報 sensor_id／非法 → 400；flow_id 重複 → 409。寫入前清除 ≥7 天列（見 store.ts）。
  */
 export type BuildIngestOptions = {
   db: SensorDb;
   https?: { key: string | Buffer; cert: string | Buffer };
   requireHttps?: boolean;
+  /** 注入時鐘（epoch ms），預設 Date.now。 */
+  now?: () => number;
 };
 
 declare module "fastify" {
@@ -46,6 +51,8 @@ export async function buildIngest(opts: BuildIngestOptions): Promise<FastifyInst
   const app = (opts.https
     ? Fastify({ https: opts.https, trustProxy: false, bodyLimit: BODY_LIMIT })
     : Fastify({ trustProxy: false, bodyLimit: BODY_LIMIT })) as unknown as FastifyInstance;
+  const clock = opts.now ?? Date.now;
+  await ensureFlowSchema(opts.db);
   const guard = makeGuard(opts.db, opts.requireHttps ?? true);
 
   app.setNotFoundHandler((_req, reply) => reply.code(404).send({ error: "查無此路徑" }));
@@ -56,7 +63,14 @@ export async function buildIngest(opts: BuildIngestOptions): Promise<FastifyInst
     if (hasSelfReportedSensorId(req.body)) {
       return reply.code(400).send({ error: "sensor_id 由 token 決定，不得自報" });
     }
-    return reply.code(501).send({ error: "存入尚未實作（③c）" });
+    const parsed = parseFlowMetadataEvent(req.body);
+    if (!parsed.ok) return reply.code(400).send({ error: "請求格式錯誤", issues: parsed.errors });
+    const now = clock();
+    await purgeExpired(opts.db, now);
+    if (!(await insertFlow(opts.db, parsed.value, req.sensorId!, now))) {
+      return reply.code(409).send({ error: "flow_id 重複" });
+    }
+    return reply.code(201).send({ flow_id: parsed.value.flow_id });
   });
 
   await app.ready();

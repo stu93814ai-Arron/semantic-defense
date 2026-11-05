@@ -23,7 +23,7 @@ export async function openTestDb(): Promise<SensorDb & { close(): Promise<void>;
     created_at BIGINT NOT NULL, revoked_at BIGINT NULL, allowed_cidrs TEXT[] NOT NULL)`);
   return {
     query: async <T>(sql: string, params?: unknown[]) => ({ rows: (await pool.query(sql, params)).rows as T[] }),
-    reset: async () => { await pool.query("TRUNCATE sensor_tokens"); },
+    reset: async () => { await pool.query("TRUNCATE sensor_tokens"); await pool.query("DROP TABLE IF EXISTS flow_events"); },
     close: async () => { await pool.end(); },
   };
 }

@@ -11,7 +11,11 @@
 
 ## 路由
 - `GET /v1/health`：認證後探針，回 `{ ok, sensor_id }`。
-- `POST /v1/flows`：payload 自報 `sensor_id` → **400**；其餘 → **501**（存入與 7 天清除屬 ③c）。
+- `POST /v1/flows`：body＝單一 FlowMetadataEvent（contracts strict）。自報 `sensor_id`／多欄／缺欄 → **400**；`flow_id` 重複 → **409**；成功 → **201**。
+  寫入表 `flow_events`：契約欄位＋`sensor_id`（取自 token）＋`received_at`（注入時鐘 now）。token 撤銷不刪舊列。
+
+## 保留期
+年齡 ≥ 7 天（`now - received_at >= 7 * 24 * 60 * 60 * 1000`）即刪；每次寫入前執行，另 export `purgeExpired(db, now)`。
 
 ## 測試
 `node scripts/with-pg.mjs pnpm exec vitest run --project sensor-ingest`。認證邏輯以 inject＋`requireHttps:false`；HTTPS 強制以預設設定 inject（426）及 openssl 自簽憑證的真實 TLS listen（200）驗證。測試表建於獨立 schema `sensor_ingest_test`。

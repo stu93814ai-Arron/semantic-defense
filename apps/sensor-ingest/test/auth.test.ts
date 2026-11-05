@@ -46,13 +46,11 @@ describe("sensor-ingest ③b 認證（requireHttps:false 以 inject 驗認證邏
     await app.close();
   });
 
-  it("POST /v1/flows：payload 自報 sensor_id → 400；未自報 → 501（存入屬 ③c）", async () => {
+  it("POST /v1/flows：payload 自報 sensor_id → 400；未認證 → 401", async () => {
     const app = await buildIngest({ db, requireHttps: false });
     const t = await seedToken(db, ["10.0.0.0/8"]);
     const bad = await app.inject({ method: "POST", url: "/v1/flows", headers: auth(t), remoteAddress: IN, payload: { sensor_id: "x", flows: [] } });
     expect(bad.statusCode).toBe(400);
-    const ok = await app.inject({ method: "POST", url: "/v1/flows", headers: auth(t), remoteAddress: IN, payload: { flows: [] } });
-    expect(ok.statusCode).toBe(501);
     const noAuth = await app.inject({ method: "POST", url: "/v1/flows", remoteAddress: IN, payload: { sensor_id: "x" } });
     expect(noAuth.statusCode).toBe(401);
     await app.close();
