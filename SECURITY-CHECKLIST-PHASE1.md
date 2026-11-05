@@ -5,6 +5,8 @@
 
 審查員角色：合併前最後一關。本表每項必須「可驗證通過」才准合併；掃描通過不代表行為已存在。
 
+**每次簽核另查：** [流量／管理平面分離](./SECURITY-CHECKLIST-PLANE-SEPARATION.md)（本階段以不得偷跑入口／不得混用 listen 為主）。
+
 ---
 
 ## A. 契約嚴格性（本階段必過）
@@ -126,5 +128,15 @@
 - **N1（第 2 階段前必修，不擋本次；由 A 組修，修完再簽）：** `toCaseSummary` 未驗證 `opts`／輸出，可回傳負 distance 或非整數 normal_neighbor_count。請對 opts 或輸出跑 `CaseSummarySchema`。
 - **N3：** 程式收窄已單獨提交為 `fd782b5`；本檔簽核紀錄另以 docs commit 入庫。
 - 結論：**准予合併**。
+
+審查員：資安審查員
+
+### 2026-11-05（Asia/Taipei）— N1 關閉：准予合併
+
+- 對象：`c84ddf6`（`fix(contracts): N1 toCaseSummary 經 CaseSummarySchema 守門`）。
+- 流程核對：空→`empty_events`；逐筆 `parseRequestEvent`（失敗原樣回）；`mixed_identity`；`OptsSchema`；最後 `return parseCaseSummary(draft)`。
+- 煙測：`distance:-5`／`normal_neighbor_count:1.5` → `ok:false`；指示文句 `actor_id` → `invalid_format`；錯誤不回原文。
+- 範圍：僅 contracts；契約嚴格性／非回顯／指示拒絕仍成立。
+- 結論：**准予合併**；N1 殘留關閉。
 
 審查員：資安審查員
