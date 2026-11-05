@@ -38,7 +38,7 @@ const SCHEMA_STATEMENTS = [
   created_by INTEGER NOT NULL REFERENCES users(id),
   created_at BIGINT NOT NULL,
   revoked_at BIGINT NULL,
-  label TEXT
+  allowed_cidrs TEXT[] NOT NULL CHECK (cardinality(allowed_cidrs) >= 1)
 )`,
 ];
 
