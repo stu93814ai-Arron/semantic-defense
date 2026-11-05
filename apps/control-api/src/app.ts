@@ -1,6 +1,6 @@
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import argon2 from "argon2";
-import { openDb, type Db } from "./db.js";
+import { openDb, resolveDatabaseUrl, type Db } from "./db.js";
 import {
   LOGIN_ERROR, LoginLimiter, getDummyHash, newSessionId, readCookie, sessionCookie,
   type Role,
@@ -12,7 +12,12 @@ export type BuildAppOptions = {
   loginRateLimit?: { maxFailures: number; windowMs: number };
   /** 僅在可信反向代理後方開啟；預設 false，避免偽造 X-Forwarded-For 繞過速率限制。 */
   trustProxy?: boolean;
+  /** Postgres 連線；省略則讀 DATABASE_URL。兩者皆無則啟動失敗。 */
+  databaseUrl?: string;
+  /** 可選時鐘（epoch ms）；省略則 Date.now。 */
+  now?: () => number;
 };
+
 export type ControlApi = FastifyInstance;
 
 declare module "fastify" {
@@ -22,6 +27,7 @@ declare module "fastify" {
 }
 
 type LoginBody = { username?: unknown; password?: unknown };
+type Clock = () => number;
 
 async function verifyCredentials(
   db: Db, username: string, password: string,
@@ -36,21 +42,22 @@ async function verifyCredentials(
 }
 
 async function issueSession(
-  db: Db, req: FastifyRequest, reply: FastifyReply, userId: number,
+  db: Db, req: FastifyRequest, reply: FastifyReply,
+  userId: number, now: Clock,
 ): Promise<{ ok: true }> {
   const old = readCookie(req);
   if (old) await db.query("DELETE FROM sessions WHERE id = $1", [old]);
   const sid = newSessionId();
   await db.query(
     "INSERT INTO sessions (id, user_id, last_seen) VALUES ($1,$2,$3)",
-    [sid, userId, Date.now()],
+    [sid, userId, now()],
   );
   reply.header("set-cookie", sessionCookie(sid));
   return { ok: true };
 }
 
 function registerLogin(
-  app: ControlApi, db: Db, limiter: LoginLimiter,
+  app: ControlApi, db: Db, limiter: LoginLimiter, now: Clock,
 ): void {
   app.post<{ Body: LoginBody }>(
     "/api/session/login",
@@ -58,16 +65,16 @@ function registerLogin(
     async (req, reply) => {
       const username = typeof req.body?.username === "string" ? req.body.username : "";
       const password = typeof req.body?.password === "string" ? req.body.password : "";
-      if (limiter.blocked(username, req.ip)) {
+      if (await limiter.blocked(username, req.ip)) {
         return reply.code(429).send({ error: `${LOGIN_ERROR}，請稍後再試` });
       }
       const userId = await verifyCredentials(db, username, password);
       if (userId === undefined) {
-        limiter.fail(username, req.ip);
+        await limiter.fail(username, req.ip);
         return reply.code(401).send({ error: LOGIN_ERROR });
       }
-      limiter.reset(username, req.ip);
-      return issueSession(db, req, reply, userId);
+      await limiter.reset(username, req.ip);
+      return issueSession(db, req, reply, userId, now);
     },
   );
 }
@@ -120,13 +127,14 @@ function registerOwnerRoutes(app: ControlApi, db: Db): void {
 export async function buildApp(opts: BuildAppOptions = {}): Promise<ControlApi> {
   const idleTimeoutMs = opts.idleTimeoutMs ?? 30 * 60_000;
   const rl = opts.loginRateLimit ?? { maxFailures: 5, windowMs: 60_000 };
-  const limiter = new LoginLimiter(rl.maxFailures, rl.windowMs);
-  const db = await openDb();
+  const now = opts.now ?? Date.now;
+  const db = await openDb(resolveDatabaseUrl(opts.databaseUrl));
+  const limiter = new LoginLimiter(db, rl.maxFailures, rl.windowMs, now);
   const app = Fastify({ trustProxy: opts.trustProxy ?? false });
   app.decorate("db", db);
   app.addHook("onClose", async () => { await db.close(); });
-  app.addHook("preHandler", createAuthPreHandler(db, idleTimeoutMs));
-  registerLogin(app, db, limiter);
+  app.addHook("preHandler", createAuthPreHandler(db, idleTimeoutMs, now));
+  registerLogin(app, db, limiter, now);
   registerSessionRoutes(app, db);
   registerRoleRoutes(app);
   registerOwnerRoutes(app, db);

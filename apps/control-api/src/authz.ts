@@ -1,14 +1,18 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
 import type { Db } from "./db.js";
-import { deny, loadSession, readCookie } from "./auth.js";
+import { deny, loadSession, readCookie, type Clock } from "./auth.js";
 
 /** 集中式授權：預設拒絕；路由須宣告 roles（public／any／角色清單）。 */
-export function createAuthPreHandler(db: Db, idleTimeoutMs: number) {
+export function createAuthPreHandler(
+  db: Db,
+  idleTimeoutMs: number,
+  now: Clock = Date.now,
+) {
   return async (req: FastifyRequest, reply: FastifyReply): Promise<void> => {
     const roles = req.routeOptions.config?.roles;
     if (roles === "public") return;
     const sid = readCookie(req);
-    const user = sid ? await loadSession(db, sid, idleTimeoutMs) : undefined;
+    const user = sid ? await loadSession(db, sid, idleTimeoutMs, now) : undefined;
     if (!user) {
       deny(reply, 401);
       return;
