@@ -1,6 +1,6 @@
 # 資安檢查表：apps/sensor-ingest（感測／中繼資料接收）
 
-狀態：**正式**（2026-11-05 Asia/Taipei）— 軟體大總召要求納入平面分離並補檢查項。  
+狀態：**正式**（2026-11-06 Asia/Taipei 更新）— 軟體大總召要求納入平面分離並補檢查項；PM 裁示補 `allowed_app_ids`／稽核／SI6.5–6.6。  
 對齊：[SECURITY-CHECKLIST-PLANE-SEPARATION.md](./SECURITY-CHECKLIST-PLANE-SEPARATION.md)（P6）、`PLAN-ADDENDUM-MONITOR.md`。  
 凡 `apps/sensor-ingest` 或感測器憑證／來源 allowlist 相關合併，簽核必過本表適用項；尚未實作時查「不得偷跑」。
 
@@ -12,6 +12,7 @@
 | 傳輸 | **HTTPS only**（正式環境無明文 HTTP） |
 | 來源 | **來源 IP allowlist**；非名單拒絕且不寫入中繼資料 |
 | 憑證 | **感測器 token**：管理面由 **`platform_admin` 發放**；程序內／庫內**只存雜湊**；**可撤銷**；明文 token 只在發放當下給操作者一次 |
+| App 綁定 | 發放時 **`platform_admin` 必填 `allowed_app_ids`（≥1）**；修改綁定亦僅 `platform_admin`；兩者皆須**寫稽核**。ingest 收到未綁定 `app_id` → **403**，日誌／拒絕表**只記 `sensor_id`＋時間**，不記 payload。E3.A 來源條件**只計**通過綁定檢查之 `app_id` |
 | 路由 | **無管理路由**（無登入、無人員、無案件核准、無模式切換、無 token 發放 API） |
 | 資料 | 只收契約 `FlowMetadata` 欄位；拒封包內容／URL／標頭／解密結果 |
 
@@ -51,6 +52,10 @@
 | SI4.4 | **可撤銷**：撤銷後該 token 立即（或 ≤ 既定傳播延遲內）失效；ingest 拒絕 | 撤銷後再送 → 拒 |
 | SI4.5 | Token 驗證與來源 IP allowlist **同時**滿足才接受；缺一不可 | 矩陣測 |
 | SI4.6 | 失敗回應不回顯 token／雜湊／內部路徑；速率限制防撞庫 | 錯誤本體＋429 |
+| SI4.7 | 發放必填 `allowed_app_ids`（≥1，契約 `Id`）；僅 `platform_admin`；寫入稽核（無 token／hash） | 角色測＋audit 列 |
+| SI4.8 | 修改綁定（PATCH）僅 `platform_admin`；寫入稽核；其他角色 403 | 越權測＋audit 列 |
+| SI4.9 | ingest：`app_id` 不在該 token 的 `allowed_app_ids` → **403**；**不寫** `flow_events`；拒絕紀錄／日誌**只含 `sensor_id`＋時間**（無 payload） | 紅燈測＋表／日誌抽樣 |
+| SI4.10 | E3.A／後續來源條件只採用**已通過綁定檢查**寫入之 `app_id`（未綁定不得進案件／條件計算） | 對照產品定案；本階段以 ingest 閘門為證 |
 
 ## SI5. 無管理路由
 
@@ -64,10 +69,12 @@
 
 | # | 檢查項 | 通過條件 |
 | --- | --- | --- |
-| SI6.1 | 只接受 `FlowMetadataEventSchema`；多欄／缺欄／未知鍵整份拒絕 | 契約測 |
+| SI6.1 | 只接受 `FlowMetadataEventSchema`；多欄／缺欄／未知鍵整份拒絕；**禁止自報 `sensor_id`**（由 token 決定） | 契約測＋自報 → 400 |
 | SI6.2 | 拒 payload、URL、標頭、TLS 明文等欄位 | 負向測 |
-| SI6.3 | 日誌／稽核不含封包內容、token 明文、密碼 | 抽樣 |
+| SI6.3 | 日誌／稽核／拒絕表不含封包內容、token 明文、密碼 | 抽樣 |
 | SI6.4 | IP 進入後續黑／白名單比對前須 **canonical 正規化**（或收緊 `SingleIp`），避免 IPv4-mapped／非 canonical 形狀混淆 | 對照 contracts 殘留 |
+| SI6.5 | `flow_id` **每 sensor 各自唯一**（建議 PK `(sensor_id, flow_id)`）；跨 sensor 可重用；衝突回應不得洩露他 sensor 是否已佔用該 ID | schema＋跨 sensor 409 測 |
+| SI6.6 | 保留期清除（若有）須可注入時鐘測；清除範圍不得越權刪他用途資料 | 清除測 |
 
 ## SI7. 與管理面故障模式
 
@@ -88,3 +95,4 @@
 | 日期 | 說明 |
 | --- | --- |
 | 2026-11-05 | 初版：總召指示納入平面分離並補 token／allowlist／HTTPS／獨立埠／無管理路由檢查項 |
+| 2026-11-06 | PM 裁示（經 A 組領航員轉達）：`allowed_app_ids` 發放／修改綁定＋稽核；未綁定 → 403 且不記 payload；E3.A 只計通過綁定之 app_id。並補 SI6.5／SI6.6（per-sensor `flow_id`、保留期） |
