@@ -64,3 +64,21 @@
 ## 相關
 
 - [EDL／mirror 正式檢查表](./SECURITY-CHECKLIST-EDL-MIRROR.md)
+
+## 2026-11-05（Asia/Taipei）— a578354 待複簽（A 已通過，B／資安審中）
+
+- 對象：`41983f7`＋`a578354`（修預設拒絕）。
+- 修復：`request.is404` 先放行；已掛缺／不符 roles → 未登入 401、已登入 403；紅燈測 `authz-route-roles`（全路由非空 roles、無 roles 探針、未掛 404）。
+- with-pg control-api 10／20 綠。
+- 空 body 登入＝失敗登入（計 `username=""`＋ip）見上節非阻擋殘留，仍請複簽註明。
+
+### 2026-11-05（Asia/Taipei）— a578354 **准予合併**（複簽）
+
+- 對象：`41983f7`＋`a578354`（不含 Postgres）。
+- 修復確認：`request.is404` → 404；已掛缺／不符 roles → 未登入 401、已登入 403；已無 `roles === undefined` 放行。
+- 紅燈：`authz-route-roles`；with-pg control-api **10 檔／20 測全綠**（非 10/20 通過率）。
+- P1–P5 本階段適用項 PASS；預設拒絕 PASS。
+- 非阻擋：空 body 登入計入 `username=""` 桶；型別 `roles?` 仍可選（runtime＋onRoute 已鎖）。
+- 結論：**准予合併**。
+
+審查員：資安審查員
