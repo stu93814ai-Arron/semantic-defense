@@ -18,8 +18,8 @@ const SAFE_ID = /^[A-Za-z0-9_.:-]+$/;
 const MAX_ID_LEN = 128;
 
 const ROOT = new URL("../fixtures/", import.meta.url);
-// eslint-disable-next-line security/detect-non-literal-fs-filename -- 固定相對 fixtures
 const load = <T = Obj>(p: string): T =>
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- 固定相對 fixtures
   JSON.parse(readFileSync(new URL(p, ROOT), "utf8")) as T;
 
 const baseEvent = () => load<Obj>("events/normal-read.json");
