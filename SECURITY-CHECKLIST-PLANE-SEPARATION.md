@@ -67,6 +67,8 @@
 ## 相關
 
 - [EDL／mirror 正式檢查表](./SECURITY-CHECKLIST-EDL-MIRROR.md)
+- [sensor-ingest 檢查表](./SECURITY-CHECKLIST-SENSOR-INGEST.md)
+- [意圖模型檢查表](./SECURITY-CHECKLIST-INTENT-MODEL.md)
 
 ## 2026-11-05（Asia/Taipei）— a578354 待複簽（A 已通過，B／資安審中）
 
