@@ -13,6 +13,9 @@ const SEED_LOCK = 872_364_202;
 
 /** 清空第 2 階段表後寫入固定種子（含 login_failures，因測試 truncate 未列該表）。 */
 export async function seedPhase2Fixtures(app: SeedApp): Promise<void> {
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("seedPhase2Fixtures 禁止在 production 呼叫（含明碼測試帳密）");
+  }
   await app.db.query("SELECT pg_advisory_lock($1)", [SEED_LOCK]);
   try {
     await app.db.exec(

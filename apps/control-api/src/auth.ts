@@ -35,7 +35,7 @@ export function sessionCookie(id: string, maxAgeSec?: number): string {
   return `${COOKIE}=${id}; Path=/; HttpOnly; Secure; SameSite=Strict${age}`;
 }
 
-/** 依 last_seen 驗證 session；有效則用注入時鐘更新 last_seen（滑動閒置）。 */
+/** 原子滑動閒置：UPDATE … AND last_seen > cutoff，避免 SELECT→UPDATE 救回過期 session。 */
 export async function loadSession(
   db: Db,
   sid: string,
@@ -43,19 +43,18 @@ export async function loadSession(
   now: Clock = Date.now,
 ): Promise<SessionUser | undefined> {
   const t = now();
-  const r = await db.query<SessionUser & { last_seen: string | number }>(
-    `SELECT u.id, u.username, u.role, s.last_seen FROM sessions s
-     JOIN users u ON u.id = s.user_id WHERE s.id = $1`,
-    [sid],
+  const cutoff = t - idleTimeoutMs;
+  const r = await db.query<SessionUser>(
+    `UPDATE sessions s SET last_seen = $1
+     FROM users u
+     WHERE s.id = $2 AND s.user_id = u.id AND s.last_seen > $3
+     RETURNING u.id, u.username, u.role`,
+    [t, sid, cutoff],
   );
   const row = r.rows[0];
-  if (!row) return undefined;
-  if (t - Number(row.last_seen) > idleTimeoutMs) {
-    await db.query("DELETE FROM sessions WHERE id = $1", [sid]);
-    return undefined;
-  }
-  await db.query("UPDATE sessions SET last_seen = $1 WHERE id = $2", [t, sid]);
-  return { id: row.id, username: row.username, role: row.role };
+  if (row) return { id: row.id, username: row.username, role: row.role };
+  await db.query("DELETE FROM sessions WHERE id = $1", [sid]);
+  return undefined;
 }
 
 /**
