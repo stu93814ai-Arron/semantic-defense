@@ -24,7 +24,7 @@ async function issue(c: string, payload?: unknown) {
   return app.inject({ method: "POST", url: "/api/sensors/tokens", headers: cookieHeader(c), payload: payload as object });
 }
 type Row = { sensor_id: string; token_hash: string; revoked_at: string | null; allowed_cidrs: string[] };
-const OK = { allowed_cidrs: ["10.0.0.0/8"] };
+const OK = { allowed_cidrs: ["10.0.0.0/8"], allowed_app_ids: ["app-alpha"] };
 const TOKEN_RE = /^sdst_([0-9a-f-]{36})\.([A-Za-z0-9_-]{43})$/;
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 const rowOf = async (id: string) =>
@@ -34,7 +34,7 @@ describe("感測器 token 發放", () => {
   it("admin 發放 201：token＝sdst_<sensor_id>.<256-bit secret>；DB 只存 secret 的 SHA-256；存 allowed_cidrs", async () => {
     await boot();
     const c = await admin();
-    const res = await issue(c, { allowed_cidrs: ["10.0.0.0/8", "2001:db8::/32"] });
+    const res = await issue(c, { allowed_cidrs: ["10.0.0.0/8", "2001:db8::/32"], allowed_app_ids: ["app-alpha", "app-beta"] });
     expect(res.statusCode).toBe(201);
     expect(res.headers["cache-control"]).toBe("no-store");
     const { sensor_id, token } = res.json() as { sensor_id: string; token: string };
@@ -47,6 +47,7 @@ describe("感測器 token 發放", () => {
     expect(row.token_hash).toBe(sha(m[2]!));
     expect(JSON.stringify(row)).not.toContain(m[2]!);
     expect(row.allowed_cidrs).toEqual(["10.0.0.0/8", "2001:db8::/32"]);
+    expect((row as Row & { allowed_app_ids: string[] }).allowed_app_ids).toEqual(["app-alpha", "app-beta"]);
     const b = (await issue(c, OK)).json() as { sensor_id: string; token: string };
     expect(b.sensor_id).not.toBe(sensor_id);
     expect(b.token).not.toBe(token);
@@ -65,8 +66,9 @@ describe("感測器 token 發放", () => {
     expect(res.body).not.toContain("token_hash");
     const items = (res.json() as { items: Record<string, unknown>[] }).items;
     expect(items).toHaveLength(1);
-    expect(Object.keys(items[0]!).sort()).toEqual(["allowed_cidrs", "created_at", "revoked_at", "sensor_id"]);
+    expect(Object.keys(items[0]!).sort()).toEqual(["allowed_app_ids", "allowed_cidrs", "created_at", "revoked_at", "sensor_id"]);
     expect(items[0]!.allowed_cidrs).toEqual(["10.0.0.0/8"]);
+    expect(items[0]!.allowed_app_ids).toEqual(["app-alpha"]);
   });
 
   it("缺 allowed_cidrs／空陣列／非陣列／非法 CIDR／帶 label／多欄位 → 400，且不建列", async () => {
@@ -77,6 +79,9 @@ describe("感測器 token 發放", () => {
       { allowed_cidrs: ["not-a-cidr"] }, { allowed_cidrs: [123] }, { allowed_cidrs: ["0.0.0.0/0"] },
       { allowed_cidrs: ["10.0.0.0/4"] }, { allowed_cidrs: ["10.0.0.1/8"] }, { allowed_cidrs: ["::ffff:10.0.0.0/104"] },
       { allowed_cidrs: ["10.0.0.0/8", "bad"] },
+      { allowed_cidrs: ["10.0.0.0/8"] }, { ...OK, allowed_app_ids: [] }, { ...OK, allowed_app_ids: "app-alpha" },
+      { ...OK, allowed_app_ids: ["bad id!"] }, { ...OK, allowed_app_ids: [""] }, { ...OK, allowed_app_ids: [1] },
+      { allowed_app_ids: ["app-alpha"] },
       { label: "edge-1" }, { ...OK, label: "edge-1" }, { ...OK, extra: 1 },
     ];
     for (const p of bad) expect((await issue(c, p)).statusCode, JSON.stringify(p)).toBe(400);
@@ -111,6 +116,8 @@ describe("感測器 token 授權", () => {
       { method: "POST" as const, url: "/api/sensors/tokens" },
       { method: "GET" as const, url: "/api/sensors/tokens" },
       { method: "POST" as const, url: `/api/sensors/tokens/${sensor_id}/revoke` },
+      { method: "PATCH" as const, url: `/api/sensors/tokens/${sensor_id}/apps`, payload: { allowed_app_ids: ["x"] } },
+      { method: "GET" as const, url: "/api/audit" },
     ];
     for (const r of reqs) expect((await app.inject(r)).statusCode).toBe(401);
     for (const [u, p] of [["operator1", "pass-operator-1"], ["owner1", "pass-owner-1"]] as const) {
@@ -145,5 +152,45 @@ describe("感測器 token 撤銷", () => {
     }
     const bad = await app.inject({ method: "POST", url: "/api/sensors/tokens/not-a-uuid/revoke", headers: cookieHeader(c) });
     expect(bad.statusCode).toBe(404);
+  });
+});
+
+describe("感測器 app 綁定修改與稽核", () => {
+  const patch = (c: string, id: string, payload: unknown) =>
+    app.inject({ method: "PATCH", url: `/api/sensors/tokens/${id}/apps`, headers: cookieHeader(c), payload: payload as object });
+
+  it("PATCH /api/sensors/tokens/:id/apps：200 後列表可見；非法 → 400；不存在 → 404", async () => {
+    await boot();
+    const c = await admin();
+    const { sensor_id } = (await issue(c, OK)).json() as { sensor_id: string };
+    const r = await patch(c, sensor_id, { allowed_app_ids: ["app-alpha", "app-gamma"] });
+    expect(r.statusCode).toBe(200);
+    expect(r.json()).toEqual({ sensor_id, allowed_app_ids: ["app-alpha", "app-gamma"] });
+    const list = await app.inject({ method: "GET", url: "/api/sensors/tokens", headers: cookieHeader(c) });
+    expect((list.json() as { items: { allowed_app_ids: string[] }[] }).items[0]!.allowed_app_ids).toEqual(["app-alpha", "app-gamma"]);
+    for (const bad of [undefined, {}, { allowed_app_ids: [] }, { allowed_app_ids: ["bad id!"] }, { allowed_app_ids: ["a"], x: 1 }]) {
+      expect((await patch(c, sensor_id, bad)).statusCode, JSON.stringify(bad)).toBe(400);
+    }
+    expect((await patch(c, "00000000-0000-4000-8000-000000000000", { allowed_app_ids: ["a"] })).statusCode).toBe(404);
+    expect((await patch(c, "not-a-uuid", { allowed_app_ids: ["a"] })).statusCode).toBe(404);
+  });
+
+  it("發放與修改寫入稽核；GET /api/audit 可見且不含 token／secret／hash", async () => {
+    await boot();
+    const c = await admin();
+    const { sensor_id, token } = (await issue(c, OK)).json() as { sensor_id: string; token: string };
+    await patch(c, sensor_id, { allowed_app_ids: ["app-beta"] });
+    await patch(c, sensor_id, { allowed_app_ids: [] });
+    const hash = (await rowOf(sensor_id))!.token_hash;
+    const res = await app.inject({ method: "GET", url: "/api/audit", headers: cookieHeader(c) });
+    expect(res.statusCode).toBe(200);
+    const items = (res.json() as { items: Record<string, unknown>[] }).items;
+    expect(items.map((x) => [x.action, x.actor, x.sensor_id])).toEqual([
+      ["sensor_token.issue", "admin1", sensor_id],
+      ["sensor_token.update_apps", "admin1", sensor_id],
+    ]);
+    for (const x of items) expect(typeof x.at).toBe("number");
+    expect(items[1]!.detail).toEqual({ allowed_app_ids: ["app-beta"] });
+    for (const s of [token, token.split(".")[1]!, hash, "token_hash"]) expect(res.body).not.toContain(s);
   });
 });

@@ -38,7 +38,16 @@ const SCHEMA_STATEMENTS = [
   created_by INTEGER NOT NULL REFERENCES users(id),
   created_at BIGINT NOT NULL,
   revoked_at BIGINT NULL,
-  allowed_cidrs TEXT[] NOT NULL CHECK (cardinality(allowed_cidrs) >= 1)
+  allowed_cidrs TEXT[] NOT NULL CHECK (cardinality(allowed_cidrs) >= 1),
+  allowed_app_ids TEXT[] NOT NULL CHECK (cardinality(allowed_app_ids) >= 1)
+)`,
+  `CREATE TABLE IF NOT EXISTS audit_events (
+  id BIGSERIAL PRIMARY KEY,
+  action TEXT NOT NULL,
+  actor TEXT NOT NULL,
+  sensor_id TEXT NULL,
+  at BIGINT NOT NULL,
+  detail JSONB NOT NULL DEFAULT '{}'::jsonb
 )`,
 ];
 

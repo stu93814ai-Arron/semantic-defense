@@ -7,6 +7,7 @@ import {
 } from "./auth.js";
 import { createAuthPreHandler } from "./authz.js";
 import { registerSensorTokenRoutes } from "./sensor-tokens.js";
+import { registerAuditRoute } from "./audit.js";
 
 export type BuildAppOptions = {
   idleTimeoutMs?: number;
@@ -115,7 +116,7 @@ function registerRoleRoutes(app: ControlApi): void {
   }
   app.get("/api/judgments/:caseId", { config: { roles: op } }, async (_req, reply) =>
     reply.code(404).send({ error: "查無案件" }));
-  for (const url of ["/api/admin/users", "/api/audit", "/api/versions"]) {
+  for (const url of ["/api/admin/users", "/api/versions"]) {
     app.get(url, { config: { roles: admin } }, empty);
   }
   app.get("/api/health", { config: { roles: admin } }, async () => ({ status: "ok" }));
@@ -195,6 +196,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<ControlApi> 
   registerRoleRoutes(app);
   registerOwnerRoutes(app, db);
   registerSensorTokenRoutes(app, db, now);
+  registerAuditRoute(app, db);
   app.setNotFoundHandler((_req, reply) => reply.code(404).send({ error: "Not Found" }));
   if (opts.beforeReady) await opts.beforeReady(app);
   if (opts.management) {
