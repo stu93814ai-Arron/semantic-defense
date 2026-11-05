@@ -40,6 +40,9 @@ export default defineConfig({
       // control-api 測試共用同一個拋棄式 Postgres（DATABASE_URL），檔案間不並行以免互相污染
       { extends: true, test: { name: "control-api", environment: "node", exclude: E2E, testTimeout: 60_000, hookTimeout: 60_000,
         fileParallelism: false, include: ["apps/control-api/{src,test}/**/*.test.ts"] } },
+      // sensor-ingest 測試用獨立 schema（sensor_ingest_test），與 control-api 共用同一 DATABASE_URL 但不互相清表
+      { extends: true, test: { name: "sensor-ingest", environment: "node", exclude: E2E, testTimeout: 60_000, hookTimeout: 60_000,
+        fileParallelism: false, include: ["apps/sensor-ingest/{src,test}/**/*.test.ts"] } },
       { extends: true, test: { name: "console", environment: "jsdom", exclude: E2E,
         include: ["apps/console/{src,test}/**/*.test.{ts,tsx}"] } },
     ],
