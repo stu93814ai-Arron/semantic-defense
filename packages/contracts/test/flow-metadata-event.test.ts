@@ -48,6 +48,7 @@ describe("FlowMetadataEventSchema", () => {
     ["packets 負", patch({ packets: -1 }), false],
     ["duration_ms 負", patch({ duration_ms: -1 }), false],
     ["CIDR src", patch({ src_ip: "192.0.2.0/24" }), false],
+    ["IPv6 zone %", patch({ src_ip: "fe80::1%eth0" }), false],
     ["CIDR dst", patch({ dst_ip: "2001:db8::/64" }), false],
     ["非 IP", patch({ src_ip: "not-an-ip" }), false],
     ["空 IP", patch({ dst_ip: "" }), false],

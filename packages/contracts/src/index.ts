@@ -1,8 +1,12 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { FlowMetadataEventSchema } from "./flow-metadata-event.js";
+import { BlocklistEntrySchema } from "./blocklist-entry.js";
+import { Id, NonNegInt } from "./primitives.js";
 
 export const CONTRACTS_PACKAGE = "@semantic-defense/contracts";
+export { Id, NonNegInt, Port, Rfc3339, SingleIp } from "./primitives.js";
+export { parseCidr, assertIpOrCidr, isHostPrefix } from "./ip-cidr.js";
 
 const Family = z.enum(["read", "write", "auth", "admin"]);
 export type Family = z.infer<typeof Family>;
@@ -14,9 +18,6 @@ const RouteTemplate = z
     (s) => s.startsWith("/") && s.slice(1).split("/").every((seg) => SEGMENT.test(seg)),
     { message: "route_template must be a path template" },
   );
-
-const Id = z.string().min(1).max(128).regex(/^[A-Za-z0-9_.:-]+$/);
-const NonNegInt = z.number().int().nonnegative();
 
 export const RequestEventSchema = z.strictObject({
   event_id: z.uuid(),
@@ -84,6 +85,13 @@ export {
 } from "./flow-metadata-event.js";
 export const parseFlowMetadataEvent = (input: unknown) =>
   safeParse(FlowMetadataEventSchema, input);
+
+export {
+  BlocklistEntrySchema,
+  type BlocklistEntry,
+} from "./blocklist-entry.js";
+export const parseBlocklistEntry = (input: unknown) =>
+  safeParse(BlocklistEntrySchema, input);
 
 const ORDER: readonly Family[] = ["read", "write", "auth", "admin"];
 const rank = (f: Family): number => ORDER.indexOf(f);
