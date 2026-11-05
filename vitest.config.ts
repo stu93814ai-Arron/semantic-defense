@@ -9,6 +9,11 @@ export const CORE_COVERAGE_INCLUDE = [
   "apps/control-api/src/session/**/*.ts",
   "apps/control-api/src/authz/**/*.ts",
   "apps/control-api/src/roles/**/*.ts",
+  // console 邏輯核心（PM 裁示；純 view 的 *.tsx 不納入，見 docs/ci/coverage.md）
+  "apps/console/src/api.ts", // API client 錯誤處理（401/404/429）
+  "apps/console/src/roles.ts", // 權限／路由閘門（accessFor 等）
+  "apps/console/src/theme/theme.ts", // 主題 localStorage＋預設值
+  "apps/console/src/review/**/*.ts", // 第 3 階段黑白名單審核決策邏輯（自動納入）
 ];
 // E2E（Playwright）不在 vitest 內跑
 const E2E = ["**/e2e/**", "**/*.e2e.*", "**/node_modules/**", "**/dist/**"];
