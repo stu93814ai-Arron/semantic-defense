@@ -32,6 +32,14 @@ const SCHEMA_STATEMENTS = [
   window_started_at BIGINT NOT NULL,
   PRIMARY KEY (username, ip)
 )`,
+  `CREATE TABLE IF NOT EXISTS sensor_tokens (
+  sensor_id TEXT PRIMARY KEY,
+  token_hash TEXT NOT NULL,
+  created_by INTEGER NOT NULL REFERENCES users(id),
+  created_at BIGINT NOT NULL,
+  revoked_at BIGINT NULL,
+  label TEXT
+)`,
 ];
 
 /** 固定鍵：跨連線序列化 schema 遷移。 */

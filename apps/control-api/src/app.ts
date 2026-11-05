@@ -6,6 +6,7 @@ import {
   type Role,
 } from "./auth.js";
 import { createAuthPreHandler } from "./authz.js";
+import { registerSensorTokenRoutes } from "./sensor-tokens.js";
 
 export type BuildAppOptions = {
   idleTimeoutMs?: number;
@@ -193,6 +194,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<ControlApi> 
   registerSessionRoutes(app, db);
   registerRoleRoutes(app);
   registerOwnerRoutes(app, db);
+  registerSensorTokenRoutes(app, db, now);
   app.setNotFoundHandler((_req, reply) => reply.code(404).send({ error: "Not Found" }));
   if (opts.beforeReady) await opts.beforeReady(app);
   if (opts.management) {
