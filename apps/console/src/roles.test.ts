@@ -29,6 +29,10 @@ describe("accessFor", () => {
     expect(accessFor("/judgments/history", op)).toBe("ok");
     expect(accessFor("/constraints", op)).toBe("ok");
     expect(accessFor("/constraints/x", op)).toBe("ok");
+    expect(accessFor("/blacklist", op)).toBe("ok");
+    expect(accessFor("/blacklist/review", op)).toBe("ok");
+    expect(accessFor("/whitelist", op)).toBe("deny");
+    expect(accessFor("/mode", op)).toBe("deny");
     expect(accessFor("/apps/new", op)).toBe("deny");
     expect(accessFor("/admin/users", op)).toBe("deny");
   });
@@ -45,6 +49,9 @@ describe("accessFor", () => {
     expect(accessFor("/audit", admin)).toBe("ok");
     expect(accessFor("/versions", admin)).toBe("ok");
     expect(accessFor("/health", admin)).toBe("ok");
+    expect(accessFor("/whitelist", admin)).toBe("ok");
+    expect(accessFor("/mode", admin)).toBe("ok");
+    expect(accessFor("/blacklist", admin)).toBe("deny");
     expect(accessFor("/judgments", admin)).toBe("deny");
     expect(accessFor("/apps/new", admin)).toBe("deny");
   });
@@ -65,6 +72,10 @@ describe("titleFor / isAppMapPath", () => {
     expect(titleFor("/audit")).toBe("稽核");
     expect(titleFor("/versions")).toBe("版本與影子流量");
     expect(titleFor("/health")).toBe("平台健康");
+    expect(titleFor("/blacklist/review")).toBe("黑名單審核");
+    expect(titleFor("/blacklist")).toBe("黑名單撤回");
+    expect(titleFor("/whitelist")).toBe("白名單");
+    expect(titleFor("/mode")).toBe("模式切換");
     expect(titleFor("/apps/app-alpha/map")).toBe("應用地圖");
     expect(titleFor("/judgments/case-1")).toBe("單一判斷");
     expect(titleFor("/unknown")).toBe("頁面");

@@ -9,7 +9,9 @@ function isOperatorPath(path: string): boolean {
   return (
     path.startsWith("/judgments") ||
     path === "/constraints" ||
-    path.startsWith("/constraints/")
+    path.startsWith("/constraints/") ||
+    path === "/blacklist" ||
+    path.startsWith("/blacklist/")
   );
 }
 
@@ -18,7 +20,9 @@ function isAdminPath(path: string): boolean {
     path === "/admin/users" ||
     path === "/audit" ||
     path === "/versions" ||
-    path === "/health"
+    path === "/health" ||
+    path === "/whitelist" ||
+    path === "/mode"
   );
 }
 
@@ -38,15 +42,25 @@ export function accessFor(path: string, user: SessionUser | null): "ok" | "login
   return "deny";
 }
 
+const TITLES: Record<string, string> = {
+  "/admin/users": "人員與角色",
+  "/apps/new": "應用接入",
+  "/judgments": "待判斷",
+  "/judgments/history": "判斷紀錄",
+  "/constraints": "生效限制",
+  "/audit": "稽核",
+  "/versions": "版本與影子流量",
+  "/health": "平台健康",
+  "/blacklist/review": "黑名單審核",
+  "/blacklist": "黑名單撤回",
+  "/whitelist": "白名單",
+  "/mode": "模式切換",
+};
+
 function staticTitle(path: string): string | undefined {
-  if (path === "/admin/users") return "人員與角色";
-  if (path === "/apps/new") return "應用接入";
-  if (path === "/judgments") return "待判斷";
-  if (path === "/judgments/history") return "判斷紀錄";
-  if (path === "/constraints") return "生效限制";
-  if (path === "/audit") return "稽核";
-  if (path === "/versions") return "版本與影子流量";
-  if (path === "/health") return "平台健康";
+  for (const [key, title] of Object.entries(TITLES)) {
+    if (key === path) return title;
+  }
   return undefined;
 }
 
