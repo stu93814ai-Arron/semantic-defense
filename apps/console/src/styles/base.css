@@ -147,7 +147,7 @@ label {
 }
 
 .theme-switch__option {
-  height: 32px;
+  height: 36px;
   padding: 0 14px;
   border: 0;
   background: transparent;
@@ -159,11 +159,22 @@ label {
   align-items: center;
 }
 
+.theme-switch__option:hover {
+  color: var(--color-text);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
 .theme-switch__option[data-selected="true"] {
   background: var(--color-surface);
   color: var(--color-text);
   font-weight: 700;
   box-shadow: inset 0 -2px 0 var(--color-primary);
+}
+
+.theme-switch__option[data-selected="true"]:hover {
+  box-shadow: inset 0 -3px 0 var(--color-primary);
+  text-decoration: none;
 }
 
 .theme-switch__check {
