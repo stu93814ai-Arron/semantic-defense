@@ -54,6 +54,17 @@ describe("BlocklistEntrySchema", () => {
     ["confidence >1", patch({ confidence: 1.1 }), false],
     ["confidence NaN", patch({ confidence: Number.NaN }), false],
     ["approved_by 空", patch({ approved_by: "" }), false],
+    // canonical / mapped / approved_by↔source
+    ["IPv6 大寫", patch({ ip: "2001:DB8::/64" }), false],
+    ["IPv6 未壓縮", patch({ ip: "2001:db8:0:0:0:0:0:1" }), false],
+    ["IPv6 hextet 前導0", patch({ ip: "2001:db8::0001" }), false],
+    ["前綴前導0", patch({ ip: "203.0.113.0/024" }), false],
+    ["IPv4-mapped ::ffff:7f00:1", patch({ ip: "::ffff:7f00:1" }), false],
+    ["IPv4-mapped ::ffff:a9fe:1", patch({ ip: "::ffff:a9fe:1" }), false],
+    ["IPv4-mapped ::ffff:0:0/96", patch({ ip: "::ffff:0:0/96" }), false],
+    ["auto 非 system:auto", patch({ source: "auto", ip: "198.51.100.7", approved_by: "admin1" }), false],
+    ["manual system: 前綴", patch({ approved_by: "system:auto" }), false],
+    ["manual system:other", patch({ approved_by: "system:other" }), false],
   ])("%s → ok=%s", (_n, input, ok) => {
     const r = parseBlocklistEntry(input);
     expect(r.ok).toBe(ok);

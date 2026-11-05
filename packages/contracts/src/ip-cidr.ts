@@ -47,6 +47,52 @@ function expandIpv6(ip: string): number[] | null {
   return partsToHextets(head);
 }
 
+/** RFC 5952：小寫、無前導 0、壓縮最長零段（並列時取左側）。 */
+function longestZeroRun(parts: readonly number[]): { start: number; len: number } {
+  let bestStart = -1;
+  let bestLen = 0;
+  let runStart = -1;
+  let runLen = 0;
+  for (const [idx, value] of parts.entries()) {
+    if (value === 0) {
+      if (runStart < 0) runStart = idx;
+      runLen += 1;
+      continue;
+    }
+    if (runLen >= 2 && runLen > bestLen) {
+      bestStart = runStart;
+      bestLen = runLen;
+    }
+    runStart = -1;
+    runLen = 0;
+  }
+  if (runLen >= 2 && runLen > bestLen) {
+    bestStart = runStart;
+    bestLen = runLen;
+  }
+  return { start: bestStart, len: bestLen };
+}
+
+function formatCanonicalIpv6(parts: number[]): string {
+  const { start, len } = longestZeroRun(parts);
+  const hex = (n: number) => n.toString(16);
+  if (start < 0) return parts.map(hex).join(":");
+  const head = parts.slice(0, start).map(hex).join(":");
+  const tail = parts.slice(start + len).map(hex).join(":");
+  return `${head}::${tail}`;
+}
+
+function isIpv4Mapped(parts: number[]): boolean {
+  return (
+    parts[0] === 0 &&
+    parts[1] === 0 &&
+    parts[2] === 0 &&
+    parts[3] === 0 &&
+    parts[4] === 0 &&
+    parts[5] === 0xffff
+  );
+}
+
 function ipv6ToBigInt(parts: number[]): bigint {
   return parts.reduce((acc, n) => (acc << 16n) + BigInt(n), 0n);
 }
@@ -82,11 +128,12 @@ function prefixInRange(version: 4 | 6, prefix: number): boolean {
   return version === 4 ? prefix >= 24 && prefix <= 32 : prefix >= 64 && prefix <= 128;
 }
 
+/** 拒前導 0（如 024）；無斜線 → 主機前綴。 */
 function parsePrefix(prefixTok: string | null, version: 4 | 6): number | null {
   if (prefixTok === null) return version === 4 ? 32 : 128;
-  if (!/^\d+$/.test(prefixTok)) return null;
+  if (!/^[1-9]\d*$/.test(prefixTok)) return null;
   const prefix = Number(prefixTok);
-  if (prefix === 0 || !prefixInRange(version, prefix)) return null;
+  if (!prefixInRange(version, prefix)) return null;
   return prefix;
 }
 
@@ -97,13 +144,18 @@ function checkV4(address: string, prefix: number): ParsedCidr | null {
 
 function checkV6(address: string, prefix: number): ParsedCidr | null {
   const parts = expandIpv6(address);
-  if (!parts || !hostBitsZeroV6(parts, prefix) || reservedV6(parts)) return null;
+  if (!parts) return null;
+  // 強制字面 canonical：不符即拒，不改寫接受
+  if (formatCanonicalIpv6(parts) !== address) return null;
+  if (isIpv4Mapped(parts)) return null;
+  if (!hostBitsZeroV6(parts, prefix) || reservedV6(parts)) return null;
   return { version: 6, address, prefix };
 }
 
 /**
  * 解析並檢查黑名單／白名單用 IP 或 CIDR。
- * 無前綴 → /32 或 /128；IPv4 ≥/24；IPv6 ≥/64；拒 /0、主機位非零、保留位址、%。
+ * 無前綴 → /32 或 /128；IPv4 ≥/24；IPv6 ≥/64；拒 /0、主機位非零、保留位址、%、
+ * 非 RFC5952 字面、IPv4-mapped。
  */
 export function parseCidr(raw: string): ParsedCidr | null {
   if (typeof raw !== "string" || raw.includes("%") || raw.includes(" ")) return null;

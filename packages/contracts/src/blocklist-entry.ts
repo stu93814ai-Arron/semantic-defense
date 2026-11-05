@@ -8,6 +8,11 @@ function ts(s: string): number {
   return Date.parse(s);
 }
 
+function approvedByMatchesSource(source: "manual" | "auto", approvedBy: string): boolean {
+  if (source === "auto") return approvedBy === "system:auto";
+  return !approvedBy.startsWith("system:");
+}
+
 /** PLAN-ADDENDUM-MONITOR §3 黑名單項目（strict；時間與 IP 規則以 refine 執行）。 */
 export const BlocklistEntrySchema = z
   .strictObject({
@@ -25,6 +30,10 @@ export const BlocklistEntrySchema = z
   .refine((e) => e.source !== "auto" || isHostPrefix(e.ip), {
     message: "auto_host_prefix",
     path: ["ip"],
+  })
+  .refine((e) => approvedByMatchesSource(e.source, e.approved_by), {
+    message: "approved_by_source",
+    path: ["approved_by"],
   })
   .refine((e) => ts(e.expires_at) > ts(e.created_at), {
     message: "expires_after_created",
