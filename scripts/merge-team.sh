@@ -3,7 +3,7 @@
 # 1) main 若只多了文件或 ci 提交（docs/**、*.md、.ci/**），自動把分支 rebase 到 main；有其他變更或衝突就停下來，請該組自己 rebase。
 # 2) 改到 package.json／pnpm-lock.yaml 的提交必須是獨立的 deps: 提交，並經過審查（--deps-ok）。
 # 3) 對分支跑完整閘門：紅燈不合入，在 main 記錄 fail。
-# 4) 綠燈就 ff-only 合入，在 main 記錄 pass；ff 失敗（閘門期間 main 前進）記錄 ff-failed，回到步驟 1 重試，最多 3 次。
+# 4) 綠燈就 ff-only 合入（含依賴變更時先在主目錄 pnpm install --frozen-lockfile），在 main 記錄 pass；ff 失敗（閘門期間 main 前進）記錄 ff-failed，回到步驟 1 重試，最多 3 次。
 set -euo pipefail
 cd "$(dirname "$0")/.."
 T=${1:?用法：merge-team.sh a|b [--deps-ok]}; B=team-$T; DEPS_OK=${2:-}; MAX=${MERGE_MAX_TRIES:-3}
@@ -61,7 +61,12 @@ for try in $(seq 1 "$MAX"); do
   rc=0; GATE_OUT="$OUT" bash "${MERGE_GATE_SCRIPT:-scripts/gate-clean.sh}" "$B" || rc=$?
   if [ $rc -ne 0 ]; then record "$REV" fail "$OUT"; rm -rf "$OUT"; echo "✗ $B（$REV）閘門紅燈，不合入"; exit $rc; fi
   if [ "$(git rev-parse --short "$B")" != "$REV" ]; then echo "✗ 閘門期間 $B 被改動（$REV → $(git rev-parse --short "$B")），不合入"; rm -rf "$OUT"; exit 1; fi
-  if git merge -q --ff-only "$B" 2>/dev/null; then record "$REV" pass "$OUT"; rm -rf "$OUT"; echo "✓ $B（$REV）已快轉合入 main"; exit 0; fi
+  PRE=$(git rev-parse HEAD)
+  if git merge -q --ff-only "$B" 2>/dev/null; then
+    # ff 帶進依賴變更時，先同步主目錄 node_modules，否則記錄提交的 pre-commit 型別檢查會找不到新依賴
+    if git diff --name-only "$PRE" HEAD | grep -qE '(^|/)(package\.json|pnpm-lock\.yaml)$'; then
+      echo "↻ 合入含依賴變更，主目錄執行 pnpm install --frozen-lockfile"; pnpm install --frozen-lockfile >/dev/null; fi
+    record "$REV" pass "$OUT"; rm -rf "$OUT"; echo "✓ $B（$REV）已快轉合入 main"; exit 0; fi
   MH=$(git rev-parse --short main)
   sed -i "\$s/,pass\$/,ff-failed(main=$MH)/" "$OUT/gate-history.csv"
   record "$REV" "ff-failed，main=$MH" "$OUT"; rm -rf "$OUT"
