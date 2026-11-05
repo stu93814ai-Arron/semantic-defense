@@ -1,2 +1,9 @@
 #!/usr/bin/env bash
-exec bash scripts/secrets.sh
+# 提交前檢查：gitleaks → typecheck → eslint --max-warnings=0（與閘門步驟 6、2、3 相同）。
+# 只有緊急情況才可用 git commit -n 跳過，規範見 docs/ci/hooks.md。
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+bash scripts/secrets.sh
+echo "pre-commit: 型別檢查"; pnpm run -s typecheck
+echo "pre-commit: eslint"; pnpm run -s lint --max-warnings=0
+echo "pre-commit: OK"
