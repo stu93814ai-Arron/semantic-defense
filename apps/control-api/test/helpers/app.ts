@@ -16,11 +16,14 @@ export { seedPhase2Fixtures };
  * 測試／實作共用組態。
  * - `databaseUrl`：接真實 Postgres（通常 `process.env.DATABASE_URL`，由 with-pg.mjs 提供）
  * - `now`：注入 epoch ms，供滑動閒置決定性測試
- * 實作須把這兩項納入正式 BuildAppOptions；此處先以轉型呼叫，讓紅燈測試可編譯。
+ * - `management`：僅綁管理平面 host/port（平面分離）；不得另開 ingress／流量 listener
+ * 實作須把上列納入正式 BuildAppOptions；此處先以轉型呼叫，讓紅燈測試可編譯。
  */
 export type BuildAppOptions = ImplBuildAppOptions & {
   databaseUrl?: string;
   now?: () => number;
+  /** 管理平面 listen；port 0 = 系統指派。傳入時 buildApp 回傳前須已 listening。 */
+  management?: { host: string; port: number };
 };
 
 export async function buildApp(

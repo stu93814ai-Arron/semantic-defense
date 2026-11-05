@@ -22,6 +22,13 @@
 | `buildApp` | `now?: () => number` | 可選時鐘（epoch ms）。滑動閒置測試用此推進時間；省略則 `Date.now()`。 |
 | `buildApp` | `loginRateLimit?: { maxFailures; windowMs }` | 登入失敗上限；計數須落在**共用儲存**（同一 `databaseUrl` 上多實例可見），不得只活在單一程序記憶體。 |
 | `buildApp` | `trustProxy?: boolean` | 預設 `false`；僅可信反向代理後開啟。 |
+| `buildApp` | `management?: { host; port }` | **平面分離**：僅綁**管理平面** listen。`port: 0` 由系統指派。傳入時 `buildApp` 回傳前須 `server.listening === true`，且 `addresses()` 長度為 **1**（不得另開 ingress／流量 listener）。省略時可不 listen（inject 單測）。 |
+
+### 平面分離（管理側，階段 2）
+
+- control-api **不是**流量入口／反向代理：無 proxy／forward／catch-all 轉發路由。
+- 對 `/`、`/anything`、`/proxy?url=…`、CONNECT、absolute-URI 等非契約管理路徑 → **404**；本地 sentinel 上游須 **0 次**命中。
+- 流量平面（gateway-adapter）相關驗收見倉庫 `docs/acceptance-checklist.md` 第 4 階段待辦；資安每次必查見 `SECURITY-CHECKLIST-PLANE-SEPARATION.md`。
 
 建議執行（與根 `test:once` 相同包裝）：
 
@@ -37,6 +44,7 @@ const databaseUrl = process.env.DATABASE_URL!; // with-pg.mjs 提供
 
 const app = await buildApp({
   databaseUrl,                 // 持久化／多實例必填
+  management: { host: "127.0.0.1", port: 0 }, // 平面分離：只綁管理埠
   idleTimeoutMs: 50,           // 測試用短閒置
   now: () => clockMs,          // 滑動閒置決定性時鐘
   loginRateLimit: { maxFailures: 5, windowMs: 60_000 },
