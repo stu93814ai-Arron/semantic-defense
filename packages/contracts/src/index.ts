@@ -14,40 +14,43 @@ const RouteTemplate = z
     { message: "route_template must be a path template" },
   );
 
+const Id = z.string().min(1).max(128).regex(/^[A-Za-z0-9_.:-]+$/);
+const NonNegInt = z.number().int().nonnegative();
+
 export const RequestEventSchema = z.strictObject({
   event_id: z.uuid(),
-  app_id: z.string(),
-  session_id: z.string(),
-  actor_id: z.string(),
+  app_id: Id,
+  session_id: Id,
+  actor_id: Id,
   ts: z.iso.datetime({ offset: true }),
   route_template: RouteTemplate,
-  param_roles: z.array(z.strictObject({ name: z.string(), type: z.string() })),
+  param_roles: z.array(z.strictObject({ name: Id, type: z.enum(["string", "number", "boolean"]) })),
   response_class: Family,
   sensitive: z.boolean(),
 });
 export type RequestEvent = z.infer<typeof RequestEventSchema>;
 
 const Transition = z.strictObject({
-  from_family: Family, to_family: Family, distance: z.number(), count: z.number(),
+  from_family: Family, to_family: Family, distance: z.number().nonnegative(), count: NonNegInt,
 });
 
 export const CaseSummarySchema = z.strictObject({
   case_id: z.uuid(),
-  app_id: z.string(),
-  actor_id: z.string(),
-  session_id: z.string(),
+  app_id: Id,
+  actor_id: Id,
+  session_id: Id,
   transitions: z.array(Transition),
   privileged_target: Family,
-  normal_neighbor_count: z.number(),
+  normal_neighbor_count: NonNegInt,
 });
 export type CaseSummary = z.infer<typeof CaseSummarySchema>;
 
 export const ConstraintDraftSchema = z.strictObject({
-  app_id: z.string(),
-  route_family: z.string(),
+  app_id: Id,
+  route_family: Id,
   from_state: Family,
   to_state: Family,
-  subject: z.strictObject({ type: z.enum(["actor", "session"]), id: z.string() }),
+  subject: z.strictObject({ type: z.enum(["actor", "session"]), id: Id }),
   action: z.enum(["log", "deny"]),
   expires_at: z.iso.datetime({ offset: true }),
 });
