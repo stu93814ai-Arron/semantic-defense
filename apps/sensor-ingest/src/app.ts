@@ -1,6 +1,7 @@
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import { parseFlowMetadataEvent } from "@semantic-defense/contracts";
 import { findSensorByToken, ipAllowed, type SensorDb } from "@semantic-defense/sensor-auth";
+import { createAuthFailLimiter } from "./rate-limit.js";
 import { ensureFlowSchema, insertFlow, purgeExpired, recordRejection } from "./store.js";
 
 /**
@@ -8,6 +9,7 @@ import { ensureFlowSchema, insertFlow, purgeExpired, recordRejection } from "./s
  * - HTTPS 必修：預設 requireHttps=true，以 req.protocol（= socket.encrypted；不信任 proxy，x-forwarded-proto 無效）判定，明文 → 426。
  *   生產以 `https: { key, cert }` 直接終結 TLS；requireHttps:false 只給測試以 inject 驗認證邏輯。
  * - 認證：Authorization: Bearer sdst_<sensor_id>.<secret> → 401；來源 IP（socket，不讀 X-Forwarded-For）不在 allowed_cidrs → 403。
+ * - 未授權 IP 速率限制：缺／錯 token 依來源 IP 計失敗，約 30／60s → 429（不讀 XFF；403／成功不計；注入時鐘）。
  * - 無 session、無管理／登入路由；未宣告路徑一律 404（認證掛在路由 onRequest：先於 body 解析，未認證請求不解析 body；不影響 404）。
  * - ③c：POST /v1/flows body＝單一 FlowMetadataEvent（contracts strict 驗證），sensor_id 取自 token → 201；
  *   自報 sensor_id／非法 → 400；app_id 不在 token 的 allowed_app_ids → 403（只記 sensor_id＋時間）；同 sensor 重複 flow_id → 409。寫入前清除 ≥7 天列（見 store.ts）。
@@ -29,15 +31,27 @@ export const BODY_LIMIT = 256 * 1024;
 
 const BEARER = /^Bearer (\S+)$/;
 
-function makeGuard(db: SensorDb, requireHttps: boolean) {
+function makeGuard(
+  db: SensorDb,
+  requireHttps: boolean,
+  now: () => number,
+  limiter: ReturnType<typeof createAuthFailLimiter>,
+) {
   return async (req: FastifyRequest, reply: FastifyReply): Promise<void> => {
     if (requireHttps && req.protocol !== "https") {
       return void reply.code(426).header("upgrade", "TLS/1.3").send({ error: "需要 HTTPS" });
     }
+    const ip = req.socket.remoteAddress ?? req.ip;
+    if (limiter.check(ip, now()) === "limited") {
+      return void reply.code(429).send({ error: "請求過於頻繁" });
+    }
     const m = BEARER.exec(req.headers.authorization ?? "");
     const sensor = m ? await findSensorByToken(db, m[1]!) : null;
-    if (!sensor) return void reply.code(401).send({ error: "未授權" });
-    if (!ipAllowed(req.socket.remoteAddress ?? req.ip, sensor.allowed_cidrs)) {
+    if (!sensor) {
+      limiter.recordFail(ip, now());
+      return void reply.code(401).send({ error: "未授權" });
+    }
+    if (!ipAllowed(ip, sensor.allowed_cidrs)) {
       return void reply.code(403).send({ error: "來源 IP 不在允許清單" });
     }
     req.sensorId = sensor.sensor_id;
@@ -54,7 +68,8 @@ export async function buildIngest(opts: BuildIngestOptions): Promise<FastifyInst
     : Fastify({ trustProxy: false, bodyLimit: BODY_LIMIT })) as unknown as FastifyInstance;
   const clock = opts.now ?? Date.now;
   await ensureFlowSchema(opts.db);
-  const guard = makeGuard(opts.db, opts.requireHttps ?? true);
+  const limiter = createAuthFailLimiter();
+  const guard = makeGuard(opts.db, opts.requireHttps ?? true, clock, limiter);
 
   app.setNotFoundHandler((_req, reply) => reply.code(404).send({ error: "查無此路徑" }));
 
