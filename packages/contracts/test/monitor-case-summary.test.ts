@@ -277,3 +277,39 @@ describe("MonitorCaseSummarySchema reasons 與特徵一致", () => {
     expect(r.ok).toBe(false);
   });
 });
+
+describe("MonitorCaseSummarySchema 成案下限", () => {
+  it("n 為 0 → 拒", () => {
+    const r = parseMonitorCaseSummary(
+      patch({
+        n: 0,
+        u: 0,
+        s: 0,
+        h: false,
+        // 空 reasons：避開既有 reasonsMatchFeatures，專門驗證 n≥1
+        reasons: [],
+        top_dst_ports: [],
+        port_ranges: { well_known: 0, registered: 0, dynamic: 0 },
+        bytes_out: { min: 0, median: 0, max: 0 },
+        packets: { min: 0, median: 0, max: 0 },
+      }),
+    );
+    expect(r.ok).toBe(false);
+  });
+
+  it("u 為 0 → 拒", () => {
+    const r = parseMonitorCaseSummary(
+      patch({
+        u: 0,
+        reasons: ["n"],
+        top_dst_ports: [],
+      }),
+    );
+    expect(r.ok).toBe(false);
+  });
+
+  it("reasons 空陣列 → 拒", () => {
+    const r = parseMonitorCaseSummary(patch({ reasons: [] }));
+    expect(r.ok).toBe(false);
+  });
+});
