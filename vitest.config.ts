@@ -14,6 +14,9 @@ export const CORE_COVERAGE_INCLUDE = [
   "apps/console/src/roles.ts", // 權限／路由閘門（accessFor 等）
   "apps/console/src/theme/theme.ts", // 主題 localStorage＋預設值
   "apps/console/src/auth/idleTimer.ts", // 客戶端閒置自動登出計時
+  "apps/console/src/auth/session.ts", // session／login outcome 純邏輯
+  "apps/console/src/routing/guards.ts", // 路由 probe／API 閘門
+  "apps/console/src/theme/roving.ts", // ThemeSwitch 鍵盤 roving
   "apps/console/src/review/**/*.ts", // 第 3 階段黑白名單審核決策邏輯（自動納入）
 ];
 // E2E（Playwright）不在 vitest 內跑

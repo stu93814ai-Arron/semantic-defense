@@ -61,3 +61,17 @@ export function titleFor(path: string): string {
 export function isAppMapPath(path: string): boolean {
   return /^\/apps\/[^/]+\/map$/.test(path);
 }
+
+export function parseMeBody(body: unknown): SessionUser | null {
+  if (!body || typeof body !== "object") return null;
+  const b = body as { username?: unknown; role?: unknown };
+  if (typeof b.username !== "string" || typeof b.role !== "string") return null;
+  if (
+    b.role !== "operator" &&
+    b.role !== "app_owner" &&
+    b.role !== "platform_admin"
+  ) {
+    return null;
+  }
+  return { username: b.username, role: b.role };
+}

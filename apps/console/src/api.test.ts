@@ -179,3 +179,115 @@ describe("apiGet 429／404", () => {
     });
   });
 });
+
+describe("apiGet／login 其餘分支", () => {
+  beforeEach(() => {
+    setUnauthorizedHandler(null);
+    vi.stubGlobal("fetch", vi.fn());
+  });
+  afterEach(() => {
+    setUnauthorizedHandler(null);
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("apiGet 500／壞 JSON／429 fallback／message 欄", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse(500, { message: "伺服器忙碌" }),
+    );
+    await expect(apiGet("/api/x")).resolves.toEqual({
+      status: 500,
+      data: null,
+      error: "伺服器忙碌",
+    });
+
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response("not-json", { status: 200, headers: { "Content-Type": "text/plain" } }),
+    );
+    await expect(apiGet("/api/x")).resolves.toEqual({ status: 200, data: null });
+
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response("{}", { status: 429, headers: { "Content-Type": "application/json" } }),
+    );
+    await expect(apiGet("/api/x")).resolves.toEqual({
+      status: 429,
+      data: null,
+      error: "帳號或密碼錯誤，請稍後再試",
+    });
+  });
+
+  it("fetchMe 401 非 quiet 觸發 handler；非 2xx 回 null", async () => {
+    const onUnauth = vi.fn();
+    setUnauthorizedHandler(onUnauth);
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(401, {}));
+    await expect(fetchMe()).resolves.toBeNull();
+    expect(onUnauth).toHaveBeenCalledOnce();
+
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(503, {}));
+    await expect(fetchMe()).resolves.toBeNull();
+  });
+
+  it("loginRequestSync 網路錯誤／4xx／me 失敗", async () => {
+    class BoomXHR {
+      status = 0;
+      responseText = "";
+      withCredentials = false;
+      open() {}
+      setRequestHeader() {}
+      send() {
+        throw new Error("offline");
+      }
+    }
+    vi.stubGlobal("XMLHttpRequest", BoomXHR as unknown as typeof XMLHttpRequest);
+    expect(loginRequestSync("a", "b")).toEqual({
+      ok: false,
+      status: 0,
+      message: "帳號或密碼錯誤",
+    });
+
+    class FailLoginXHR {
+      status = 0;
+      responseText = "";
+      withCredentials = false;
+      open() {}
+      setRequestHeader() {}
+      send() {
+        this.status = 401;
+        this.responseText = JSON.stringify({ message: "帳號或密碼錯誤" });
+      }
+    }
+    vi.stubGlobal("XMLHttpRequest", FailLoginXHR as unknown as typeof XMLHttpRequest);
+    expect(loginRequestSync("a", "b")).toEqual({
+      ok: false,
+      status: 401,
+      message: "帳號或密碼錯誤",
+    });
+
+    const calls: string[] = [];
+    class MeFailXHR {
+      status = 0;
+      responseText = "";
+      withCredentials = false;
+      open(_m: string, url: string) {
+        calls.push(url);
+      }
+      setRequestHeader() {}
+      send() {
+        const url = calls[calls.length - 1]!;
+        if (url.includes("login")) {
+          this.status = 200;
+          this.responseText = JSON.stringify({ ok: true });
+          return;
+        }
+        this.status = 401;
+        this.responseText = "{}";
+      }
+    }
+    vi.stubGlobal("XMLHttpRequest", MeFailXHR as unknown as typeof XMLHttpRequest);
+    expect(loginRequestSync("a", "b")).toEqual({
+      ok: false,
+      status: 401,
+      message: "帳號或密碼錯誤",
+    });
+  });
+});

@@ -14,12 +14,13 @@ import {
   logoutRequest,
   setUnauthorizedHandler,
 } from "./api";
-import { resolveIdleTimeoutMs, startIdleTimer } from "./auth/idleTimer";
+import {
+  loginOutcomeFrom,
+  resolveIdleTimeoutMs,
+  startIdleTimer,
+  type LoginOutcome,
+} from "./auth/session";
 import type { SessionUser } from "./roles";
-
-type LoginOutcome =
-  | { ok: true; role: SessionUser["role"] }
-  | { ok: false; message: string };
 
 type AuthState = {
   user: SessionUser | null;
@@ -32,11 +33,10 @@ type AuthState = {
 const AuthContext = createContext<AuthState | null>(null);
 
 function viteIdleEnv(): Record<string, string | undefined> {
-  try {
-    return import.meta.env as Record<string, string | undefined>;
-  } catch {
-    return {};
-  }
+  const meta = import.meta as ImportMeta & {
+    env?: Record<string, string | undefined>;
+  };
+  return meta.env ?? {};
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -87,10 +87,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback((username: string, password: string): LoginOutcome => {
     const result = loginRequestSync(username, password);
-    if (!result.ok) return { ok: false, message: result.message };
-    setUser(result.user);
-    setReady(true);
-    return { ok: true, role: result.user.role };
+    const outcome = loginOutcomeFrom(result);
+    if (result.ok) {
+      setUser(result.user);
+      setReady(true);
+    }
+    return outcome;
   }, []);
 
   const logout = useCallback(async () => {

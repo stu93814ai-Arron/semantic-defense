@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   accessFor,
   isAppMapPath,
+  parseMeBody,
   titleFor,
   type SessionUser,
 } from "./roles";
@@ -73,5 +74,17 @@ describe("titleFor / isAppMapPath", () => {
     expect(isAppMapPath("/apps/a/map")).toBe(true);
     expect(isAppMapPath("/apps/new")).toBe(false);
     expect(isAppMapPath("/judgments")).toBe(false);
+  });
+});
+
+describe("parseMeBody", () => {
+  it("只接受完整 username/role", () => {
+    expect(parseMeBody({ username: "u", role: "operator" })).toEqual({
+      username: "u",
+      role: "operator",
+    });
+    expect(parseMeBody(null)).toBeNull();
+    expect(parseMeBody({ username: "u" })).toBeNull();
+    expect(parseMeBody({ username: "u", role: "nope" })).toBeNull();
   });
 });

@@ -1,4 +1,5 @@
 import type { SessionUser } from "./roles";
+import { parseMeBody } from "./roles";
 
 export type LoginResult =
   | { ok: true; user: SessionUser }
@@ -60,9 +61,7 @@ export async function fetchMe(opts: FetchMeOptions = {}): Promise<SessionUser | 
     return null;
   }
   if (!res.ok) return null;
-  const body = (await res.json()) as { username?: string; role?: SessionUser["role"] };
-  if (!body.username || !body.role) return null;
-  return { username: body.username, role: body.role };
+  return parseMeBody(await res.json());
 }
 
 function parseError(text: string): string | undefined {
@@ -85,12 +84,7 @@ function fetchMeSync(): SessionUser | null {
   }
   if (xhr.status < 200 || xhr.status >= 300) return null;
   try {
-    const body = JSON.parse(xhr.responseText) as {
-      username?: string;
-      role?: SessionUser["role"];
-    };
-    if (!body.username || !body.role) return null;
-    return { username: body.username, role: body.role };
+    return parseMeBody(JSON.parse(xhr.responseText));
   } catch {
     return null;
   }

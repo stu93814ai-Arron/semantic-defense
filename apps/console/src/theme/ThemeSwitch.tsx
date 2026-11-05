@@ -5,14 +5,7 @@ import {
   readDomTheme,
   type ThemeId,
 } from "./theme";
-
-function nextIndex(key: string, i: number, n: number): number | null {
-  if (key === "ArrowRight" || key === "ArrowDown") return (i + 1) % n;
-  if (key === "ArrowLeft" || key === "ArrowUp") return (i - 1 + n) % n;
-  if (key === "Home") return 0;
-  if (key === "End") return n - 1;
-  return null;
-}
+import { nextIndex } from "./roving";
 
 /** DESIGN_SYSTEM §8 ThemeSwitch：radiogroup + roving tabindex。 */
 export function ThemeSwitch() {
@@ -61,7 +54,6 @@ export function ThemeSwitch() {
         <button
           key={o.value}
           ref={(el) => {
-            // 固定兩段式，索引由 OPTIONS 順序保證
             if (i === 0) refs.current = [el, refs.current[1] ?? null];
             else refs.current = [refs.current[0] ?? null, el];
           }}

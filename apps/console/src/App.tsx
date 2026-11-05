@@ -1,46 +1,24 @@
 import { useEffect, useState } from "react";
 import { Navigate, Outlet, Route, Routes, useLocation } from "react-router-dom";
 import { useAuth } from "./auth";
-import { accessFor, isAppMapPath, titleFor } from "./roles";
+import { accessFor, titleFor } from "./roles";
 import { EmptyDataPage } from "./pages/EmptyDataPage";
 import { LoginPage } from "./pages/LoginPage";
 import { NoPermissionPage } from "./pages/NoPermissionPage";
 import { ThemeSwitch } from "./theme/ThemeSwitch";
 import { apiGet } from "./api";
-
-function probeExact(path: string): string | null {
-  if (path === "/judgments" || path === "/judgments/history") return "/api/judgments";
-  if (path === "/constraints") return "/api/constraints";
-  if (path === "/admin/users") return "/api/admin/users";
-  if (path === "/audit") return "/api/audit";
-  if (path === "/versions") return "/api/versions";
-  if (path === "/health") return "/api/health";
-  return null;
-}
-
-function probeUrl(path: string): string | null {
-  if (path === "/apps/new") return null;
-  const exact = probeExact(path);
-  if (exact) return exact;
-  if (/^\/judgments\/[^/]+$/.test(path)) {
-    return `/api/judgments/${path.slice("/judgments/".length)}`;
-  }
-  const m = /^\/apps\/([^/]+)\/map$/.exec(path);
-  return m ? `/api/apps/${m[1]}/map` : null;
-}
-
-function decideApiGate(status: number, path: string): "ok" | "deny" | "ignore" {
-  if (status === 401) return "ignore";
-  if (status === 403) return "deny";
-  if (status === 404 && isAppMapPath(path)) return "deny";
-  return "ok";
-}
+import {
+  decideApiGate,
+  probeUrl,
+  resolveProtectedView,
+  type ApiGate,
+} from "./routing/guards";
 
 function ProtectedEmpty({ hint }: { hint: string }) {
   const { user, ready, refresh } = useAuth();
   const location = useLocation();
   const roleGate = ready ? accessFor(location.pathname, user) : "loading";
-  const [apiGate, setApiGate] = useState<"pending" | "ok" | "deny">("pending");
+  const [apiGate, setApiGate] = useState<ApiGate>("pending");
 
   useEffect(() => {
     void refresh();
@@ -68,10 +46,9 @@ function ProtectedEmpty({ hint }: { hint: string }) {
     };
   }, [roleGate, location.pathname]);
 
-  if (roleGate === "loading" || (roleGate === "ok" && apiGate === "pending")) {
-    return <main>載入中…</main>;
-  }
-  if (roleGate === "login") {
+  const view = resolveProtectedView(roleGate, apiGate);
+  if (view === "loading") return <main>載入中…</main>;
+  if (view === "login") {
     return (
       <>
         <main>請先登入</main>
@@ -79,7 +56,7 @@ function ProtectedEmpty({ hint }: { hint: string }) {
       </>
     );
   }
-  if (roleGate === "deny" || apiGate === "deny") return <NoPermissionPage />;
+  if (view === "deny") return <NoPermissionPage />;
   return <EmptyDataPage title={titleFor(location.pathname)} hint={hint} />;
 }
 

@@ -4,7 +4,7 @@
     "rootDir": ".",
     "outDir": "dist",
     "jsx": "react-jsx",
-    "types": ["node"],
+    "types": ["node", "vite/client"],
     "noEmit": true,
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "module": "ESNext",
