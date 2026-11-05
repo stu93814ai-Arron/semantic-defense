@@ -18,22 +18,23 @@ export async function openTestDb(): Promise<SensorDb & { close(): Promise<void>;
   await boot.query(`CREATE SCHEMA IF NOT EXISTS ${SCHEMA}`);
   await boot.end();
   const pool = new pg.Pool({ connectionString: url, options: `-c search_path=${SCHEMA}` });
-  await pool.query(`CREATE TABLE IF NOT EXISTS sensor_tokens (
+  await pool.query("DROP TABLE IF EXISTS sensor_tokens");
+  await pool.query(`CREATE TABLE sensor_tokens (
     sensor_id TEXT PRIMARY KEY, token_hash TEXT NOT NULL, created_by INTEGER NOT NULL,
-    created_at BIGINT NOT NULL, revoked_at BIGINT NULL, allowed_cidrs TEXT[] NOT NULL)`);
+    created_at BIGINT NOT NULL, revoked_at BIGINT NULL, allowed_cidrs TEXT[] NOT NULL, allowed_app_ids TEXT[] NOT NULL)`);
   return {
     query: async <T>(sql: string, params?: unknown[]) => ({ rows: (await pool.query(sql, params)).rows as T[] }),
-    reset: async () => { await pool.query("TRUNCATE sensor_tokens"); await pool.query("DROP TABLE IF EXISTS flow_events"); },
+    reset: async () => { await pool.query("DROP TABLE IF EXISTS flow_rejections"); await pool.query("TRUNCATE sensor_tokens"); await pool.query("DROP TABLE IF EXISTS flow_events"); },
     close: async () => { await pool.end(); },
   };
 }
 
-export async function seedToken(db: SensorDb, cidrs: string[], revoked = false): Promise<string> {
+export async function seedToken(db: SensorDb, cidrs: string[], revoked = false, apps: string[] = ["app-1"]): Promise<string> {
   const id = randomUUID();
   const secret = randomBytes(32).toString("base64url");
   await db.query(
-    "INSERT INTO sensor_tokens (sensor_id, token_hash, created_by, created_at, allowed_cidrs, revoked_at) VALUES ($1,$2,1,0,$3,$4)",
-    [id, sha256Hex(secret), cidrs, revoked ? 1 : null],
+    "INSERT INTO sensor_tokens (sensor_id, token_hash, created_by, created_at, allowed_cidrs, revoked_at, allowed_app_ids) VALUES ($1,$2,1,0,$3,$4,$5)",
+    [id, sha256Hex(secret), cidrs, revoked ? 1 : null, apps],
   );
   return `sdst_${id}.${secret}`;
 }

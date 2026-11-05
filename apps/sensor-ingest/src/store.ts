@@ -20,6 +20,8 @@ const DDL = [
   PRIMARY KEY (sensor_id, flow_id)
 )`,
   "CREATE INDEX IF NOT EXISTS flow_events_received_at ON flow_events (received_at)",
+  // app_id 未綁定的拒絕紀錄：只記 sensor_id＋時間，不記 payload
+  "CREATE TABLE IF NOT EXISTS flow_rejections (sensor_id TEXT NOT NULL, at BIGINT NOT NULL)",
 ];
 
 export async function ensureFlowSchema(db: SensorDb): Promise<void> {
@@ -45,4 +47,9 @@ export async function insertFlow(db: SensorDb, f: FlowMetadataEvent, sensorId: s
       f.bytes_in, f.bytes_out, f.packets, f.duration_ms, sensorId, now],
   );
   return r.rows.length === 1;
+}
+
+/** 記一筆 app_id 未綁定的拒絕；刻意不收 payload。 */
+export async function recordRejection(db: SensorDb, sensorId: string, now: number): Promise<void> {
+  await db.query("INSERT INTO flow_rejections (sensor_id, at) VALUES ($1,$2)", [sensorId, now]);
 }

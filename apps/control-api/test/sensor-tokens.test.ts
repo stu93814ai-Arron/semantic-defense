@@ -96,7 +96,7 @@ describe("感測器 token 查找", () => {
     const c = await admin();
     const { sensor_id, token } = (await issue(c, OK)).json() as { sensor_id: string; token: string };
     const { findSensorByToken } = await import("@semantic-defense/sensor-auth");
-    expect(await findSensorByToken(app.db, token)).toEqual({ sensor_id, allowed_cidrs: ["10.0.0.0/8"] });
+    expect(await findSensorByToken(app.db, token)).toEqual({ sensor_id, allowed_cidrs: ["10.0.0.0/8"], allowed_app_ids: ["app-alpha"] });
     const secret = token.split(".")[1]!;
     const flipped = (secret[0] === "A" ? "B" : "A") + secret.slice(1);
     for (const t of [`sdst_${sensor_id}.${flipped}`, `sdst_${sensor_id}`, secret, "",

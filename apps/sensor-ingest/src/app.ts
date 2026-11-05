@@ -1,7 +1,7 @@
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import { parseFlowMetadataEvent } from "@semantic-defense/contracts";
 import { findSensorByToken, ipAllowed, type SensorDb } from "@semantic-defense/sensor-auth";
-import { ensureFlowSchema, insertFlow, purgeExpired } from "./store.js";
+import { ensureFlowSchema, insertFlow, purgeExpired, recordRejection } from "./store.js";
 
 /**
  * sensor-ingest（流量平面）③b：認證面。
@@ -10,7 +10,7 @@ import { ensureFlowSchema, insertFlow, purgeExpired } from "./store.js";
  * - 認證：Authorization: Bearer sdst_<sensor_id>.<secret> → 401；來源 IP（socket，不讀 X-Forwarded-For）不在 allowed_cidrs → 403。
  * - 無 session、無管理／登入路由；未宣告路徑一律 404（認證掛在路由 onRequest：先於 body 解析，未認證請求不解析 body；不影響 404）。
  * - ③c：POST /v1/flows body＝單一 FlowMetadataEvent（contracts strict 驗證），sensor_id 取自 token → 201；
- *   自報 sensor_id／非法 → 400；同 sensor 重複 flow_id → 409。寫入前清除 ≥7 天列（見 store.ts）。
+ *   自報 sensor_id／非法 → 400；app_id 不在 token 的 allowed_app_ids → 403（只記 sensor_id＋時間）；同 sensor 重複 flow_id → 409。寫入前清除 ≥7 天列（見 store.ts）。
  */
 export type BuildIngestOptions = {
   db: SensorDb;
@@ -21,7 +21,7 @@ export type BuildIngestOptions = {
 };
 
 declare module "fastify" {
-  interface FastifyRequest { sensorId?: string }
+  interface FastifyRequest { sensorId?: string; allowedAppIds?: string[] }
 }
 
 /** DoS 面：body 上限 256KB，超過 → 413。 */
@@ -41,6 +41,7 @@ function makeGuard(db: SensorDb, requireHttps: boolean) {
       return void reply.code(403).send({ error: "來源 IP 不在允許清單" });
     }
     req.sensorId = sensor.sensor_id;
+    req.allowedAppIds = sensor.allowed_app_ids;
   };
 }
 
@@ -66,6 +67,10 @@ export async function buildIngest(opts: BuildIngestOptions): Promise<FastifyInst
     const parsed = parseFlowMetadataEvent(req.body);
     if (!parsed.ok) return reply.code(400).send({ error: "請求格式錯誤", issues: parsed.errors });
     const now = clock();
+    if (!req.allowedAppIds!.includes(parsed.value.app_id)) {
+      await recordRejection(opts.db, req.sensorId!, now);
+      return reply.code(403).send({ error: "app_id 未綁定此感測器" });
+    }
     await purgeExpired(opts.db, now);
     if (!(await insertFlow(opts.db, parsed.value, req.sensorId!, now))) {
       return reply.code(409).send({ error: "flow_id 重複" });

@@ -11,7 +11,7 @@ export type SensorDb = {
   query<T>(sql: string, params?: unknown[]): Promise<{ rows: T[] }>;
 };
 
-export type SensorIdentity = { sensor_id: string; allowed_cidrs: string[] };
+export type SensorIdentity = { sensor_id: string; allowed_cidrs: string[]; allowed_app_ids: string[] };
 
 const TOKEN_RE = /^sdst_([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.([A-Za-z0-9_-]{43})$/;
 
@@ -27,15 +27,15 @@ export function parseSensorToken(token: string): { sensorId: string; secret: str
 export async function findSensorByToken(db: SensorDb, token: string): Promise<SensorIdentity | null> {
   const p = parseSensorToken(token);
   if (!p) return null;
-  const r = await db.query<{ token_hash: string; revoked_at: string | null; allowed_cidrs: string[] }>(
-    "SELECT token_hash, revoked_at, allowed_cidrs FROM sensor_tokens WHERE sensor_id = $1", [p.sensorId],
+  const r = await db.query<{ token_hash: string; revoked_at: string | null; allowed_cidrs: string[]; allowed_app_ids: string[] }>(
+    "SELECT token_hash, revoked_at, allowed_cidrs, allowed_app_ids FROM sensor_tokens WHERE sensor_id = $1", [p.sensorId],
   );
   const row = r.rows[0];
   const given = sha256(p.secret);
   const stored = row ? Buffer.from(row.token_hash, "hex") : Buffer.alloc(32);
   const ok = stored.length === 32 && timingSafeEqual(given, stored);
   if (!row || !ok || row.revoked_at !== null) return null;
-  return { sensor_id: p.sensorId, allowed_cidrs: row.allowed_cidrs };
+  return { sensor_id: p.sensorId, allowed_cidrs: row.allowed_cidrs, allowed_app_ids: row.allowed_app_ids };
 }
 
 const MAPPED_RE = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i;

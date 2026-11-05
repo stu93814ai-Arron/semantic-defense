@@ -5,7 +5,7 @@ const ID = "aaaaaaaa-2222-4333-8444-55555555beef";
 const SECRET = "A".repeat(43);
 const TOKEN = `sdst_${ID}.${SECRET}`;
 
-function fakeDb(row?: { token_hash: string; revoked_at: string | null; allowed_cidrs: string[] }) {
+function fakeDb(row?: { token_hash: string; revoked_at: string | null; allowed_cidrs: string[]; allowed_app_ids?: string[] }) {
   const calls: unknown[][] = [];
   const db: SensorDb = {
     query: async <T>(_sql: string, params?: unknown[]) => {
@@ -25,8 +25,8 @@ describe("sensor-auth", () => {
   });
 
   it("findSensorByToken：依 sensor_id 單列查找；錯 secret／已撤銷／查無 → null", async () => {
-    const ok = fakeDb({ token_hash: sha256Hex(SECRET), revoked_at: null, allowed_cidrs: ["10.0.0.0/8"] });
-    expect(await findSensorByToken(ok.db, TOKEN)).toEqual({ sensor_id: ID, allowed_cidrs: ["10.0.0.0/8"] });
+    const ok = fakeDb({ token_hash: sha256Hex(SECRET), revoked_at: null, allowed_cidrs: ["10.0.0.0/8"], allowed_app_ids: ["app-1"] });
+    expect(await findSensorByToken(ok.db, TOKEN)).toEqual({ sensor_id: ID, allowed_cidrs: ["10.0.0.0/8"], allowed_app_ids: ["app-1"] });
     expect(ok.calls).toEqual([[ID]]);
     expect(await findSensorByToken(ok.db, `sdst_${ID}.${"B".repeat(43)}`)).toBeNull();
     const rev = fakeDb({ token_hash: sha256Hex(SECRET), revoked_at: "1", allowed_cidrs: ["10.0.0.0/8"] });
