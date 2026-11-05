@@ -17,6 +17,7 @@
   "dependencies": {
     "fastify": "^5.12.8",
     "pg": "^8.23.1",
+    "@semantic-defense/contracts": "workspace:*",
     "@semantic-defense/sensor-auth": "workspace:*"
   }
 }
