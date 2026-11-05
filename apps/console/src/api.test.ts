@@ -180,16 +180,76 @@ describe("apiGet 429／404", () => {
   });
 });
 
-describe("apiGet／login 其餘分支", () => {
-  beforeEach(() => {
-    setUnauthorizedHandler(null);
-    vi.stubGlobal("fetch", vi.fn());
-  });
-  afterEach(() => {
-    setUnauthorizedHandler(null);
-    vi.unstubAllGlobals();
-    vi.restoreAllMocks();
-  });
+/** 同步 XHR stub：send 拋錯（離線）。 */
+function stubBoomXhr(): void {
+  class BoomXHR {
+    status = 0;
+    responseText = "";
+    withCredentials = false;
+    open() {}
+    setRequestHeader() {}
+    send() {
+      throw new Error("offline");
+    }
+  }
+  vi.stubGlobal("XMLHttpRequest", BoomXHR as unknown as typeof XMLHttpRequest);
+}
+
+/** 同步 XHR stub：login 回 401 + message。 */
+function stubFailLoginXhr(): void {
+  class FailLoginXHR {
+    status = 0;
+    responseText = "";
+    withCredentials = false;
+    open() {}
+    setRequestHeader() {}
+    send() {
+      this.status = 401;
+      this.responseText = JSON.stringify({ message: "帳號或密碼錯誤" });
+    }
+  }
+  vi.stubGlobal("XMLHttpRequest", FailLoginXHR as unknown as typeof XMLHttpRequest);
+}
+
+/** 同步 XHR stub：login 2xx、/me 401。 */
+function stubMeFailXhr(): void {
+  const calls: string[] = [];
+  class MeFailXHR {
+    status = 0;
+    responseText = "";
+    withCredentials = false;
+    open(_m: string, url: string) {
+      calls.push(url);
+    }
+    setRequestHeader() {}
+    send() {
+      const url = calls[calls.length - 1]!;
+      if (url.includes("login")) {
+        this.status = 200;
+        this.responseText = JSON.stringify({ ok: true });
+        return;
+      }
+      this.status = 401;
+      this.responseText = "{}";
+    }
+  }
+  vi.stubGlobal("XMLHttpRequest", MeFailXHR as unknown as typeof XMLHttpRequest);
+}
+
+function stubFetch(): void {
+  setUnauthorizedHandler(null);
+  vi.stubGlobal("fetch", vi.fn());
+}
+
+function unstubAll(): void {
+  setUnauthorizedHandler(null);
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+}
+
+describe("apiGet 其餘狀態分支", () => {
+  beforeEach(stubFetch);
+  afterEach(unstubAll);
 
   it("apiGet 500／壞 JSON／429 fallback／message 欄", async () => {
     vi.mocked(fetch).mockResolvedValueOnce(
@@ -215,6 +275,11 @@ describe("apiGet／login 其餘分支", () => {
       error: "帳號或密碼錯誤，請稍後再試",
     });
   });
+});
+
+describe("fetchMe 其餘狀態分支", () => {
+  beforeEach(stubFetch);
+  afterEach(unstubAll);
 
   it("fetchMe 401 非 quiet 觸發 handler；非 2xx 回 null", async () => {
     const onUnauth = vi.fn();
@@ -226,64 +291,27 @@ describe("apiGet／login 其餘分支", () => {
     vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(503, {}));
     await expect(fetchMe()).resolves.toBeNull();
   });
+});
 
-  it("loginRequestSync 網路錯誤／4xx／me 失敗", async () => {
-    class BoomXHR {
-      status = 0;
-      responseText = "";
-      withCredentials = false;
-      open() {}
-      setRequestHeader() {}
-      send() {
-        throw new Error("offline");
-      }
-    }
-    vi.stubGlobal("XMLHttpRequest", BoomXHR as unknown as typeof XMLHttpRequest);
+describe("loginRequestSync 失敗分支", () => {
+  afterEach(unstubAll);
+
+  it("網路錯誤／4xx／me 失敗", () => {
+    stubBoomXhr();
     expect(loginRequestSync("a", "b")).toEqual({
       ok: false,
       status: 0,
       message: "帳號或密碼錯誤",
     });
 
-    class FailLoginXHR {
-      status = 0;
-      responseText = "";
-      withCredentials = false;
-      open() {}
-      setRequestHeader() {}
-      send() {
-        this.status = 401;
-        this.responseText = JSON.stringify({ message: "帳號或密碼錯誤" });
-      }
-    }
-    vi.stubGlobal("XMLHttpRequest", FailLoginXHR as unknown as typeof XMLHttpRequest);
+    stubFailLoginXhr();
     expect(loginRequestSync("a", "b")).toEqual({
       ok: false,
       status: 401,
       message: "帳號或密碼錯誤",
     });
 
-    const calls: string[] = [];
-    class MeFailXHR {
-      status = 0;
-      responseText = "";
-      withCredentials = false;
-      open(_m: string, url: string) {
-        calls.push(url);
-      }
-      setRequestHeader() {}
-      send() {
-        const url = calls[calls.length - 1]!;
-        if (url.includes("login")) {
-          this.status = 200;
-          this.responseText = JSON.stringify({ ok: true });
-          return;
-        }
-        this.status = 401;
-        this.responseText = "{}";
-      }
-    }
-    vi.stubGlobal("XMLHttpRequest", MeFailXHR as unknown as typeof XMLHttpRequest);
+    stubMeFailXhr();
     expect(loginRequestSync("a", "b")).toEqual({
       ok: false,
       status: 401,
