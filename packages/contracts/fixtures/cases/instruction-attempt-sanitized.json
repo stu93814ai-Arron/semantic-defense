@@ -1,0 +1,16 @@
+{
+  "case_id": "cccccccc-cccc-4ccc-8ccc-ccccccccccc1",
+  "app_id": "orders-app",
+  "actor_id": "actor-99",
+  "session_id": "sess-inject-001",
+  "transitions": [
+    {
+      "from_family": "read",
+      "to_family": "read",
+      "distance": 0.01,
+      "count": 1
+    }
+  ],
+  "privileged_target": "read",
+  "normal_neighbor_count": 500
+}

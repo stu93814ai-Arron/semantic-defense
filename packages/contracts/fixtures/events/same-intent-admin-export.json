@@ -1,0 +1,11 @@
+{
+  "event_id": "11111111-1111-4111-8111-111111111104",
+  "app_id": "orders-app",
+  "ts": "2026-11-05T10:00:20Z",
+  "route_template": "/admin/exports",
+  "param_roles": [],
+  "response_class": "admin",
+  "session_id": "sess-same-intent-001",
+  "actor_id": "actor-42",
+  "sensitive": true
+}

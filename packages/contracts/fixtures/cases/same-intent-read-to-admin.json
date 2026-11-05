@@ -1,0 +1,16 @@
+{
+  "case_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
+  "app_id": "orders-app",
+  "actor_id": "actor-42",
+  "session_id": "sess-same-intent-001",
+  "transitions": [
+    {
+      "from_family": "read",
+      "to_family": "admin",
+      "distance": 0.82,
+      "count": 4
+    }
+  ],
+  "privileged_target": "admin",
+  "normal_neighbor_count": 1200
+}

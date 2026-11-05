@@ -1,0 +1,11 @@
+{
+  "event_id": "33333333-3333-4333-8333-333333333301",
+  "app_id": "orders-app",
+  "ts": "2026-11-05T12:00:00Z",
+  "route_template": "/orders/{id}",
+  "param_roles": [{ "name": "id", "type": "string" }],
+  "response_class": "read",
+  "session_id": "sess-inject-001",
+  "actor_id": "actor-99",
+  "sensitive": false
+}
