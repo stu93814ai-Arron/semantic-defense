@@ -18,7 +18,8 @@
     "gate:clean": "bash scripts/gate-clean.sh",
     "boundaries": "node scripts/boundaries.mjs",
     "hooks:install": "git config core.hooksPath .githooks",
-    "prepare": "git rev-parse --git-dir >/dev/null 2>&1 && git config core.hooksPath .githooks || true"
+    "prepare": "git rev-parse --git-dir >/dev/null 2>&1 && git config core.hooksPath .githooks || true",
+    "merge:team": "bash scripts/merge-team.sh"
   },
   "devDependencies": {
     "@playwright/test": "^1.64.1",
