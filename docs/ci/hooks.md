@@ -60,13 +60,19 @@ git rebase main                          # 送合入前再同步一次，有衝�
 ```bash
 pnpm merge:team a            # B 組換成 b；有 deps: 提交時，審查後加 --deps-ok
 ```
-`scripts/merge-team.sh` 依序檢查和執行：
+`scripts/merge-team.sh` 依序檢查和執行，最多重試 3 次（`MERGE_MAX_TRIES` 可調整）：
 1. 目前必須在 `main`。
-2. 分支必須以最新的 `main` 為基底，否則停下來，請該組 rebase。
+2. **自動 rebase（PM 裁示）**：如果分支建立之後，main 的新提交只改了 `docs/**`、`*.md` 或 `.ci/**`，就自動在該組的 worktree 把分支 rebase 到 main。
+   - main 有其他檔案的變更、該組 worktree 有未提交的變更，或 rebase 發生衝突時，會停下來（衝突時先 `rebase --abort` 復原），請該組自己 rebase。
 3. 改到 `package.json`／`pnpm-lock.yaml` 的提交必須是只改這兩類檔案的 `deps:` 提交，否則停下來。如果有 `deps:` 提交，沒加 `--deps-ok` 也會停下來。
-4. 用 `GATE_OUT` 模式對分支跑 `gate-clean.sh`：只跑閘門、不提交。
-5. 綠燈時 `git merge --ff-only`，**合入之後**才在 `main` 提交 ci 紀錄。紅燈時不合入，只在 `main` 記錄 fail。
-
-ci 紀錄只會落在 `main`，不會落在各組分支。合入後各組只要 `git rebase main` 就能接上（分支本身就是 main 的祖先，等於快轉），不會影響之後的合入。
+4. 用 `GATE_OUT` 模式對分支跑完整閘門：只跑閘門、不提交。
+   - 紅燈：不合入，在 main 記錄 `fail`。
+   - 閘門期間分支被改動：不合入。
+5. 綠燈時 `git merge --ff-only`，**合入之後**才在 main 記錄 `pass`。
+6. 如果 ff 失敗（閘門期間 main 又前進），在 main 記錄 `ff-failed(main=<當時的 main HEAD>)`，回到步驟 2 重試。`ff-failed` 不計入通過率的分母。
 
 不要直接對分支跑 `pnpm gate:clean team-x`：它會立刻在 `main` 提交紀錄，main 會多出一個分支沒有的提交，那組就得再 rebase 一次。請改用 `pnpm merge:team`。
+
+## 不在 main 目錄使用 `git stash`
+main 目錄（`/workspace/semantic-defense`）只給 CI 和閘門用，**禁止在這裡 `git stash`**。暫存工作請在自己組的 worktree 進行（`semantic-defense-a`、`-b`），或開自己的分支。
+留在 main 目錄的 stash 會混進 `.ci` 紀錄和別人的檔案，之後很難分辨哪些是真的、該由誰處理。
