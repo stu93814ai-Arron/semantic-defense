@@ -4,20 +4,41 @@
 
 ## 技術（總召選定／已確認）
 
-- Fastify + Postgres；測試用 **PGlite**（記憶體／檔案均可，須 <10 分鐘跑完）
+- Fastify + **Postgres**；CI／本機測試以根目錄 `scripts/with-pg.mjs` 起拋棄式 Postgres 並注入 **`DATABASE_URL`**
+- 單測若未傳 `databaseUrl`，實作可暫用嵌入式（如 PGlite）做隔離；**持久化／多實例測試必須走真實 Postgres**，不得依賴單一 PGlite 生命週期裝持久化
 - 密碼：**argon2**
 - 工作階段：伺服器端 session；Cookie 名 **`sd_session`**；屬性 **HttpOnly; Secure; SameSite=Strict**
 - 閒置逾時：由 `buildApp` 組態 **`idleTimeoutMs`** 控制（測試可設極短）
 - **權威閒置判定在伺服器端**；前端 `VITE_IDLE_TIMEOUT_MS` **僅測試建置**用來縮短 E2E 等待，不得取代伺服器逾時
 - **緊急暫停（emergency stop）獨立 API 延至第 4 階段**；本階段只涵蓋登入／角色／空狀態與上表 GET
 
-## 工廠與種子
+## 環境與 `buildApp` 組態契約
+
+| 來源 | 鍵 | 說明 |
+| --- | --- | --- |
+| 環境 | `DATABASE_URL` | 由 `node scripts/with-pg.mjs <cmd…>` 注入（或本機／CI 既有連線）。已存在時 with-pg **不覆寫**。 |
+| `buildApp` | `databaseUrl?: string` | 測試持久化／多實例時**必須**傳入（通常 `process.env.DATABASE_URL`）。實作以此開啟 Postgres、跑 migrations／schema；`close()` 後以**同一** URL 再 `buildApp` 須看到同一資料。 |
+| `buildApp` | `idleTimeoutMs?: number` | 伺服器端滑動閒置窗（ms）。 |
+| `buildApp` | `now?: () => number` | 可選時鐘（epoch ms）。滑動閒置測試用此推進時間；省略則 `Date.now()`。 |
+| `buildApp` | `loginRateLimit?: { maxFailures; windowMs }` | 登入失敗上限；計數須落在**共用儲存**（同一 `databaseUrl` 上多實例可見），不得只活在單一程序記憶體。 |
+| `buildApp` | `trustProxy?: boolean` | 預設 `false`；僅可信反向代理後開啟。 |
+
+建議執行（與根 `test:once` 相同包裝）：
+
+```bash
+node scripts/with-pg.mjs pnpm exec vitest run apps/control-api
+# 或套件內：在已匯出 DATABASE_URL 的 shell 中 vitest run
+```
 
 ```ts
 import { buildApp, seedPhase2Fixtures } from "../src/app.js";
 
+const databaseUrl = process.env.DATABASE_URL!; // with-pg.mjs 提供
+
 const app = await buildApp({
-  idleTimeoutMs: 50,          // 測試用短閒置
+  databaseUrl,                 // 持久化／多實例必填
+  idleTimeoutMs: 50,           // 測試用短閒置
+  now: () => clockMs,          // 滑動閒置決定性時鐘
   loginRateLimit: { maxFailures: 5, windowMs: 60_000 },
 });
 await seedPhase2Fixtures(app); // 固定帳號／應用（見下）
@@ -29,9 +50,16 @@ await app.inject({
   remoteAddress: "198.51.100.1",
 });
 await app.close();
+// 同一 databaseUrl 再 buildApp → users／apps／sessions／登入失敗計數仍在
 ```
 
-`buildApp` 回傳已註冊路由的 Fastify 實例（或同等具 `.inject` / `.close` 者）。
+`buildApp` 回傳已註冊路由的 Fastify 實例（或同等具 `.inject` / `.close`／`.db` 者）。
+
+### 持久化與多實例期望
+
+1. **重建**：`close()` 後以同一 `databaseUrl` 新 `buildApp`（不重播種子亦可）→ 既有 `sd_session` 仍可通過 `/api/session/me`，角色與應用指派仍在。
+2. **多實例速率**：兩個 `buildApp({ databaseUrl, loginRateLimit })` 共用失敗計數；例如 A 失敗 3 次、B 失敗 2 次後，第 6 次（任一侧）**429**，本文與單實例達上限相同。
+3. **滑動閒置**：經 `now` 推進；有活動須刷新 `last_seen`，超過 `idleTimeoutMs` 無活動 → 401。
 
 ## 種子帳號（測試固定）
 
@@ -68,6 +96,7 @@ await app.close();
 - 連續失敗達 **`loginRateLimit.maxFailures`（預設 5）／`windowMs`（預設 60s）** → **429**
 - **計數鍵：`username` + 來源位址**（inject 以 `remoteAddress` 模擬）。不存在的 username 與既有帳號**同一套計數與 429 本文**
 - 不同 `remoteAddress`、同一 username → **分開計數**
+- **跨實例**：同一 `databaseUrl` 上多個 `buildApp` 實例須看到同一計數（見上）
 - **回應時間一致性**（未知帳號不得明顯快於既有帳號以致可枚舉）：列為**審查項**，不寫易碎的自動時間斷言；實作審查時抽樣比較中位數即可
 
 ## 空資料 API
