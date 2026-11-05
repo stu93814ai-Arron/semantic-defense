@@ -15,7 +15,8 @@
     "test:once": "node scripts/with-pg.mjs vitest run",
     "coverage": "node scripts/with-pg.mjs vitest run --coverage",
     "e2e": "bash scripts/e2e.sh",
-    "gate:clean": "bash scripts/gate-clean.sh"
+    "gate:clean": "bash scripts/gate-clean.sh",
+    "boundaries": "node scripts/boundaries.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.64.1",
