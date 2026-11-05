@@ -38,6 +38,7 @@
 ```
 不得含封包內容、TLS 解密結果、URL、標頭。保留 7 天後刪除。
 欄位規則：src_ip／dst_ip 僅單一 IPv4／IPv6（不收 CIDR）；src_port／dst_port int 1–65535；protocol ∈ ["tcp","udp"]；bytes_in／bytes_out／packets／duration_ms 為非負整數。
+bytes_out 是從 dst 回到 src 的方向（不新增欄位）。
 
 ### 黑名單項目
 ```json
