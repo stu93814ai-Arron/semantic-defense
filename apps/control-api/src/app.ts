@@ -16,6 +16,8 @@ export type BuildAppOptions = {
   databaseUrl?: string;
   /** 可選時鐘（epoch ms）；省略則 Date.now。 */
   now?: () => number;
+  /** 僅綁管理平面 listen；port 0 = 系統指派。不得另開流量 listener。 */
+  management?: { host: string; port: number };
 };
 
 export type ControlApi = FastifyInstance;
@@ -124,6 +126,27 @@ function registerOwnerRoutes(app: ControlApi, db: Db): void {
     });
 }
 
+
+/** 允許空 body 的 JSON parser，避免未掛載 POST+application/json 先被解析成 400。 */
+function allowEmptyJson(app: ControlApi): void {
+  app.addContentTypeParser(
+    "application/json",
+    { parseAs: "string" },
+    (req, body, done) => {
+      const raw = typeof body === "string" ? body : "";
+      if (raw.length === 0) {
+        done(null, null);
+        return;
+      }
+      try {
+        done(null, JSON.parse(raw) as unknown);
+      } catch (err) {
+        done(err as Error, undefined);
+      }
+    },
+  );
+}
+
 export async function buildApp(opts: BuildAppOptions = {}): Promise<ControlApi> {
   const idleTimeoutMs = opts.idleTimeoutMs ?? 30 * 60_000;
   const rl = opts.loginRateLimit ?? { maxFailures: 5, windowMs: 60_000 };
@@ -131,6 +154,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<ControlApi> 
   const db = await openDb(resolveDatabaseUrl(opts.databaseUrl));
   const limiter = new LoginLimiter(db, rl.maxFailures, rl.windowMs, now);
   const app = Fastify({ trustProxy: opts.trustProxy ?? false });
+  allowEmptyJson(app);
   app.decorate("db", db);
   app.addHook("onClose", async () => { await db.close(); });
   app.addHook("preHandler", createAuthPreHandler(db, idleTimeoutMs, now));
@@ -138,7 +162,12 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<ControlApi> 
   registerSessionRoutes(app, db);
   registerRoleRoutes(app);
   registerOwnerRoutes(app, db);
-  await app.ready();
+  app.setNotFoundHandler((_req, reply) => reply.code(404).send({ error: "Not Found" }));
+  if (opts.management) {
+    await app.listen({ host: opts.management.host, port: opts.management.port });
+  } else {
+    await app.ready();
+  }
   return app;
 }
 
