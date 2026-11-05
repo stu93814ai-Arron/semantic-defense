@@ -1,0 +1,20 @@
+<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><style>:root{--color-bg:#0B1220;--color-surface:#131C2E;--color-surface-2:#1B2740;--color-border:#2A3854;--color-text:#E6EDF7;--color-text-muted:#93A3BD;--color-primary:#3B82F6;--color-danger:#F87171;--color-warning:#FBBF24;--color-success:#34D399;--color-info:#60A5FA;--radius-md:10px;--space-card:16px}
+*{box-sizing:border-box}body{margin:0;width:1440px;height:900px;background:var(--color-bg);color:var(--color-text);font:15px/1.6 "Noto Sans TC","Noto Sans CJK TC",sans-serif;overflow:hidden}
+.top{height:56px;display:flex;align-items:center;gap:24px;padding:0 24px;background:var(--color-surface);border-bottom:1px solid var(--color-border)}
+.logo{font-weight:700;font-size:18px}.nav a{margin-right:20px;color:var(--color-text-muted)}.nav a.on{color:var(--color-primary);font-weight:700}
+.wrap{padding:24px 32px}h1{font-size:24px;margin:0 0 16px}
+.card{background:var(--color-surface);border:1px solid var(--color-border);border-radius:var(--radius-md);padding:var(--space-card)}
+.btn{display:inline-block;padding:10px 20px;border-radius:var(--radius-md);font-weight:700;border:2px solid transparent}
+.p{background:var(--color-primary);color:#fff}.d{border-color:var(--color-danger);color:var(--color-danger)}.g{opacity:.45}
+.tag{display:inline-block;padding:2px 10px;border-radius:999px;font-size:13px;font-weight:700;border:1px solid currentColor}
+.td{color:var(--color-danger)}.tw{color:var(--color-warning)}.ts{color:var(--color-success)}.ti{color:var(--color-info)}.tm{color:var(--color-text-muted)}
+table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:16px 12px;border-bottom:1px solid var(--color-border)}th{color:var(--color-text-muted);font-weight:500;font-size:13px}
+.banner{padding:12px 16px;border-radius:var(--radius-md);border-left:6px solid;margin-bottom:16px;background:var(--color-surface-2)}
+.mono{font-family:"Noto Sans Mono CJK TC",monospace}</style></head><body><div class="top"><span class="logo">🛡 應用語意防禦</span><span class="nav"><a class="on">待判斷</a><a class="">判斷紀錄</a><a class="">生效限制</a><a class="">緊急暫停</a></span><span style="margin-left:auto" class="tm">值勤：王小明 · 剩餘工作階段 42 分</span></div><div class="wrap"><p class="tm">待判斷 › C-1042</p><div class="banner" style="border-color:var(--color-text-muted)">此限制已於 22:40 到期（或已被撤回），僅供檢視，無法再核准。</div><div style="display:flex;gap:24px">
+<div class="card" style="flex:1"><h1>C-1042 · 訂單系統 <span class="tag td">高風險</span></h1>
+<p class="tm">偏移路徑</p><p class="mono">/orders/{id} (read) → /admin/members/export (admin)</p>
+<p class="tm">AI 建議的限制</p><div class="card" style="background:var(--color-surface-2)"><b>禁止此工作階段呼叫 /admin/members/export，為期 30 分鐘</b><br><span class="tm">變形測試：5 種說法皆落在同一條限制 ✓</span></div>
+<div style="margin-top:24px;display:flex;gap:12px"><span class="btn p g">核准並簽名</span><span class="btn d g">退回</span></div></div>
+<div class="card" style="width:340px;text-align:center"><p class="tm">距成案</p><div class="mono" style="font-size:64px;font-weight:700" >00:07</div>
+<div style="height:10px;background:var(--color-surface-2);border-radius:99px"><div style="height:10px;width:100%;background:var(--color-warning);border-radius:99px"></div></div>
+<p><span class="tag tm">已到期</span></p><p class="tm" style="font-size:13px">七秒內應出現可核准判斷</p></div></div></div></body></html>
