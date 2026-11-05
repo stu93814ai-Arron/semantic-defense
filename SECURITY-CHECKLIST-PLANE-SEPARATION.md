@@ -8,33 +8,36 @@
 
 | 平面 | 組成 | 職責 |
 | --- | --- | --- |
-| 流量平面 | `apps/gateway-adapter`（入口） | 收應用事件、載入並執行**已簽名**限制 |
-| 管理平面 | `apps/console`、`apps/control-api` | 登入、角色、案件、核准、簽名、稽核、地圖 |
+| 流量平面 | `apps/gateway-adapter`（入口）、`apps/sensor-ingest`（monitor 中繼資料接收） | 入口：收應用事件、載入並執行**已簽名**限制；感測：僅收 FlowMetadata、不解密、不提供管理功能 |
+| 管理平面 | `apps/console`、`apps/control-api` | 登入、角色、案件、核准、簽名、稽核、地圖；**發放／撤銷感測器 token**（只存雜湊） |
+| EDL 平面 | EDL 發布端（見 [SECURITY-CHECKLIST-EDL-MIRROR.md](./SECURITY-CHECKLIST-EDL-MIRROR.md)） | 只讀 HTTPS 清單；與管理／感測分離 |
 
 ## 檢查項
 
 | # | 檢查項 | 驗證方式 | 通過條件 |
 | --- | --- | --- | --- |
-| P1 | 入口與 console／control-api 為**不同程序**、**不同埠**、**不同部署設定** | 讀啟動入口、套件腳本、部署設定、程序樹 | 不共用同一 Node／伺服器程序；不在同一套件內「順便」起對方的 listen |
-| P2 | 流量入口埠上**絕不**提供管理路由或 API | 對入口埠探測 `/api/*`、`/login`、管理路徑；讀路由表 | 無管理路由；不得 200／302 到管理功能 |
-| P3 | 管理介面／control-api **不接收應用流量**（不充當反向代理／事件入口） | 讀 control-api／console 路由與責任邊界 | 無「收應用請求並套用限制」的路徑 |
+| P1 | 入口／sensor-ingest 與 console／control-api 為**不同程序**、**不同埠**、**不同部署設定** | 讀啟動入口、套件腳本、部署設定、程序樹 | 不共用同一 Node／伺服器程序；不在同一套件內「順便」起對方的 listen；sensor-ingest **獨立埠** |
+| P2 | 流量入口埠與 sensor-ingest 埠上**絕不**提供管理路由或 API | 對各埠探測 `/login`、管理 `/api/*`；讀路由表 | 無管理路由；不得 200／302 到管理功能；無 session 登入 |
+| P3 | 管理介面／control-api **不接收應用流量／感測中繼資料 bulk 寫入**（不充當反向代理／事件入口／sensor 入口） | 讀 control-api／console 路由與責任邊界 | 無「收應用請求並套用限制」或「對外收 FlowMetadata」的路徑（token 發放屬管理 API，見 SI 表） |
 | P4 | 入口只以 **TLS** 從控制程序**拉取**已簽名限制；**不開放寫入端點**供外界建立／改限制 | 讀入口客戶端與路由；嘗試 POST／PUT 限制 | 僅拉取／載入簽名產物；無未授權寫入；傳輸 TLS |
-| P5 | 管理平面停掉時，入口仍依已載入之已簽名限制執行 | 停 control-api／console 後打流量平面回歸 | 既有限制仍執行；不因管理平面不可用而放行或清空限制 |
+| P5 | 管理平面停掉時，入口仍依已載入之已簽名限制執行；（monitor）sensor-ingest 不因管理面短暫不可用而改收未授權流量 | 停 control-api／console 後打流量／感測回歸 | 既有限制仍執行；感測仍只認已發放且未撤銷之 token 雜湊＋來源 IP allowlist（失效規則見 SI） |
+| P6 | `apps/sensor-ingest` 必過 [SECURITY-CHECKLIST-SENSOR-INGEST.md](./SECURITY-CHECKLIST-SENSOR-INGEST.md)（SI1–SI8） | 見該表 | 該表適用項全過；未實作時查「不得偷跑」 |
 
 ## 階段適用
 
 | 階段 | 本表怎麼用 |
 | --- | --- |
-| 1（contracts） | 不得出現 gateway／console 伺服器混用；契約層不得引入共用 listen |
-| 2（登入／console／control-api） | 管理平面成型：確認無應用流量入口；尚無 gateway 時 P2／P4／P5 以「不得偷跑入口」查 |
-| 3（應用接入） | 同上；事件寫入屬管理／控制路徑，不得接到流量入口埠 |
-| 4（gateway-adapter） | **P1–P5 全數必過** |
-| 5–8 | 每次合併重跑與變更相關的 P 項；管理平面故障不得改變入口已載入限制（P5） |
+| 1（contracts） | 不得出現 gateway／console／sensor-ingest 伺服器混用；契約層不得引入共用 listen |
+| 2（登入／console／control-api） | 管理平面成型：確認無應用流量／感測入口；尚無 gateway／sensor-ingest 時 P2／P4／P5／P6 以「不得偷跑」查 |
+| 3（monitor 契約＋中繼資料接收等） | 若本階段落地 `apps/sensor-ingest`：**P1／P2／P3／P6＋SI 表必過**；事件／FlowMetadata 不得接到管理埠 |
+| 4（gateway-adapter／EDL） | **P1–P6 全數必過**（適用項）；EDL 另過 EDL 表 |
+| 5–8 | 每次合併重跑與變更相關的 P／SI 項；管理平面故障不得改變入口已載入限制（P5） |
 
 ## 簽核欄（每次合併填）
 
 - 對象變更／SHA：______________
-- P1–P5：□ 全過　□ 本階段 N/A 項：____　□ 未過（編號）：____
+- P1–P6：□ 全過　□ 本階段 N/A 項：____　□ 未過（編號）：____
+- SI（sensor-ingest）：□ 全過／N/A　□ 未過：____
 - 結論：□ 准予合併　□ 退回
 - 審查員：資安審查員　日期（Asia/Taipei）：______________
 
@@ -82,3 +85,9 @@
 - 結論：**准予合併**。
 
 審查員：資安審查員
+
+## 2026-11-05（Asia/Taipei）— 納入 `apps/sensor-ingest`（總召指示）
+
+- 定義表新增感測程序；管理平面負責 token 發放／撤銷（只存雜湊）。
+- 檢查項：P1–P5 擴及 sensor-ingest；新增 **P6** → SI 表。
+- 細節見 [SECURITY-CHECKLIST-SENSOR-INGEST.md](./SECURITY-CHECKLIST-SENSOR-INGEST.md)。

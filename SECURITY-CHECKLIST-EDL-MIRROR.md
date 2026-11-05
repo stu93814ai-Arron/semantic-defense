@@ -28,7 +28,7 @@
 | **transparent** | 串接閘道依**同一規則**阻擋／放行 |
 | 共用規則 | 兩模式同一權威規則來源；切換不暗改語意 |
 | EDL 發布端 | HTTPS 清單端點；來源 IP allowlist；與管理平面分離 |
-| Mirror | 旁路中繼資料（未解密內容）；7 天 TTL |
+| Mirror／sensor-ingest | 旁路中繼資料（未解密內容）；7 天 TTL；接收程序見 [SECURITY-CHECKLIST-SENSOR-INGEST.md](./SECURITY-CHECKLIST-SENSOR-INGEST.md) |
 | 管理平面 | console／control-api：核准、白名單、模式切換、稽核 |
 
 ---
