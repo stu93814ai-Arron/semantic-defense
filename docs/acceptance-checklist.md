@@ -7,20 +7,29 @@
 
 ---
 
-## 第 2 階段（管理平面：console／control-api）— 已記錄
+## 第 2 階段（管理平面：console／control-api）— **已通過**
+
+**驗收結論（總召關閉本階段）**：獨立驗收於 **`e996006`** 全量 `pnpm run ci` 綠燈（含 `scripts/with-pg.mjs` 真實 Postgres）；其後抽測 **`233e023`** control-api 20／20、主題 E2E 7／7 仍綠。
+
+**簡證**：`必跑測試：386 筆，失敗 0，FLAKY 0`；覆蓋率 lines ≈98%；E2E 17 passed；`boundaries: OK`；輸出含 **`CI GREEN`**。API 演示腳本見 [`docs/demo/phase2-api.md`](./demo/phase2-api.md)。
 
 | 狀態 | 項目 | 依據／位置 |
 | --- | --- | --- |
-| 已測 | 登入／登出／`/api/session/me`；Cookie `sd_session`（HttpOnly／Secure／SameSite=Strict） | `apps/control-api/test/session-cookie.test.ts` 等 |
-| 已測 | 角色授權與空資料 GET；未登入 401、角色不符 403；app_owner 隔離 | `roles-access`、`app-owner-isolation`、`authz-and-login-rate` |
-| 已測 | 登入錯誤不可枚舉；速率鍵 username＋來源位址；不存在帳號同計；trustProxy 預設不吃偽 XFF | `authz-and-login-rate`、`trust-proxy-rate` |
-| 已測（紅） | 同一 `DATABASE_URL` 上 close 後重建仍見 session／指派 | `persistence-rebuild.test.ts`；契約見 `apps/control-api/test/README.md` |
-| 已測（紅） | 兩 `buildApp` 實例共用登入失敗計數（3+2→429） | `multi-instance-rate.test.ts` |
-| 已測（紅） | 滑動閒置（注入 `now`） | `sliding-idle.test.ts` |
-| 已測（紅） | **管理／流量平面分離（管理側）**：只綁 `management` 埠；無代理／轉發；非 `/api` 路徑 404 且 sentinel 0 命中 | `plane-separation.test.ts` |
+| **通過** | 登入／登出／`/api/session/me`；Cookie `sd_session`（HttpOnly／Secure／SameSite=Strict） | `session-cookie`（API＋E2E）；手動 curl 見演示腳本 |
+| **通過** | 三角色授權與空資料 GET；未登入 401、角色不符 403；無權限頁非空白 | `roles-access`、`roles-pages`、`routes-empty-states` |
+| **通過** | app_owner 跨應用隔離（他應用 403／404且無內容） | `app-owner-isolation`、`app-owner-ui` |
+| **通過** | 登入錯誤不可枚舉；速率 username＋IP；不存在帳號同計；trustProxy 預設不吃偽 XFF | `authz-and-login-rate`、`trust-proxy-rate`、`login-rate-limit` E2E |
+| **通過** | 同一 `DATABASE_URL` 上 close／重建後 session／指派仍在 | `persistence-rebuild`；演示腳本「重啟」步驟（`DEMO_SEED=0`） |
+| **通過** | 兩 `buildApp` 實例共用登入失敗計數（3+2→429） | `multi-instance-rate` |
+| **通過** | 滑動閒置（注入 `now`）；閒置後須重登 | `sliding-idle`、`session-cookie` E2E；演示腳本短 `DEMO_IDLE_MS` |
+| **通過** | **管理／流量平面分離（管理側）**：只綁 `management` 埠；無代理／轉發；非 `/api` → 404 | `plane-separation`；演示腳本 curl `/`、`/proxy` |
+| **通過** | 北歐／義式主題切換、持久、非空白殼 | `apps/console/e2e/theme.spec.ts` |
 | 契約 | `buildApp`：`databaseUrl`／`now`／`management`／`loginRateLimit`／`idleTimeoutMs`／`trustProxy`；環境 `DATABASE_URL`（`scripts/with-pg.mjs`） | `apps/control-api/test/README.md` |
 
-控制台 E2E／頁面空狀態等以 `apps/console` 測試與閘門紀錄為準（本表不逐條重列）。
+### 已知 flaky（不擋第 2 階段關閉）
+
+- **現象**：連跑多份 console E2E 時，`roles-pages`（operator 越權）偶發停在登入頁、找不到 `no-permission`（短 **`VITE_IDLE_TIMEOUT_MS=50`** 下 session 易先失效）。
+- **處置**：**交 B 組**修復（拉長該案等待／登入後再探針／或隔離短閒置影響）；CI 全量與單獨重跑目前為綠。
 
 ---
 
