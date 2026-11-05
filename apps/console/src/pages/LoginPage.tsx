@@ -33,32 +33,45 @@ export function LoginPage() {
 
   return (
     <main>
-      <h1>登入</h1>
-      <form onSubmit={onSubmit}>
-        <label>
-          帳號
-          <input
-            data-testid="login-username"
-            value={username}
-            onChange={(ev) => setUsername(ev.target.value)}
-            autoComplete="username"
-          />
-        </label>
-        <label>
-          密碼
-          <input
-            data-testid="login-password"
-            type="password"
-            value={password}
-            onChange={(ev) => setPassword(ev.target.value)}
-            autoComplete="current-password"
-          />
-        </label>
-        <button data-testid="login-submit" type="submit" disabled={busy}>
-          登入
-        </button>
-      </form>
-      {error ? <p data-testid="login-error">{error}</p> : null}
+      <div className="card">
+        <p style={{ letterSpacing: "0.3em", fontSize: "var(--text-eyebrow)", color: "var(--color-text-muted)" }}>
+          WELCOME BACK
+        </p>
+        <h1>值勤登入</h1>
+        <p style={{ color: "var(--color-text-muted)" }}>
+          請以公司帳號登入。所有操作將留存稽核紀錄。
+        </p>
+        <form onSubmit={onSubmit}>
+          <label>
+            帳號
+            <input
+              data-testid="login-username"
+              value={username}
+              onChange={(ev) => setUsername(ev.target.value)}
+              autoComplete="username"
+            />
+          </label>
+          <label>
+            密碼
+            <input
+              data-testid="login-password"
+              type="password"
+              value={password}
+              onChange={(ev) => setPassword(ev.target.value)}
+              autoComplete="current-password"
+            />
+          </label>
+          <button
+            className="btn btn-primary"
+            data-testid="login-submit"
+            type="submit"
+            disabled={busy}
+          >
+            登入
+          </button>
+        </form>
+        {error ? <p data-testid="login-error">{error}</p> : null}
+      </div>
     </main>
   );
 }
