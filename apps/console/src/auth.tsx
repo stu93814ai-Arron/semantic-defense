@@ -16,16 +16,6 @@ import {
 } from "./api";
 import type { SessionUser } from "./roles";
 
-function readHint(): SessionUser | null {
-  const match = document.cookie.match(/(?:^|; )sd_hint=([^;]*)/);
-  if (!match?.[1]) return null;
-  try {
-    return JSON.parse(decodeURIComponent(match[1])) as SessionUser;
-  } catch {
-    return null;
-  }
-}
-
 type LoginOutcome =
   | { ok: true; role: SessionUser["role"] }
   | { ok: false; message: string };
@@ -41,7 +31,8 @@ type AuthState = {
 const AuthContext = createContext<AuthState | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<SessionUser | null>(() => readHint());
+  const [user, setUser] = useState<SessionUser | null>(null);
+  const [ready, setReady] = useState(false);
   const navigate = useNavigate();
 
   const clearToLogin = useCallback(() => {
@@ -57,8 +48,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const me = await fetchMe();
-      if (!cancelled) setUser(me);
+      const me = await fetchMe({ quiet: true });
+      if (cancelled) return;
+      setUser(me);
+      setReady(true);
     })();
     return () => {
       cancelled = true;
@@ -69,6 +62,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const result = loginRequestSync(username, password);
     if (!result.ok) return { ok: false, message: result.message };
     setUser(result.user);
+    setReady(true);
     return { ok: true, role: result.user.role };
   }, []);
 
@@ -84,8 +78,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo(
-    () => ({ user, ready: true, login, logout, refresh }),
-    [user, login, logout, refresh],
+    () => ({ user, ready, login, logout, refresh }),
+    [user, ready, login, logout, refresh],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

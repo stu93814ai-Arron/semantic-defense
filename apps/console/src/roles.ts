@@ -3,18 +3,14 @@ export type Role = "operator" | "app_owner" | "platform_admin";
 export type SessionUser = {
   username: string;
   role: Role;
-  appIds: string[];
 };
 
 function isOperatorPath(path: string): boolean {
-  return path.startsWith("/judgments") || path === "/constraints" || path.startsWith("/constraints/");
-}
-
-function ownerAccess(path: string, user: SessionUser): "ok" | "deny" {
-  if (path === "/apps/new") return "ok";
-  const map = /^\/apps\/([^/]+)\/map$/.exec(path);
-  if (!map) return "deny";
-  return user.appIds.includes(map[1]!) ? "ok" : "deny";
+  return (
+    path.startsWith("/judgments") ||
+    path === "/constraints" ||
+    path.startsWith("/constraints/")
+  );
 }
 
 function isAdminPath(path: string): boolean {
@@ -26,13 +22,15 @@ function isAdminPath(path: string): boolean {
   );
 }
 
-/** 回傳 null 表示此路徑需登入且角色不符時顯示無權限；login 公開。 */
+/**
+ * 角色層閘門。應用地圖的「是否己應用」改由 API 404/403 決定，不在此用 appIds。
+ */
 export function accessFor(path: string, user: SessionUser | null): "ok" | "login" | "deny" {
   if (path === "/login" || path.startsWith("/login?")) return "ok";
   if (!user) return "login";
   if (isOperatorPath(path)) return user.role === "operator" ? "ok" : "deny";
-  if (path.startsWith("/apps/")) {
-    return user.role === "app_owner" ? ownerAccess(path, user) : "deny";
+  if (path === "/apps/new" || /^\/apps\/[^/]+\/map$/.test(path)) {
+    return user.role === "app_owner" ? "ok" : "deny";
   }
   if (isAdminPath(path)) return user.role === "platform_admin" ? "ok" : "deny";
   return "deny";
@@ -56,4 +54,8 @@ export function titleFor(path: string): string {
   if (/^\/apps\/[^/]+\/map$/.test(path)) return "應用地圖";
   if (/^\/judgments\/[^/]+$/.test(path)) return "單一判斷";
   return "頁面";
+}
+
+export function isAppMapPath(path: string): boolean {
+  return /^\/apps\/[^/]+\/map$/.test(path);
 }

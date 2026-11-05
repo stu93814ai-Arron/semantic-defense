@@ -1,40 +1,71 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { useAuth } from "./auth";
-import { accessFor, titleFor } from "./roles";
+import { accessFor, isAppMapPath, titleFor } from "./roles";
 import { EmptyDataPage } from "./pages/EmptyDataPage";
 import { LoginPage } from "./pages/LoginPage";
 import { NoPermissionPage } from "./pages/NoPermissionPage";
 import { apiGet } from "./api";
 
+function probeUrl(path: string): string | null {
+  if (path === "/judgments" || path === "/judgments/history") return "/api/judgments";
+  if (/^\/judgments\/[^/]+$/.test(path)) return `/api/judgments/${path.slice("/judgments/".length)}`;
+  if (path === "/constraints") return "/api/constraints";
+  if (path === "/admin/users") return "/api/admin/users";
+  if (path === "/audit") return "/api/audit";
+  if (path === "/versions") return "/api/versions";
+  if (path === "/health") return "/api/health";
+  if (path === "/apps/new") return null;
+  const m = /^\/apps\/([^/]+)\/map$/.exec(path);
+  if (m) return `/api/apps/${m[1]}/map`;
+  return null;
+}
+
 function ProtectedEmpty({ hint }: { hint: string }) {
   const { user, ready, refresh } = useAuth();
   const location = useLocation();
-  const gate = ready ? accessFor(location.pathname, user) : "loading";
+  const roleGate = ready ? accessFor(location.pathname, user) : "loading";
+  const [apiGate, setApiGate] = useState<"pending" | "ok" | "deny">("pending");
 
   useEffect(() => {
     void refresh();
   }, [location.pathname, refresh]);
 
   useEffect(() => {
-    if (gate !== "ok") return;
-    const path = location.pathname;
-    if (path.startsWith("/judgments")) void apiGet("/api/judgments");
-    else if (path === "/constraints") void apiGet("/api/constraints");
-    else if (path === "/admin/users") void apiGet("/api/admin/users");
-    else if (path === "/audit") void apiGet("/api/audit");
-    else if (path === "/versions") void apiGet("/api/versions");
-    else if (path === "/health") void apiGet("/api/health");
-    else if (path === "/apps/new") void apiGet("/api/session/me");
-    else {
-      const m = /^\/apps\/([^/]+)\/map$/.exec(path);
-      if (m) void apiGet(`/api/apps/${m[1]}/map`);
+    if (roleGate !== "ok") {
+      setApiGate("pending");
+      return;
     }
-  }, [gate, location.pathname]);
+    const url = probeUrl(location.pathname);
+    if (!url) {
+      setApiGate("ok");
+      return;
+    }
+    let cancelled = false;
+    setApiGate("pending");
+    void apiGet(url).then((r) => {
+      if (cancelled) return;
+      if (r.status === 401) return;
+      if (r.status === 403) {
+        setApiGate("deny");
+        return;
+      }
+      // 應用地圖：非己應用為 404 → 無權限；案件 404 仍顯示空狀態
+      if (r.status === 404 && isAppMapPath(location.pathname)) {
+        setApiGate("deny");
+        return;
+      }
+      setApiGate("ok");
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [roleGate, location.pathname]);
 
-  if (gate === "loading") return <main>載入中…</main>;
-  // Navigate 本身不渲染文字；先放提示避免 body 空字串競態
-  if (gate === "login") {
+  if (roleGate === "loading" || (roleGate === "ok" && apiGate === "pending")) {
+    return <main>載入中…</main>;
+  }
+  if (roleGate === "login") {
     return (
       <>
         <main>請先登入</main>
@@ -42,7 +73,7 @@ function ProtectedEmpty({ hint }: { hint: string }) {
       </>
     );
   }
-  if (gate === "deny") return <NoPermissionPage />;
+  if (roleGate === "deny" || apiGate === "deny") return <NoPermissionPage />;
   return <EmptyDataPage title={titleFor(location.pathname)} hint={hint} />;
 }
 

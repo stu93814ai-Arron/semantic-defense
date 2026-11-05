@@ -24,43 +24,52 @@ export async function apiGet<T>(url: string): Promise<{ status: number; data: T 
   }
 }
 
-export async function fetchMe(): Promise<SessionUser | null> {
+export type FetchMeOptions = { quiet?: boolean };
+
+export async function fetchMe(opts: FetchMeOptions = {}): Promise<SessionUser | null> {
   const res = await fetch("/api/session/me", { credentials: "include" });
   if (res.status === 401) {
-    onUnauthorized?.();
+    if (!opts.quiet) onUnauthorized?.();
     return null;
   }
   if (!res.ok) return null;
-  return (await res.json()) as SessionUser;
+  const body = (await res.json()) as { username?: string; role?: SessionUser["role"] };
+  if (!body.username || !body.role) return null;
+  return { username: body.username, role: body.role };
 }
 
-function parseLoginPayload(text: string): { error?: string; message?: string } & Partial<SessionUser> {
+function parseError(text: string): string | undefined {
   try {
-    return JSON.parse(text) as { error?: string; message?: string } & Partial<SessionUser>;
+    const body = JSON.parse(text) as { error?: string; message?: string };
+    return body.error ?? body.message;
   } catch {
-    return {};
+    return undefined;
   }
 }
 
-function failResult(
-  status: number,
-  payload: { error?: string; message?: string },
-): LoginResult {
-  if (status === 429) {
-    const message = payload.error ?? payload.message ?? "登入次數過多，請稍後再試";
-    const text = /稍後|次數|限制|太多次/.test(message)
-      ? message
-      : "登入次數過多，請稍後再試";
-    return { ok: false, status: 429, message: text };
+function fetchMeSync(): SessionUser | null {
+  const xhr = new XMLHttpRequest();
+  xhr.open("GET", "/api/session/me", false);
+  xhr.withCredentials = true;
+  try {
+    xhr.send();
+  } catch {
+    return null;
   }
-  return {
-    ok: false,
-    status,
-    message: payload.error ?? payload.message ?? "帳號或密碼錯誤",
-  };
+  if (xhr.status < 200 || xhr.status >= 300) return null;
+  try {
+    const body = JSON.parse(xhr.responseText) as {
+      username?: string;
+      role?: SessionUser["role"];
+    };
+    if (!body.username || !body.role) return null;
+    return { username: body.username, role: body.role };
+  } catch {
+    return null;
+  }
 }
 
-/** 同步登入：Playwright click 會等到 Cookie 寫入後才結束。 */
+/** 同步登入：2xx 時 body 僅 {ok:true}，身分改打 /me。 */
 export function loginRequestSync(username: string, password: string): LoginResult {
   const xhr = new XMLHttpRequest();
   xhr.open("POST", "/api/session/login", false);
@@ -71,16 +80,13 @@ export function loginRequestSync(username: string, password: string): LoginResul
   } catch {
     return { ok: false, status: 0, message: "帳號或密碼錯誤" };
   }
-  const payload = parseLoginPayload(xhr.responseText);
-  if (xhr.status < 200 || xhr.status >= 300) return failResult(xhr.status, payload);
-  return {
-    ok: true,
-    user: {
-      username: String(payload.username),
-      role: payload.role as SessionUser["role"],
-      appIds: Array.isArray(payload.appIds) ? payload.appIds : [],
-    },
-  };
+  if (xhr.status < 200 || xhr.status >= 300) {
+    const msg = parseError(xhr.responseText) ?? "帳號或密碼錯誤";
+    return { ok: false, status: xhr.status, message: msg };
+  }
+  const user = fetchMeSync();
+  if (!user) return { ok: false, status: 401, message: "帳號或密碼錯誤" };
+  return { ok: true, user };
 }
 
 export async function loginRequest(
