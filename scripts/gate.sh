@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # 合併閘門（PLAN.md「資安與合規」）；結果記入 .ci/gate-history.csv 以計算通過率
+# 正式紀錄請用 scripts/gate-clean.sh（pnpm gate:clean [rev]）：乾淨 worktree 執行並一併提交 gate-history/e2e-seconds/required-seconds
 set -uo pipefail
 cd "$(dirname "$0")/.."
 mkdir -p .ci
