@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { buildIngest } from "../src/app.js";
-import { RETENTION_MS, purgeExpired } from "../src/store.js";
+import { RETENTION_MS, ensureFlowSchema, purgeExpired } from "../src/store.js";
 import { openTestDb, seedToken } from "./helpers.js";
 
 let db: Awaited<ReturnType<typeof openTestDb>>;
@@ -97,5 +97,18 @@ describe("③c 7 天清除（年齡 ≥ 7d 刪）", () => {
     expect((await post(f)).statusCode).toBe(201);
     expect((await rows()).rows.map((x) => x.flow_id)).toEqual([f.flow_id]);
     await app.close();
+  });
+
+  it("flow_rejections：剛好 7 天 → 刪；略少 → 留；略多 → 刪（與 flow_events 同一 cutoff）", async () => {
+    await ensureFlowSchema(db);
+    const sid = "sensor-purge-rej";
+    for (const at of [T0 - 1, T0, T0 + 1]) {
+      await db.query("INSERT INTO flow_rejections (sensor_id, at) VALUES ($1,$2)", [sid, at]);
+    }
+    await purgeExpired(db, T0 + RETENTION_MS);
+    const left = await db.query<{ at: string }>(
+      "SELECT at FROM flow_rejections WHERE sensor_id = $1 ORDER BY at", [sid],
+    );
+    expect(left.rows.map((r) => Number(r.at))).toEqual([T0 + 1]);
   });
 });
