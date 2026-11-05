@@ -41,8 +41,8 @@ const seedListed = (): ListedEntry[] => [
   },
 ];
 
-let pending = seedPending();
-let listed = seedListed();
+let pending: PendingCandidate[] = [];
+let listed: ListedEntry[] = [];
 let allowlist: AllowlistItem[] = [];
 let audits: AuditRecord[] = [];
 let resolved = new Set<string>();
@@ -136,8 +136,17 @@ export function reviewRemoveAllowlist(entryId: string, actorId: string) {
   return result;
 }
 
-/** 測試用：重置記憶體狀態。 */
+/** 測試用：清空記憶體狀態（頁面預設空狀態）。 */
 export function resetDemoStoreForTests(): void {
+  pending = [];
+  listed = [];
+  allowlist = [];
+  audits = [];
+  resolved = new Set();
+}
+
+/** 測試用：填入示範待審／上榜資料。 */
+export function seedFixturesForTests(): void {
   pending = seedPending();
   listed = seedListed();
   allowlist = [];

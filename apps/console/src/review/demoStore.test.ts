@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   listActive,
   listAllowlist,
@@ -8,7 +8,12 @@ import {
   reviewApprove,
   reviewReject,
   reviewWithdraw,
+  seedFixturesForTests,
 } from "./demoStore";
+
+beforeEach(() => {
+  seedFixturesForTests();
+});
 
 afterEach(() => {
   resetDemoStoreForTests();

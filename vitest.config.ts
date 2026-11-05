@@ -1,4 +1,8 @@
+import { resolve } from "node:path";
 import { defineConfig } from "vitest/config";
+
+const consoleNetShim = resolve("apps/console/src/shims/node-net.ts");
+const contractsIpCidr = resolve("packages/contracts/src/ip-cidr.ts");
 // 核心邏輯覆蓋率清單（契約、回放、簽名、授權）。路徑不存在時不計；程式出現即納入 70% 門檻。
 // 之後加 packages/gate（回放）、簽名等，在此擴充。
 export const CORE_COVERAGE_INCLUDE = [
@@ -22,6 +26,12 @@ export const CORE_COVERAGE_INCLUDE = [
 // E2E（Playwright）不在 vitest 內跑
 const E2E = ["**/e2e/**", "**/*.e2e.*", "**/node_modules/**", "**/dist/**"];
 export default defineConfig({
+  resolve: {
+    alias: {
+      "@semantic-defense/contracts/ip-cidr.js": contractsIpCidr,
+      "node:net": consoleNetShim,
+    },
+  },
   test: {
     passWithNoTests: false,
     projects: [
