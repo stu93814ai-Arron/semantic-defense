@@ -80,6 +80,9 @@ describe("AllowlistEntrySchema", () => {
   it.each<Case>([
     ["合法 /24", allowBase(), true],
     ["合法寬 /8", allowPatch({ cidr: "10.0.0.0/8" }), true],
+    ["IPv4 /7 過寬", allowPatch({ cidr: "2.0.0.0/7" }), false],
+    ["合法 IPv6 /32", allowPatch({ cidr: "2001:db8::/32" }), true],
+    ["IPv6 /31 過寬", allowPatch({ cidr: "2000::/31" }), false],
     ["合法寬 /16", allowPatch({ cidr: "172.16.0.0/16" }), true],
     ["合法 IPv6 /48", allowPatch({ cidr: "2001:db8::/48" }), true],
     ["合法主機無前綴", allowPatch({ cidr: "198.51.100.7" }), true],

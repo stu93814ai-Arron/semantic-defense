@@ -124,11 +124,15 @@ function reservedV6(parts: number[]): boolean {
   return (parts[0]! & 0xffc0) === 0xfe80;
 }
 
-/** wide=true：白名單可寬於 /24、/64；仍拒 /0。 */
+/** wide=true：白名單 IPv4 ≥/8、IPv6 ≥/32（仍拒 /0）。 */
 function prefixInRange(version: 4 | 6, prefix: number, wide: boolean): boolean {
   if (prefix < 1) return false;
-  if (version === 4) return prefix <= 32 && (wide || prefix >= 24);
-  return prefix <= 128 && (wide || prefix >= 64);
+  if (version === 4) {
+    const min = wide ? 8 : 24;
+    return prefix >= min && prefix <= 32;
+  }
+  const min = wide ? 32 : 64;
+  return prefix >= min && prefix <= 128;
 }
 
 /** 拒前導 0（如 024）；無斜線 → 主機前綴。 */
@@ -181,7 +185,7 @@ export function assertIpOrCidr(raw: string): boolean {
 }
 
 /**
- * 白名單 CIDR：可比黑名單寬（允許 < /24、< /64），仍拒 /0、主機位非零、
+ * 白名單 CIDR：IPv4 ≥/8、IPv6 ≥/32；仍拒 /0、主機位非零、
  * 保留、%、非 canonical、IPv4-mapped。
  */
 export function assertAllowlistCidr(raw: string): boolean {
