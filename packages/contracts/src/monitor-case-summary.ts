@@ -8,7 +8,7 @@ const PosCount = NonNegInt.refine((n) => n >= 1, { message: "min_1" });
 
 const TopDstPort = z.strictObject({
   port: Port,
-  count: NonNegInt,
+  count: PosCount,
 });
 
 const PortRanges = z.strictObject({
@@ -33,6 +33,10 @@ function sortedDescByCount(rows: readonly { count: number }[]): boolean {
 
 function uniqueReasons(rs: readonly string[]): boolean {
   return new Set(rs).size === rs.length;
+}
+
+function uniquePorts(rows: readonly { port: number }[]): boolean {
+  return new Set(rows.map((r) => r.port)).size === rows.length;
 }
 
 /** PLAN-ADDENDUM-MONITOR：監看成案摘要（意圖模型唯一輸入；strict，禁 IP／自由文字／原 id）。 */
@@ -62,6 +66,19 @@ export const MonitorCaseSummarySchema = z
   .refine((v) => uniqueReasons(v.reasons), { message: "reasons_unique", path: ["reasons"] })
   .refine((v) => sortedDescByCount(v.top_dst_ports), {
     message: "top_dst_ports_desc",
+    path: ["top_dst_ports"],
+  })
+  .refine((v) => uniquePorts(v.top_dst_ports), {
+    message: "top_dst_ports_unique",
+    path: ["top_dst_ports"],
+  })
+  .refine(
+    (v) => v.top_dst_ports.reduce((sum, row) => sum + row.count, 0) <= v.n,
+    { message: "top_dst_ports_sum", path: ["top_dst_ports"] },
+  )
+  .refine((v) => v.u <= v.n, { message: "u_le_n", path: ["u"] })
+  .refine((v) => v.top_dst_ports.length === Math.min(v.u, 5), {
+    message: "top_dst_ports_len",
     path: ["top_dst_ports"],
   })
   .refine(

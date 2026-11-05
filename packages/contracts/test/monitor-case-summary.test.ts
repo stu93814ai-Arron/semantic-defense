@@ -8,7 +8,7 @@ const base = (): Obj => ({
   window_start: "2026-11-05T12:00:00.000Z",
   window_end: "2026-11-05T12:05:00.000Z",
   n: 10,
-  u: 4,
+  u: 3,
   s: 0.2,
   h: false,
   confidence: 0.55,
@@ -64,6 +64,7 @@ describe("MonitorCaseSummarySchema 結構約束", () => {
       patch({
         top_dst_ports: ports,
         n: 39,
+        u: 6,
         port_ranges: { well_known: 39, registered: 0, dynamic: 0 },
       }),
     );
@@ -73,6 +74,7 @@ describe("MonitorCaseSummarySchema 結構約束", () => {
   it("top_dst_ports 未按 count 降序 → 拒", () => {
     const r = parseMonitorCaseSummary(
       patch({
+        u: 2,
         top_dst_ports: [
           { port: 80, count: 2 },
           { port: 443, count: 5 },
@@ -128,5 +130,76 @@ describe("MonitorCaseSummarySchema 時間與分數", () => {
   it("app_count／sensor_count =0 → 拒", () => {
     expect(parseMonitorCaseSummary(patch({ app_count: 0 })).ok).toBe(false);
     expect(parseMonitorCaseSummary(patch({ sensor_count: 0 })).ok).toBe(false);
+  });
+});
+
+describe("MonitorCaseSummarySchema 埠／u／count 一致性", () => {
+  it("top_dst_ports port 重複 → 拒", () => {
+    const r = parseMonitorCaseSummary(
+      patch({
+        u: 2,
+        top_dst_ports: [
+          { port: 443, count: 5 },
+          { port: 443, count: 3 },
+        ],
+      }),
+    );
+    expect(r.ok).toBe(false);
+  });
+
+  it("top_dst_ports count 為 0 → 拒", () => {
+    const r = parseMonitorCaseSummary(
+      patch({
+        u: 1,
+        top_dst_ports: [{ port: 443, count: 0 }],
+      }),
+    );
+    expect(r.ok).toBe(false);
+  });
+
+  it("top_dst_ports count 加總超過 n → 拒", () => {
+    const r = parseMonitorCaseSummary(
+      patch({
+        n: 10,
+        u: 2,
+        port_ranges: { well_known: 10, registered: 0, dynamic: 0 },
+        top_dst_ports: [
+          { port: 443, count: 8 },
+          { port: 80, count: 5 },
+        ],
+      }),
+    );
+    expect(r.ok).toBe(false);
+  });
+
+  it("u 超過 n → 拒", () => {
+    const r = parseMonitorCaseSummary(
+      patch({
+        n: 10,
+        u: 11,
+        port_ranges: { well_known: 10, registered: 0, dynamic: 0 },
+        top_dst_ports: [
+          { port: 443, count: 2 },
+          { port: 80, count: 2 },
+          { port: 22, count: 2 },
+          { port: 53, count: 2 },
+          { port: 25, count: 2 },
+        ],
+      }),
+    );
+    expect(r.ok).toBe(false);
+  });
+
+  it("top_dst_ports 筆數 ≠ min(u,5) → 拒", () => {
+    const r = parseMonitorCaseSummary(
+      patch({
+        u: 4,
+        top_dst_ports: [
+          { port: 443, count: 5 },
+          { port: 80, count: 3 },
+        ],
+      }),
+    );
+    expect(r.ok).toBe(false);
   });
 });
