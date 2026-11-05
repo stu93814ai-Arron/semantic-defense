@@ -47,6 +47,18 @@ describe("③c 存入 flow_events（單筆 body＝一個 FlowMetadataEvent）", 
     await app.close();
   });
 
+  it("PK (sensor_id, flow_id)：不同 sensor 同 flow_id 皆 201；同 sensor 重複 → 409", async () => {
+    const { app, sensorId, post } = await setup();
+    const t2 = await seedToken(db, ["10.0.0.0/8"]);
+    const f = flow();
+    expect((await post(f)).statusCode).toBe(201);
+    const r2 = await app.inject({ method: "POST", url: "/v1/flows", headers: auth(t2), remoteAddress: IN, payload: f });
+    expect(r2.statusCode).toBe(201);
+    expect((await post(f)).statusCode).toBe(409);
+    expect((await rows()).rows.map((x) => x.sensor_id).sort()).toEqual([t2.slice(5, 41), sensorId].sort());
+    await app.close();
+  });
+
   it("token 撤銷後舊列保留且 sensor_id 不變；撤銷後新寫入 → 401", async () => {
     const { app, sensorId, post } = await setup();
     expect((await post(flow())).statusCode).toBe(201);

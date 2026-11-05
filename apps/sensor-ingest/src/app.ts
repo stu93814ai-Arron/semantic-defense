@@ -10,7 +10,7 @@ import { ensureFlowSchema, insertFlow, purgeExpired } from "./store.js";
  * - 認證：Authorization: Bearer sdst_<sensor_id>.<secret> → 401；來源 IP（socket，不讀 X-Forwarded-For）不在 allowed_cidrs → 403。
  * - 無 session、無管理／登入路由；未宣告路徑一律 404（認證掛在路由 onRequest：先於 body 解析，未認證請求不解析 body；不影響 404）。
  * - ③c：POST /v1/flows body＝單一 FlowMetadataEvent（contracts strict 驗證），sensor_id 取自 token → 201；
- *   自報 sensor_id／非法 → 400；flow_id 重複 → 409。寫入前清除 ≥7 天列（見 store.ts）。
+ *   自報 sensor_id／非法 → 400；同 sensor 重複 flow_id → 409。寫入前清除 ≥7 天列（見 store.ts）。
  */
 export type BuildIngestOptions = {
   db: SensorDb;

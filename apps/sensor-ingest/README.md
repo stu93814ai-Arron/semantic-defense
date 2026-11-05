@@ -11,7 +11,7 @@
 
 ## 路由
 - `GET /v1/health`：認證後探針，回 `{ ok, sensor_id }`。
-- `POST /v1/flows`：body＝單一 FlowMetadataEvent（contracts strict）。自報 `sensor_id`／多欄／缺欄 → **400**；`flow_id` 重複 → **409**；成功 → **201**。
+- `POST /v1/flows`：body＝單一 FlowMetadataEvent（contracts strict）。自報 `sensor_id`／多欄／缺欄 → **400**；同 sensor 重複 `flow_id` → **409**（PK `(sensor_id, flow_id)`）；成功 → **201**。
   寫入表 `flow_events`：契約欄位＋`sensor_id`（取自 token）＋`received_at`（注入時鐘 now）。token 撤銷不刪舊列。
 
 ## 保留期
