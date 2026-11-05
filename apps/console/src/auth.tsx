@@ -14,6 +14,7 @@ import {
   logoutRequest,
   setUnauthorizedHandler,
 } from "./api";
+import { resolveIdleTimeoutMs, startIdleTimer } from "./auth/idleTimer";
 import type { SessionUser } from "./roles";
 
 type LoginOutcome =
@@ -29,6 +30,14 @@ type AuthState = {
 };
 
 const AuthContext = createContext<AuthState | null>(null);
+
+function viteIdleEnv(): Record<string, string | undefined> {
+  try {
+    return import.meta.env as Record<string, string | undefined>;
+  } catch {
+    return {};
+  }
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<SessionUser | null>(null);
@@ -57,6 +66,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    const timer = startIdleTimer({
+      timeoutMs: resolveIdleTimeoutMs(viteIdleEnv()),
+      onIdle: () => {
+        void logoutRequest().finally(() => clearToLogin());
+      },
+    });
+    const onActivity = () => timer.touch();
+    window.addEventListener("pointerdown", onActivity);
+    window.addEventListener("keydown", onActivity);
+    return () => {
+      timer.stop();
+      window.removeEventListener("pointerdown", onActivity);
+      window.removeEventListener("keydown", onActivity);
+    };
+  }, [user, clearToLogin]);
 
   const login = useCallback((username: string, password: string): LoginOutcome => {
     const result = loginRequestSync(username, password);
