@@ -4,7 +4,7 @@ export function ModePage() {
     <main>
       <h1>模式切換</h1>
       <div data-testid="empty-state" className="card">
-        <p>目前為監看模式。串接（transparent）選項尚未開放。</p>
+        <p>目前為監看模式。尚無模式切換選項（串接尚未開放）。</p>
       </div>
     </main>
   );
