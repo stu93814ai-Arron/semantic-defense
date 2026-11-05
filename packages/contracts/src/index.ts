@@ -106,21 +106,36 @@ function highest(events: RequestEvent[]): Family {
   return events.reduce<Family>((acc, e) => (rank(e.response_class) > rank(acc) ? e.response_class : acc), "read");
 }
 
+const OptsSchema = z.strictObject({
+  distance: z.number().nonnegative().finite(),
+  normal_neighbor_count: NonNegInt,
+});
+
 export function toCaseSummary(
   events: RequestEvent[],
   opts: CaseSummaryOptions = {},
 ): ParseResult<CaseSummary> {
   if (!events.length) return { ok: false, errors: [{ path: "", message: "empty_events" }] };
+  for (const e of events) {
+    const r = parseRequestEvent(e);
+    if (!r.ok) return r;
+  }
+  const head = events[0]!;
+  if (events.some((e) => e.app_id !== head.app_id || e.actor_id !== head.actor_id || e.session_id !== head.session_id)) {
+    return { ok: false, errors: [{ path: "", message: "mixed_identity" }] };
+  }
+  const o = safeParse(OptsSchema, {
+    distance: opts.distance ?? 0,
+    normal_neighbor_count: opts.normal_neighbor_count ?? 0,
+  });
+  if (!o.ok) return o;
   const sorted = [...events].sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts));
   const { app_id, actor_id, session_id } = sorted[0]!;
-  return {
-    ok: true,
-    value: {
-      case_id: stableUuid(`${app_id}|${actor_id}|${session_id}`),
-      app_id, actor_id, session_id,
-      transitions: aggregate(sorted, opts.distance ?? 0),
-      privileged_target: highest(sorted),
-      normal_neighbor_count: opts.normal_neighbor_count ?? 0,
-    },
-  };
+  return parseCaseSummary({
+    case_id: stableUuid(`${app_id}|${actor_id}|${session_id}`),
+    app_id, actor_id, session_id,
+    transitions: aggregate(sorted, o.value.distance),
+    privileged_target: highest(sorted),
+    normal_neighbor_count: o.value.normal_neighbor_count,
+  });
 }

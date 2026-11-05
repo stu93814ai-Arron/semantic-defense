@@ -89,9 +89,10 @@ describe("準則3＋5：參數原文不得進事件／摘要", () => {
   });
   it("toCaseSummary 不洩漏、與 fixture deep-equal、三模板相異", () => {
     const events = EVENTS.slice(0, 4).map(parsedEvent);
-    const all = toCaseSummary([...events, parsedEvent("events/instruction-attempt-sanitized.json")]);
-    expect(all.ok && noLeak(JSON.stringify(all.value))).toBe(true);
+    const inject = toCaseSummary([parsedEvent("events/instruction-attempt-sanitized.json")]);
+    expect(inject.ok && noLeak(JSON.stringify(inject.value))).toBe(true);
     const s = toCaseSummary(events, { distance: 0.82, normal_neighbor_count: 1200 });
+    expect(s.ok && noLeak(JSON.stringify(s.value))).toBe(true);
     expect(s.ok).toBe(true);
     if (!s.ok) return;
     expect(parseCaseSummary(s.value).ok).toBe(true);
