@@ -12,5 +12,11 @@
   "devDependencies": {
     "typescript": "^5.9.3",
     "vitest": "^5.1.0"
-  }
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./ip-cidr.js": "./src/ip-cidr.ts",
+    "./ip-cidr": "./src/ip-cidr.ts"
+  },
+  "types": "./src/index.ts"
 }
