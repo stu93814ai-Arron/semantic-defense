@@ -1,0 +1,21 @@
+{
+  "status": "NOT_APPLIED",
+  "do_not_send_this_wrapper": true,
+  "incompatible_rule_to_clear": "required_pull_request_reviews",
+  "why": "必須經 PR 且 enforce_admins=true 會拒絕 git merge --ff-only 之後的一般推送。線性歷史、禁止 force、禁止刪除、管理員受保護、quality strict 都保留。",
+  "put_path": "/repos/stu93814ai-Arron/semantic-defense/branches/main/protection",
+  "put_body": {
+    "required_status_checks": {
+      "strict": true,
+      "checks": [
+        {"context": "quality", "app_id": 15368}
+      ]
+    },
+    "enforce_admins": true,
+    "required_pull_request_reviews": null,
+    "restrictions": null,
+    "required_linear_history": true,
+    "allow_force_pushes": false,
+    "allow_deletions": false
+  }
+}

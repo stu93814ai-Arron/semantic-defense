@@ -37,18 +37,43 @@ CI 不呼叫 Grok、不呼叫本地推論端點、不讀取模型權杖。workfl
 
 腳本內部的 600 秒必跑上限、E2E 秒數上限、覆蓋率 70%、gitleaks 都沒有放寬。步驟上限只用來讓沒有輸出的下載在整體 45 分鐘之前失敗。
 
-## 快轉與「線性歷史」不是同一件事
+## 整合契約
 
-本倉庫的快轉只由 `scripts/merge-team.sh` 執行：`git merge --ff-only`。成功時 `main` 的新 HEAD 就是來源分支的 HEAD，提交 SHA 不變。本檔與 workflow 都不改這個腳本。
+快轉的定義：`main` 的新 HEAD 等於已審查分支的 HEAD，提交 SHA 不變。執行點是 `git merge --ff-only` 之後的一般 `git push`（沒有 `--force`）。`scripts/merge-team.sh` 只更新執行它所在的本地 `main`，不推 origin，也不會因為遠端保護而空等；它印出「已快轉合入 main」時，只代表那個本地分支。不要把它讀成 `origin/main` 已經前進。
 
-GitHub 沒有「只允許 fast-forward」的合併方式或分支規則。官方文件寫明：要開啟 `required_linear_history`，倉庫必須仍允許 squash 或 rebase 合併。這兩種都會產生新的提交 SHA，不是 `git merge --ff-only`。
+`quality` 是 GitHub Actions app id `15368` 的檢查名。覆蓋率、gitleaks、E2E 都在 `pnpm run ci` 裡面，不能為了合入而跳過。
 
-| 設定 | 實際效果 | 是不是 fast-forward-only |
-| --- | --- | --- |
-| 禁止 force push（`allow_force_pushes: false`） | 拒絕改寫 `main` 上已有歷史的推送 | 否。只保證指標不後退。squash、rebase、merge commit 仍可把 `main` 往前移 |
-| 禁止刪除分支（`allow_deletions: false`） | 拒絕刪除受保護分支 | 否。與合併方式無關 |
-| 必須線性歷史（`required_linear_history`） | 拒絕把 merge commit 推上該分支 | 否。squash 與 rebase merge 仍算線性，而且 SHA 是新的 |
-| 必須通過 `quality` | 經 PR 合併前，這次 CI 要綠 | 否。直接推送是否也要檢查，取決於方案是否允許分支保護，以及有沒有同時要求 PR |
-| `scripts/merge-team.sh` 的 `git merge --ff-only` | 只有來源分支已包含 `main` 時才移動指標，SHA 不變 | 是。這是目前唯一的快轉執行點 |
+### 現況（總召 2026-11-06 11:38 台北讀回，本檔不改設定）
 
-因此：即使日後分支保護把「必須線性歷史」打開，也不能把它寫成「已經只能快轉」。
+已套在 `main` 的 classic protection：
+
+- `allow_force_pushes=false`
+- `allow_deletions=false`
+- `required_status_checks`：`quality`，app id `15368`，`strict=true`
+- `required_linear_history=true`
+- `required_pull_request_reviews` 有設定，核准票數 0
+- `enforce_admins=true`
+- `restrictions=null`
+
+這段是現況。下面的修正還沒套用。
+
+### 不相容的是「必須經 PR」
+
+要保留的是：必要檢查、禁止 force push、禁止刪除、管理員同樣受保護、已審 head 以 fast-forward-only 進入 `main`。
+
+總召額外打開的 `required_pull_request_reviews`（必須經 PR，而且 `enforce_admins=true`）會拒絕所有直接推送，包括把 `main` 快轉到已審 SHA。GitHub 的合併按鈕沒有 fast-forward-only：merge commit 會被線性歷史拒絕，squash 與 rebase and merge 都會產生新 SHA。線性歷史只拒絕 merge commit，不是快轉。
+
+建議只拿掉「必須經 PR」。其餘現況開關維持。完整 PUT 正文在 [main-ff-protection-proposal.json](./main-ff-protection-proposal.json)，`"status": "NOT_APPLIED"`。不要把該檔貼上的內容說成已經生效，也不要在推送同一個步驟裡關掉保護或加 bypass。
+
+### 失敗即停
+
+1. 該 SHA 上沒有 app id `15368` 的 `quality` success → 停止。
+2. `origin/main` 不是該 SHA 的祖先 → 停止。不要為了製造快轉而去 rebase 或 squash。
+3. `required_pull_request_reviews` 仍不是 `null` → 停止。不要改用 squash、rebase and merge 或 merge commit，也不要臨時關閉保護。
+4. 修正套用之後，只做不含 `--force` 的快轉推送。推送被拒 → 停止，並用下面的回滾正文把保護貼回去。
+
+### 總召套用後的驗證與回滾
+
+套用前先 `GET` 保護並把回應存下來。讀回應與上一節現況一致；不一致就停止。套用後再 `GET`，預期是：force 與 delete 仍為 false、線性歷史仍為 true、`enforce_admins` 仍為 true、`quality`／15368／strict 仍在、`required_pull_request_reviews` 為 `null`。
+
+回滾是把套用前存下來的那份 GET 正文原樣 `PUT` 回去。11:38 的讀回沒有給審查物件的其餘子欄位，所以不要用手寫的審查物件代替那份存檔。
