@@ -16,7 +16,7 @@ hook 都放在有納管的 `.githooks/`，透過 `core.hooksPath` 啟用，不�
 pre-push 只是快速檢查，不會寫入 gate-history。正式紀錄仍然要跑 `pnpm gate:clean <rev>`。
 
 ## 注意
-目前這個 repo 沒有 remote，各組都是直接在本機 commit 到 main，所以 pre-push 實際上不會觸發，主要靠 pre-commit 把關（PM 核准）。
+遠端庫已公開。推送到遠端時 pre-push 會跑型別檢查與 lint。完整閘門在 GitHub Actions（見 [github-actions.md](./github-actions.md)）。合入 `main` 的快轉契約、現況保護，以及尚未套用的修正，都寫在該檔。GitHub 的「必須線性歷史」不是快轉。
 
 pre-commit 檢查的是**工作目錄的內容**，不是只看暫存區。如果別人有未提交、但會讓 lint 或 typecheck 失敗的檔案，也可能擋住你的 commit。遇到這種情況請先通知那個人。
 
