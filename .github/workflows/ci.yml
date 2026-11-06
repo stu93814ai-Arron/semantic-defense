@@ -35,14 +35,20 @@ jobs:
           node-version: 22.23.4
 
       - name: pin pnpm
+        timeout-minutes: 5
         env:
           COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
         run: |
           set -euo pipefail
+          echo "pin-pnpm: start $(date -u +%Y-%m-%dT%H:%M:%SZ)"
           corepack enable
-          corepack prepare pnpm@10.33.4 --activate
+          if ! corepack prepare pnpm@10.33.4 --activate; then
+            echo "pin-pnpm: retry once $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            corepack prepare pnpm@10.33.4 --activate
+          fi
           node -v
           pnpm -v
+          echo "pin-pnpm: done $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
       - name: reject model endpoints and bypasses
         env:
@@ -75,14 +81,36 @@ jobs:
           fi
 
       - name: frozen install
-        run: pnpm install --frozen-lockfile
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          echo "frozen-install: start $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          if ! pnpm install --frozen-lockfile; then
+            echo "frozen-install: retry once $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            pnpm install --frozen-lockfile
+          fi
+          echo "frozen-install: done $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
       # 瀏覽器與系統相依放在腳本的 E2E 計時之外，避免下載時間吃掉既有 180 秒上限。
       # scripts/e2e.sh 仍會自己挑隨機埠、取得 flock，並再執行 playwright install。
+      # 這步不印套件網址以外的環境內容；失敗只重試一次。
       - name: install Playwright chromium
-        run: pnpm exec playwright install --with-deps chromium
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+          echo "playwright-install: start $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          if ! pnpm exec playwright install --with-deps chromium; then
+            echo "playwright-install: retry once $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            pnpm exec playwright install --with-deps chromium
+          fi
+          echo "playwright-install: done $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
       - name: authoritative gate
+        timeout-minutes: 25
         env:
           SKIP_E2E: "0"
-        run: pnpm run ci
+        run: |
+          set -euo pipefail
+          echo "gate: start $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          pnpm run ci
+          echo "gate: done $(date -u +%Y-%m-%dT%H:%M:%SZ)"

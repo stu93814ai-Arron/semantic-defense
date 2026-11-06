@@ -24,6 +24,19 @@ CI 不呼叫 Grok、不呼叫本地推論端點、不讀取模型權杖。workfl
 
 `GITHUB_TOKEN` 只有 `contents: read`。checkout 設 `persist-credentials: false`。不把秘密寫進日誌，不上傳 artifact。
 
+## 有界時間
+
+工作整體 `timeout-minutes: 45`。網路安裝另有步驟上限，且只重試一次；日誌只印步驟名稱與 UTC 時間，不印環境變數：
+
+| 步驟 | 上限 | 重試 |
+| --- | --- | --- |
+| pin pnpm | 5 分鐘 | 1 次 |
+| frozen install | 10 分鐘 | 1 次 |
+| Playwright Chromium | 15 分鐘 | 1 次 |
+| `pnpm run ci` | 25 分鐘 | 不重試 |
+
+腳本內部的 600 秒必跑上限、E2E 秒數上限、覆蓋率 70%、gitleaks 都沒有放寬。步驟上限只用來讓沒有輸出的下載在整體 45 分鐘之前失敗。
+
 ## 快轉與「線性歷史」不是同一件事
 
 本倉庫的快轉只由 `scripts/merge-team.sh` 執行：`git merge --ff-only`。成功時 `main` 的新 HEAD 就是來源分支的 HEAD，提交 SHA 不變。本檔與 workflow 都不改這個腳本。
