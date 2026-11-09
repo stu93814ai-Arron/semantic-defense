@@ -1,12 +1,14 @@
 import { useState } from "react";
 import { useAuth } from "../auth";
 import {
+  getThresholds,
   isBackendUnreachable,
   isPendingExpired,
   listPending,
   reviewApprove,
   reviewReject,
 } from "../review/demoStore";
+import { ThresholdReadonly } from "../review/ThresholdReadonly";
 import {
   REJECT_REASONS,
   type PendingCandidate,
@@ -113,9 +115,12 @@ export function BlacklistReviewPage() {
     setReasons((prev) => new Map(prev).set(caseId, reason));
   }
 
+  const thresholds = getThresholds();
+
   return (
     <main>
       <h1>黑名單審核</h1>
+      <ThresholdReadonly value={thresholds} />
       {message ? (
         <p role="status" data-testid="review-status">
           {message}
