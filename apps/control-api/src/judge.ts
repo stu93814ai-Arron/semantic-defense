@@ -117,9 +117,26 @@ async function judgeGroup(q: Queryable, k: GroupKey, ctx: TickCtx): Promise<"hit
   return "hit";
 }
 
-/** 每個 tick 各一行，只記數量、不記 IP：跳過的非主機位址組（B1）、被去重的 hit_while_listed（R5）。 */
-function logTickCounts(log: WarnLog | undefined, skipped: number, suppressed: number): void {
-  if (skipped > 0) log?.warn({ skipped }, "judge tick skipped non-host src_ip groups");
+/**
+ * 每組一個 SAVEPOINT（資安退回 B2）：感測器送來 Postgres 不收的 ts（0000 年、offset ±23:59…）會讓 ts::timestamptz 拋錯；
+ * 失敗只 ROLLBACK TO SAVEPOINT 這一組（外層 tx 回到可用狀態），計入 failed，其他組照常、tick 照常 commit、cursor 照常前進。
+ */
+async function judgeGroupIsolated(q: Queryable, k: GroupKey, ctx: TickCtx): Promise<"hit" | "miss" | "skipped" | "failed"> {
+  await q.query("SAVEPOINT judge_group");
+  try {
+    const r = await judgeGroup(q, k, ctx);
+    await q.query("RELEASE SAVEPOINT judge_group");
+    return r;
+  } catch {
+    await q.query("ROLLBACK TO SAVEPOINT judge_group");
+    return "failed";
+  }
+}
+
+/** 每個 tick 各一行，只記數量、不記 IP／ts：跳過的非主機位址組（B1）、失敗回滾的組（B2）、被去重的 hit_while_listed（R5）。 */
+function logTickCounts(log: WarnLog | undefined, n: { skipped: number; failed: number }, suppressed: number): void {
+  if (n.skipped > 0) log?.warn({ skipped: n.skipped }, "judge tick skipped non-host src_ip groups");
+  if (n.failed > 0) log?.warn({ failed: n.failed }, "judge tick rolled back failed groups");
   if (suppressed > 0) log?.warn({ suppressed }, "judge tick suppressed hit_while_listed audits (1 per entry per hour)");
 }
 
@@ -133,9 +150,9 @@ export async function runJudgeTick(db: Db, now: number, log?: WarnLog): Promise<
     const cur = (await q.query<{ received_upto: string }>("SELECT received_upto FROM judge_cursor WHERE id")).rows[0];
     const { keys, upto } = await scanGroups(q, Number(cur?.received_upto ?? 0), now);
     const ctx: TickCtx = { th, isAllowlisted: await loadAllowlist(q, now), now, stats: { suppressed: 0 } };
-    const n = { hit: 0, miss: 0, skipped: 0 };
-    for (const k of keys) n[await judgeGroup(q, k, ctx)] += 1;
-    logTickCounts(log, n.skipped, ctx.stats.suppressed);
+    const n = { hit: 0, miss: 0, skipped: 0, failed: 0 };
+    for (const k of keys) n[await judgeGroupIsolated(q, k, ctx)] += 1;
+    logTickCounts(log, n, ctx.stats.suppressed);
     // 依 first_seen_at（第一次寫入、伺服器時間）清：重掃會一直刷新 updated_at，用它清會永遠清不掉（資安退回 R3）
     await q.query("DELETE FROM case_hits WHERE first_seen_at <= $1", [now - RETENTION_MS]);
     await q.query("DELETE FROM blacklist_cases WHERE state <> 'open' AND resolved_at <= $1", [now - RETENTION_MS]);

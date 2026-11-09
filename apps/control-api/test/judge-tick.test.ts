@@ -349,3 +349,19 @@ describe("hit_while_listed 去重查詢的 partial index（資安退回 R5）", 
     expect(r.rows[0]!.indexdef).toMatch(/\(action, \(\(detail ->> 'entry_id'::text\)\), at\) WHERE \(action = 'blacklist\.hit_while_listed'::text\)/);
   });
 });
+
+describe("每組一個 SAVEPOINT：Postgres 不收的 ts 不再讓整個 tick rollback（資安退回 B2）", () => {
+  const BAD_TS = ["0000-01-01T00:00:00Z", "2026-11-08T23:58:00+23:59", "2026-11-08T23:58:00-23:59"];
+
+  it("3 筆壞 ts（各自一組）與正常 IP 同批 → tick 成功、正常 IP 成案、cursor 前進；warn {failed:3} 不帶 IP／ts", async () => {
+    await boot();
+    await insertFlowEvents(app.db, BAD_TS.map((ts, i) => ({
+      flow: { ...flow(`198.51.100.${i + 1}`, T0 - 2 * MIN, 1000, true), ts }, sensorId: "s-1", receivedAt: T0 - MIN })));
+    await scan("203.0.113.11", T0 - 2 * MIN, T0 - 30_000);
+    await expect(runJudgeTick(app.db, T0, log)).resolves.toMatchObject({ ran: true, hits: 1 });
+    expect((await cases()).map((c) => c.ip)).toEqual(["203.0.113.11/32"]);
+    expect(await cursor()).toEqual([{ received_upto: String(T0 - 30_000) }]);
+    expect(lines.map((l) => JSON.parse(l) as object)).toEqual([{ failed: 3, msg: "judge tick rolled back failed groups" }]);
+    for (const s of [...BAD_TS, "198.51.100", "0000-01-01"]) expect(lines.join("\n")).not.toContain(s);
+  });
+});
