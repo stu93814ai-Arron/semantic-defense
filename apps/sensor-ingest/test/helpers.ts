@@ -6,6 +6,10 @@ import { join } from "node:path";
 import { randomBytes, randomUUID } from "node:crypto";
 import pg from "pg";
 import { sha256Hex, type SensorDb } from "@semantic-defense/sensor-auth";
+import { buildIngest as buildIngestImpl, type BuildIngestOptions } from "../src/app.js";
+
+/** 測試預設 logger:false（CI log 不灌 request log）；要驗 log 的測試自行注入 `logger: { stream }`。 */
+export const buildIngest = (opts: BuildIngestOptions) => buildIngestImpl({ logger: false, ...opts });
 
 /** 獨立 schema，避免與 control-api 測試共用 Postgres 時互相 TRUNCATE。DDL 與 control-api 的 sensor_tokens 欄位一致（無 FK）。 */
 const SCHEMA = "sensor_ingest_test";

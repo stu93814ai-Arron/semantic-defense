@@ -3,8 +3,7 @@ import { request } from "node:https";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { buildIngest } from "../src/app.js";
-import { openTestDb, seedToken, selfSignedCert } from "./helpers.js";
+import { buildIngest, openTestDb, seedToken, selfSignedCert } from "./helpers.js";
 
 let db: Awaited<ReturnType<typeof openTestDb>>;
 beforeAll(async () => { db = await openTestDb(); });

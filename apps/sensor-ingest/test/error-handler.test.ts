@@ -1,8 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { buildIngest } from "../src/app.js";
 import { safeErr } from "../src/errors.js";
-import { openTestDb, seedToken } from "./helpers.js";
+import { buildIngest, openTestDb, seedToken } from "./helpers.js";
 
 /** sensor-ingest 5xx：固定 body、不外洩 DB 原文；錯誤寫 log，log 不含 body 或 Authorization。 */
 let db: Awaited<ReturnType<typeof openTestDb>>;

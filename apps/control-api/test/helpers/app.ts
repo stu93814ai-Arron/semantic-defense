@@ -27,8 +27,9 @@ export type BuildAppOptions = ImplBuildAppOptions & {
   beforeReady?: (app: ControlApi) => void | Promise<void>;
 };
 
+/** 測試預設 logger:false（CI log 不灌 request log）；要驗 log 的測試自行注入 `logger: { stream }`。 */
 export async function buildApp(
   opts: BuildAppOptions = {},
 ): Promise<ControlApi> {
-  return buildAppImpl(opts as ImplBuildAppOptions);
+  return buildAppImpl({ logger: false, ...opts } as ImplBuildAppOptions);
 }

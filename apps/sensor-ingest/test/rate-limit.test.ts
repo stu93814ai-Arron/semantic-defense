@@ -1,8 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { buildIngest } from "../src/app.js";
 import { AUTH_FAIL_LIMIT, AUTH_FAIL_MAX_KEYS, AUTH_FAIL_WINDOW_MS, authFailKey, createAuthFailLimiter } from "../src/rate-limit.js";
-import { openTestDb, seedToken } from "./helpers.js";
+import { buildIngest, openTestDb, seedToken } from "./helpers.js";
 
 let db: Awaited<ReturnType<typeof openTestDb>>;
 beforeAll(async () => { db = await openTestDb(); });
