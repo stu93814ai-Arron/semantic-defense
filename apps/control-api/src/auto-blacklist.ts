@@ -5,6 +5,7 @@ import type { Db, Queryable } from "./db.js";
 import { writeAudit } from "./audit.js";
 import { loadThresholds, type WarnLog } from "./thresholds.js";
 import { insertActiveBlocklistEntry } from "./blocklist-store.js";
+import { breakerTripped, lockAuto } from "./auto-breaker.js";
 
 /**
  * ④ source=auto 寫入邊界（內部函式，不開 HTTP）。觸發條件（命中次數）在 auto-trigger.ts；冷卻只在 opts.gates 開時檢查。
@@ -25,7 +26,8 @@ export type AutoListResult =
   | { status: "below_auto_threshold" }
   | { status: "allowlisted" }
   | { status: "already_listed" }
-  | { status: "cooldown"; revoked_at: number };
+  | { status: "cooldown"; revoked_at: number }
+  | { status: "breaker" };
 
 const addrOf = (s: string) => s.split("/")[0]!;
 const family = (addr: string) => (isIP(addr) === 6 ? "ipv6" : "ipv4");
@@ -56,9 +58,10 @@ export function hostCidr(raw: string): string | null {
 /** 冷卻：同一 canonical IP（完全相同；涵蓋它的 /24 不算）在這段時間內被撤回過（auto 或 manual）就不自動上榜。 */
 export const AUTO_COOLDOWN_MS = 2 * 60 * 60 * 1000;
 /**
- * gates：E3.A 觸發才有的閘門（冷卻；commit 11 加熔斷）。判定 tick 開、writeAutoBlocklistEntry 關，§7 原行為不變。
+ * gates：E3.A 觸發才有的閘門（冷卻＋熔斷共用一個選項；A 裁定 11-09 第 4 點）。
+ * 判定 tick 開（帶 breakerPerHour）、writeAutoBlocklistEntry 關，§7 原行為不變。
  */
-export type AutoListOpts = { log?: WarnLog; gates?: boolean };
+export type AutoListOpts = { log?: WarnLog; gates?: false | { breakerPerHour: number } };
 
 async function lastRevokedWithin(q: Queryable, ip: string, now: number): Promise<number | null> {
   const r = await q.query<{ revoked_at: string }>(
@@ -84,6 +87,8 @@ export async function autoListInTx(q: Queryable, input: AutoListInput, now: numb
     const revokedAt = await lastRevokedWithin(q, ip, now);
     if (revokedAt !== null) return { status: "cooldown", revoked_at: revokedAt };
   }
+  await lockAuto(q);
+  if (opts.gates && (await breakerTripped(q, opts.gates.breakerPerHour, now, opts.log))) return { status: "breaker" };
   const draft = BlocklistEntrySchema.parse({
     entry_id: randomUUID(), ip, source: "auto", confidence: input.confidence, case_id: input.case_id,
     created_at: new Date(now).toISOString(), expires_at: new Date(now + AUTO_LIST_TTL_MS).toISOString(),

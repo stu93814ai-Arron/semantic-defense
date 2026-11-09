@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import { insertFlowEvents } from "@semantic-defense/flow-store/testing";
-import type { ControlApi } from "./helpers/app.js";
+import { buildApp, type ControlApi } from "./helpers/app.js";
 import { DAY, MIN, T0, bootJudgeApp, flowEvent } from "./helpers/judge.js";
-import { runJudgeTick, type TickHooks } from "../src/judge.js";
-import { writeAutoBlocklistEntry } from "../src/auto-blacklist.js";
+import { runJudgeTick, type TickOpts } from "../src/judge.js";
+import { autoListInTx, writeAutoBlocklistEntry } from "../src/auto-blacklist.js";
+import { requireDatabaseUrl } from "./helpers/pg.js";
 
 /**
  * 成案流程 commit 9：E3.A 自動上榜條件（計畫 §1 步驟 4、§6.1、§7；A 裁定 11-09）。
@@ -15,8 +16,9 @@ afterEach(async () => { if (app) await app.close(); });
 
 const IP = "203.0.113.20";
 const CIDR = `${IP}/32`;
-async function boot(tokens: Record<string, string[]> = { "s-1": ["app-1", "app-2"], "s-2": ["app-1", "app-2"] }) {
-  app = await bootJudgeApp();
+async function boot(tokens: Record<string, string[]> = { "s-1": ["app-1", "app-2"], "s-2": ["app-1", "app-2"] },
+  opts: Parameters<typeof bootJudgeApp>[0] = {}) {
+  app = await bootJudgeApp(opts);
   for (const [sensor, apps] of Object.entries(tokens)) await token(sensor, apps);
 }
 const token = (sensor: string, apps: string[], revoked: number | null = null) => app.db.query(
@@ -35,7 +37,7 @@ const kases = async () => (await app.db.query<{ case_id: string; ip: string; sta
   "SELECT case_id, ip, state, resolved_by FROM blacklist_cases ORDER BY created_at")).rows;
 const audits = async (action: string) => (await app.db.query<{ actor: string; sensor_id: string | null; detail: Record<string, unknown> }>(
   "SELECT actor, sensor_id, detail FROM audit_events WHERE action = $1 ORDER BY id", [action])).rows;
-const tick = (at = T0, hooks: TickHooks = {}) => runJudgeTick(app.db, at, undefined, hooks);
+const tick = (at = T0, opts: TickOpts = {}) => runJudgeTick(app.db, at, undefined, opts);
 /** 三個不同窗（T0−25m、−15m、−5m）的命中。 */
 const three = async (apps: [string, string, string], sensors: [string, string, string] = ["s-1", "s-1", "s-1"]) => {
   const plan = [[25, apps[0], sensors[0]], [15, apps[1], sensors[1]], [5, apps[2], sensors[2]]] as const;
@@ -208,5 +210,97 @@ describe("E3.A 冷卻（同一 canonical IP 撤回後 2 小時內不自動上榜
     await revoked(CIDR, "auto", 30 * MIN);
     const r = await writeAutoBlocklistEntry(app.db, { ip: IP, confidence: 0.95, case_id: randomUUID() }, T0);
     expect(r.status).toBe("listed");
+  });
+});
+
+/** 熔斷測試共用：近 1 小時內已有 n 筆 auto 項目（SQL 直塞，各自不同 IP）。 */
+const autos = (n: number, at = T0 - 30 * MIN) => app.db.query(
+  `INSERT INTO blocklist_entries (entry_id, ip, source, confidence, case_id, created_at, expires_at, approved_by, approved_at)
+   SELECT gen_random_uuid(), '198.51.100.' || i || '/32', 'auto', 1, gen_random_uuid(), $2::bigint, $2::bigint + 86400000, 'system:auto', $2::bigint
+   FROM generate_series(1, $1::int) AS i`, [n, at]);
+const attempt = (ip: string, at = T0) => app.db.tx((q) =>
+  autoListInTx(q, { ip, confidence: 1, case_id: randomUUID() }, at, { gates: { breakerPerHour: 50 } }));
+const opened = async () => (await app.db.query<{ opened_at: string | null }>("SELECT opened_at FROM auto_breaker")).rows;
+
+describe("E3.A 熔斷（1 小時內 source=auto ≥ N 筆 → 退回人工審核）", () => {
+  const W = { count: 50, limit: 50, window_ms: 3_600_000 };
+
+  it("第 50 筆上榜；第 51 筆擋下並寫一次 auto_breaker_open；第 52 筆不重寫 open", async () => {
+    await boot();
+    await autos(49);
+    expect((await attempt("203.0.113.50")).status).toBe("listed");
+    expect((await attempt("203.0.113.51")).status).toBe("breaker");
+    expect((await attempt("203.0.113.52")).status).toBe("breaker");
+    expect(await audits("blacklist.auto_breaker_open")).toEqual([{ actor: "system:auto", sensor_id: null, detail: W }]);
+    expect(await opened()).toEqual([{ opened_at: String(T0) }]);
+  });
+
+  it("tick 路徑：熔斷中 E3.A 成立 → auto_suppressed{breaker}、warn、case 仍 open；N 來自 buildApp autoBreakerPerHour", async () => {
+    const warns: string[] = [];
+    await boot(undefined, { judgeIntervalMs: 20, autoBreakerPerHour: 3,
+      logger: { level: "warn", stream: { write: (l: string) => { warns.push(l); } } } });
+    await autos(3);
+    await three(["app-1", "app-2", "app-1"]);
+    await expect.poll(async () => (await audits("blacklist.auto_suppressed")).length, { timeout: 5_000 }).toBe(1);
+    const [c] = await kases();
+    expect(c!.state).toBe("open");
+    expect((await audits("blacklist.auto_suppressed"))[0]!.detail).toEqual({ reason: "breaker", ip: CIDR, case_id: c!.case_id });
+    expect((await audits("blacklist.auto_breaker_open")).map((a) => a.detail)).toEqual([{ count: 3, limit: 3, window_ms: 3_600_000 }]);
+    expect(warns.some((l) => l.includes("breaker"))).toBe(true);
+  });
+
+  it("視窗過了：tick 在 AUTO_LOCK 下補判一次 → auto_breaker_close 只寫一次；之後照常上榜", async () => {
+    await boot();
+    await autos(50);
+    expect((await attempt("203.0.113.51")).status).toBe("breaker");
+    await tick(T0 + 31 * MIN);
+    await tick(T0 + 32 * MIN);
+    expect(await audits("blacklist.auto_breaker_close")).toEqual([{ actor: "system:auto", sensor_id: null, detail: { count: 0, limit: 50 } }]);
+    expect(await opened()).toEqual([{ opened_at: null }]);
+    expect((await attempt("203.0.113.53", T0 + 33 * MIN)).status).toBe("listed");
+    expect(await audits("blacklist.auto_breaker_close")).toHaveLength(1);
+  });
+
+  it("autoListInTx 嘗試時也判恢復：開著但已低於 N → 寫 close 一次並上榜", async () => {
+    await boot();
+    await autos(50);
+    expect((await attempt("203.0.113.51")).status).toBe("breaker");
+    expect((await attempt("203.0.113.52", T0 + 31 * MIN)).status).toBe("listed");
+    expect((await audits("blacklist.auto_breaker_close")).map((a) => a.detail)).toEqual([{ count: 0, limit: 50 }]);
+  });
+
+});
+
+describe("E3.A 熔斷：AUTO_LOCK 序列化與 auto_breaker 單列", () => {
+  it("已有 49 筆、兩個並行嘗試 → AUTO_LOCK 序列化，只有一筆上榜", async () => {
+    await boot();
+    await autos(49);
+    let firstDone!: () => void;
+    const gate = new Promise<void>((r) => { firstDone = r; });
+    const waiting = async () => (await app.db.query<{ n: string }>(
+      "SELECT count(*) AS n FROM pg_locks WHERE locktype = 'advisory' AND NOT granted")).rows[0]!.n;
+    const a = app.db.tx(async (q) => {
+      const r = await autoListInTx(q, { ip: "203.0.113.60", confidence: 1, case_id: randomUUID() }, T0, { gates: { breakerPerHour: 50 } });
+      firstDone();
+      for (let i = 0; i < 100 && (await waiting()) === "0"; i += 1) await new Promise((res) => setTimeout(res, 20));
+      return r;
+    });
+    await gate;
+    const b = attempt("203.0.113.61");
+    expect([(await a).status, (await b).status]).toEqual(["listed", "breaker"]);
+  });
+
+  it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])("autoBreakerPerHour=%s（非正整數）→ buildApp 啟動即拋錯", async (n) => {
+    await expect(buildApp({ databaseUrl: requireDatabaseUrl(), logger: false, judgeIntervalMs: 0, autoBreakerPerHour: n }))
+      .rejects.toThrow(/autoBreakerPerHour/);
+  });
+
+  it("auto_breaker 單列：重複 init 不加列；id 只能是 TRUE", async () => {
+    await boot();
+    const again = await buildApp({ databaseUrl: requireDatabaseUrl(), logger: false, judgeIntervalMs: 0 });
+    await again.close();
+    expect(await opened()).toHaveLength(1);
+    await expect(app.db.query("INSERT INTO auto_breaker (id) VALUES (FALSE)")).rejects.toMatchObject({ code: "23514" });
+    await expect(app.db.query("INSERT INTO auto_breaker (id) VALUES (TRUE)")).rejects.toMatchObject({ code: "23505" });
   });
 });

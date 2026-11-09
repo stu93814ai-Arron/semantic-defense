@@ -6,6 +6,7 @@ import { accumulateCase, expireOpenCases, raiseCaseMax, upsertCaseHit } from "./
 import { hostCidr, loadAllowlist } from "./auto-blacklist.js";
 import { writeAudit } from "./audit.js";
 import { autoListCase, countHighSeverity, e3aHolds, writeSuppressed } from "./auto-trigger.js";
+import { AUTO_BREAKER_PER_HOUR, recoverBreakerIfOpen } from "./auto-breaker.js";
 
 /**
  * 成案流程 commit 7：判定 tick（計畫 §1／§2）。讀 flow_events → 依 (sensor, app, src_ip, 5 分鐘窗) 分組重算 → 命中 → 待審。
@@ -24,7 +25,8 @@ import { autoListCase, countHighSeverity, e3aHolds, writeSuppressed } from "./au
  * - 清除：case_hits 第一次寫入（first_seen_at）滿 7 天；已結案 case 的 resolved_at 滿 7 天（計畫 Q18）。
  * 命中存好後（計畫 §1）：白名單內 → 不開案、不寫稽核（Q13）；已上榜 → 只寫 hit_while_listed（Q16）；否則開案／累加。
  * 新的高嚴重命中 → E3.A（auto-trigger.ts）：白名單 IP 只寫 auto_suppressed{allowlist}（不開案）；
- * 有案路徑經 autoListInTx 上榜（白名單在其中以 SHARE 鎖重查）。冷卻在 autoListInTx 內（gates，tick 才開）；熔斷見 commit 11。
+ * 有案路徑經 autoListInTx 上榜（白名單在其中以 SHARE 鎖重查）。冷卻、熔斷在 autoListInTx 內（gates，tick 才開）；
+ * 熔斷開著時 tick 開頭在 AUTO_LOCK 下重判恢復（auto-breaker.ts）。
  */
 export const JUDGE_LOCK = 872_364_203;
 export const JUDGE_OVERLAP_MS = 60_000;
@@ -45,8 +47,10 @@ type ScanRow = KeyRow & Pick<FlowEventRow, "received_at">;
  * 只能經 runJudgeTick 第 4 個參數傳入；buildApp 的排程不傳（A 裁定 11-09）。
  */
 export type TickHooks = { beforeAutoList?: () => Promise<void> };
+/** runJudgeTick 第 4 個參數：掛勾＋熔斷上限 N（buildApp 的 autoBreakerPerHour，預設 50）。 */
+export type TickOpts = TickHooks & { autoBreakerPerHour?: number };
 /** 一個 tick 內共用：門檻、白名單（每個 tick 只讀一次；只決定要不要開案）、時間、log、掛勾、本 tick 計數（去重的 hit_while_listed、failed 的 SQLSTATE）。 */
-type TickCtx = { th: FlowThresholds; isAllowlisted: (ip: string) => boolean; now: number; log?: WarnLog; hooks: TickHooks;
+type TickCtx = { th: FlowThresholds; isAllowlisted: (ip: string) => boolean; now: number; log?: WarnLog; hooks: TickHooks; breakerPerHour: number;
   stats: { suppressed: number; codes: Map<string, number>; nullTs: number } };
 
 /** upto：這批實際看到的最大 received_at（沒有新列 → null，cursor 不動）。不用 control-api 的 now，ingest 時鐘較慢時才不會漏列。 */
@@ -118,7 +122,7 @@ type StoredHit = { confidence: number; late: boolean; created: boolean; newHigh:
  * 已在榜 → hit_while_listed；否則累加／提高待審，再評估 E3.A → autoListCase。兩條路徑共用同一個計數函式。
  */
 async function routeHit(q: Queryable, k: GroupKey, ctx: TickCtx, h: StoredHit): Promise<void> {
-  const { th, isAllowlisted, now, log, hooks } = ctx;
+  const { th, isAllowlisted, now, log, hooks, breakerPerHour } = ctx;
   const ip = hostCidr(k.src_ip)!;
   const e3a = async () => h.newHigh && e3aHolds(await countHighSeverity(q, ip, th.auto, now));
   if (isAllowlisted(k.src_ip)) {
@@ -130,7 +134,7 @@ async function routeHit(q: Queryable, k: GroupKey, ctx: TickCtx, h: StoredHit): 
   else await raiseCaseMax(q, k.src_ip, h.confidence, now);
   if (await e3a()) {
     await hooks.beforeAutoList?.();
-    await autoListCase(q, ip, now, { log, gates: true });
+    await autoListCase(q, ip, now, { log, gates: { breakerPerHour } });
   }
 }
 
@@ -200,16 +204,18 @@ function logTickCounts(log: WarnLog | undefined, n: { skipped: number; failed: n
   if (stats.suppressed > 0) log?.warn({ suppressed: stats.suppressed }, "judge tick suppressed hit_while_listed audits (1 per entry per hour)");
 }
 
-export async function runJudgeTick(db: Db, now: number, log?: WarnLog, hooks: TickHooks = {}): Promise<TickResult> {
+export async function runJudgeTick(db: Db, now: number, log?: WarnLog, opts: TickOpts = {}): Promise<TickResult> {
   if (!(await flowEventsReady(db))) return NOOP;
   return db.tx(async (q): Promise<TickResult> => {
     const lock = await q.query<{ ok: boolean }>("SELECT pg_try_advisory_xact_lock($1) AS ok", [JUDGE_LOCK]);
     if (lock.rows[0]?.ok !== true) return NOOP;
     const th = await loadThresholds(q, log);
     await expireOpenCases(q, now);
+    const breakerPerHour = opts.autoBreakerPerHour ?? AUTO_BREAKER_PER_HOUR;
+    await recoverBreakerIfOpen(q, breakerPerHour, now, log);
     const cur = (await q.query<{ received_upto: string }>("SELECT received_upto FROM judge_cursor WHERE id")).rows[0];
     const { keys, upto, nullTs } = await scanGroups(q, Number(cur?.received_upto ?? 0), now);
-    const ctx: TickCtx = { th, isAllowlisted: await loadAllowlist(q, now), now, log, hooks, stats: { suppressed: 0, codes: new Map(), nullTs } };
+    const ctx: TickCtx = { th, isAllowlisted: await loadAllowlist(q, now), now, log, hooks: opts, breakerPerHour, stats: { suppressed: 0, codes: new Map(), nullTs } };
     const n = { hit: 0, miss: 0, skipped: 0, failed: 0 };
     for (const k of keys) n[await judgeGroupIsolated(q, k, ctx)] += 1;
     logTickCounts(log, n, ctx.stats);

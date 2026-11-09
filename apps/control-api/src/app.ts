@@ -14,7 +14,7 @@ import { registerThresholdRoutes } from "./thresholds.js";
 import { registerWhitelistRoutes } from "./whitelist.js";
 import { registerBlacklistRoutes } from "./blacklist.js";
 import { badJsonError, installErrorHandler, safeErr, withSafeReqLog } from "./errors.js";
-import { runJudgeTick } from "./judge.js";
+import { runJudgeTick, type TickOpts } from "./judge.js";
 
 export type BuildAppOptions = {
   idleTimeoutMs?: number;
@@ -31,6 +31,8 @@ export type BuildAppOptions = {
   logger?: FastifyServerOptions["logger"];
   /** 判定 tick 間隔（ms）；預設 5000，0＝關閉（測試直接呼叫 runJudgeTick）。 */
   judgeIntervalMs?: number;
+  /** E3.A 熔斷上限 N：滑動 1 小時內 source=auto 最多 N 筆（正整數，預設 50；計畫 §6.3，這一刀不做管理頁）。 */
+  autoBreakerPerHour?: number;
   /** 測試用：ready／listen 前掛額外路由（例如無 roles 探針）。 */
   beforeReady?: (app: ControlApi) => void | Promise<void>;
 };
@@ -191,12 +193,17 @@ function installRouteAudit(app: ControlApi): void {
   });
 }
 
+/** 熔斷上限必須是正整數（A 裁定）：0、負數、小數、NaN、Infinity 在啟動時就拋錯，不開 DB。 */
+function assertBreakerLimit(n: number | undefined): void {
+  if (n !== undefined && !(Number.isSafeInteger(n) && n > 0)) throw new Error("autoBreakerPerHour 必須是正整數");
+}
+
 /** 定期跑判定 tick（同一實例不重疊）；回傳的 stop 清 timer 並等進行中的 tick 結束。 */
-function startJudgeTimer(app: ControlApi, db: Db, now: Clock, ms: number): () => Promise<void> {
+function startJudgeTimer(app: ControlApi, db: Db, now: Clock, ms: number, opts: TickOpts): () => Promise<void> {
   if (ms <= 0) return async () => {};
   let inflight: Promise<unknown> | undefined;
   const t = setInterval(() => {
-    inflight ??= runJudgeTick(db, now(), app.log)
+    inflight ??= runJudgeTick(db, now(), app.log, opts)
       .catch((err: unknown) => app.log.error({ err: safeErr(err as Parameters<typeof safeErr>[0]) }, "judge tick failed"))
       .finally(() => { inflight = undefined; });
   }, ms);
@@ -204,6 +211,7 @@ function startJudgeTimer(app: ControlApi, db: Db, now: Clock, ms: number): () =>
 }
 
 export async function buildApp(opts: BuildAppOptions = {}): Promise<ControlApi> {
+  assertBreakerLimit(opts.autoBreakerPerHour);
   const idleTimeoutMs = opts.idleTimeoutMs ?? 30 * 60_000;
   const rl = opts.loginRateLimit ?? { maxFailures: 5, windowMs: 60_000 };
   const now = opts.now ?? Date.now;
@@ -214,7 +222,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<ControlApi> 
   allowEmptyJson(app);
   app.decorate("db", db);
   installRouteAudit(app);
-  const stopJudge = startJudgeTimer(app, db, now, opts.judgeIntervalMs ?? 5000);
+  const stopJudge = startJudgeTimer(app, db, now, opts.judgeIntervalMs ?? 5000, { autoBreakerPerHour: opts.autoBreakerPerHour });
   app.addHook("onClose", async () => { await stopJudge(); await db.close(); });
   app.addHook("preHandler", createAuthPreHandler(db, idleTimeoutMs, now));
   registerLogin(app, db, limiter, now);
