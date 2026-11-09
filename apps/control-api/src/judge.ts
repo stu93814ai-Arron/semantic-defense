@@ -2,7 +2,7 @@ import { FLOW_WINDOW_MS, judgeFlows, type FlowMetadataEvent, type FlowThresholds
 import { RETENTION_MS, flowEventsReady, type FlowEventRow } from "@semantic-defense/flow-store/read";
 import type { Db, Queryable } from "./db.js";
 import { loadThresholds, type WarnLog } from "./thresholds.js";
-import { accumulateCase, upsertCaseHit } from "./cases.js";
+import { accumulateCase, raiseCaseMax, upsertCaseHit } from "./cases.js";
 
 /**
  * 成案流程 commit 7：判定 tick（計畫 §1／§2）。讀 flow_events → 依 (sensor, app, src_ip, 5 分鐘窗) 分組重算 → 命中 → 待審。
@@ -12,7 +12,8 @@ import { accumulateCase, upsertCaseHit } from "./cases.js";
  *   另掃 (cursor − 60s, cursor] 的重疊，涵蓋接收時間較早但較晚 commit 的列。
  * - 每組從 flow_events 重讀整組再算：confidence 用全部 flow；ontime_confidence 只用準時 flow（全部遲到 → NULL）。
  *   遲到＝received_at − ts > 5 分鐘。confidence ≥ case 才存命中（case_hits 絕對值 upsert，重掃冪等）；
- *   命中第一次寫入時才累加待審（hit_count +1、max 取大），所以重掃不會重複累加。
+ *   命中第一次寫入時才累加待審（hit_count +1、max 取大），所以重掃不會重複累加；
+ *   重掃（命中已存在）只以 GREATEST 拉高 open 待審的 max（raiseCaseMax）。
  * - 門檻走 loadThresholds（fail-closed）並帶 tick 的 logger：列值不合上下限時 log.warn。
  * - 清除：case_hits 最後更新滿 7 天；已結案 case 的 resolved_at 滿 7 天（計畫 Q18）。
  * 白名單、已上榜（commit 8）與 E3.A 自動上榜（commit 9–11）不在本檔這一步。
@@ -61,6 +62,7 @@ async function judgeGroup(q: Queryable, k: GroupKey, th: FlowThresholds, now: nu
   const { created } = await upsertCaseHit(q, { src_ip: k.src_ip, sensor_id: k.sensor_id, app_id: k.app_id,
     window_start: k.win, confidence: all.confidence, ontime_confidence: ontimeConfidence }, now);
   if (created) await accumulateCase(q, { ip: k.src_ip, confidence: all.confidence, late: ontime.length < rows.length }, now);
+  else await raiseCaseMax(q, k.src_ip, all.confidence, now);
   return true;
 }
 

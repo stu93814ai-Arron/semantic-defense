@@ -152,3 +152,45 @@ describe("buildApp 排程", () => {
     expect(await cursor()).toEqual([{ received_upto: String(T0) }]);
   });
 });
+
+describe("重掃時待審 max 以 GREATEST 更新（A 裁定 11-09）", () => {
+  type Full = { max_confidence: number; hit_count: number; expires_at: string; last_hit_at: string; state: string };
+  const full = async () => (await app.db.query<Full>(
+    "SELECT max_confidence, hit_count, expires_at, last_hit_at, state FROM blacklist_cases")).rows;
+  const IP = "203.0.113.8";
+  const W = T0 - 2 * MIN;
+  const more = (n: number, susp: boolean, receivedAt: number, port0 = 2000) => insertFlowEvents(app.db,
+    Array.from({ length: n }, (_, i) => ({ flow: flow(IP, W, susp ? port0 + i : 443, susp), sensorId: "s-1", receivedAt })));
+
+  it("同一命中重掃分數變高（≈0.69→1.0）→ max 更新；hit_count、expires_at、last_hit_at 不變", async () => {
+    await boot();
+    await more(10, true, T0 - 50_000);
+    await runJudgeTick(app.db, T0);
+    const [before] = await full();
+    expect(before!.max_confidence).toBeLessThan(0.8);
+    await more(20, true, T0 + 10_000, 3000);
+    await runJudgeTick(app.db, T0 + 20_000);
+    expect(await full()).toEqual([{ ...before, max_confidence: 1 }]);
+  });
+
+  it("重掃分數變低（仍 ≥case）→ max 不降；命中明細記新分數", async () => {
+    await boot();
+    await more(30, true, T0 - 50_000);
+    await runJudgeTick(app.db, T0);
+    await more(10, false, T0 + 10_000);
+    await runJudgeTick(app.db, T0 + 20_000);
+    expect((await full()).map((c) => [c.max_confidence, c.hit_count])).toEqual([[1, 1]]);
+    expect((await app.db.query<{ confidence: number }>("SELECT confidence FROM case_hits")).rows[0]!.confidence).toBeLessThan(1);
+  });
+
+  it("案件已不是 open → 重掃不更新，也不開新案", async () => {
+    await boot();
+    await more(10, true, T0 - 50_000);
+    await runJudgeTick(app.db, T0);
+    await app.db.query("UPDATE blacklist_cases SET state = 'rejected', resolved_at = $1", [T0 + 1]);
+    const before = await full();
+    await more(20, true, T0 + 10_000, 3000);
+    await runJudgeTick(app.db, T0 + 20_000);
+    expect(await full()).toEqual(before);
+  });
+});

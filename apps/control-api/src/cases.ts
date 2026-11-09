@@ -59,3 +59,15 @@ export async function upsertCaseHit(q: Queryable, h: CaseHit, now: number): Prom
   );
   return { created: r.rows[0]!.created };
 }
+
+/**
+ * 重掃（命中已存在）時只把同 IP 的 open 待審 max_confidence 以 GREATEST 拉高（A 裁定 11-09）：
+ * hit_count 不加、expires_at 不延長、last_hit_at 不動（只在新命中第一次寫入時更新）；不是 open 或已到期就不更新。
+ */
+export async function raiseCaseMax(q: Queryable, ip: string, confidence: number, now: number): Promise<void> {
+  await q.query(
+    `UPDATE blacklist_cases SET max_confidence = GREATEST(max_confidence, $2)
+     WHERE ip = $1 AND state = 'open' AND expires_at > $3`,
+    [canonicalIp(ip), confidence, now],
+  );
+}
