@@ -1,19 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import type { FlowMetadataEvent } from "@semantic-defense/contracts";
 import { RETENTION_MS, ensureFlowSchema, insertFlow, purgeExpired, recordRejection, type FlowDb } from "../src/write.js";
-import { openSchemaDb } from "./helpers.js";
+import { useSchemaDb } from "./helpers.js";
 
 /** flow-store 直接呼叫（自 sensor-ingest store.test 搬來的護欄＋insertFlow 直測）。獨立 schema，不與其他測試互相清表。 */
-let h: Awaited<ReturnType<typeof openSchemaDb>>;
+const ref = useSchemaDb("flow_store_test", ["DROP TABLE IF EXISTS flow_events", "DROP TABLE IF EXISTS flow_rejections"]);
 let db: FlowDb;
-beforeAll(async () => { h = await openSchemaDb("flow_store_test"); db = h.db; });
-afterAll(async () => { await h?.close(); });
-beforeEach(async () => {
-  await h.exec("DROP TABLE IF EXISTS flow_events");
-  await h.exec("DROP TABLE IF EXISTS flow_rejections");
-  await ensureFlowSchema(db);
-});
+beforeEach(async () => { db = ref.h.db; await ensureFlowSchema(db); });
 
 const T0 = 1_800_000_000_000;
 const flow = (): FlowMetadataEvent => ({

@@ -1,21 +1,17 @@
 import { randomUUID } from "node:crypto";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { ensureFlowSchema, type FlowDb } from "../src/write.js";
-import { openSchemaDb } from "./helpers.js";
+import { useSchemaDb, type SchemaDb } from "./helpers.js";
 
 /**
  * ts_ms slice commit 1（計畫 /workspace/plans/ts-ms-slice-plan.md；A 核准 Q1–Q8）：flow_events.ts_ms 遷移。
  * 舊表＝現行 schema 去掉 ts_ms 欄、flow_ts_ms 函式、flow_events_group_ms 索引（測試不寫 DDL，boundary.test 鎖住）。
  */
-let h: Awaited<ReturnType<typeof openSchemaDb>>;
+const RESET = ["DROP TABLE IF EXISTS flow_events", "DROP TABLE IF EXISTS flow_rejections", "DROP FUNCTION IF EXISTS flow_ts_ms(TEXT)"];
+const ref = useSchemaDb("flow_store_migration", RESET);
+let h: SchemaDb;
 let db: FlowDb;
-beforeAll(async () => { h = await openSchemaDb("flow_store_migration"); db = h.db; });
-afterAll(async () => { await h?.close(); });
-beforeEach(async () => {
-  await h.exec("DROP TABLE IF EXISTS flow_events");
-  await h.exec("DROP TABLE IF EXISTS flow_rejections");
-  await h.exec("DROP FUNCTION IF EXISTS flow_ts_ms(TEXT)");
-});
+beforeEach(() => { h = ref.h; db = h.db; });
 
 const toLegacy = async () => {
   await h.exec("DROP INDEX IF EXISTS flow_events_group_ms");
@@ -57,9 +53,7 @@ describe("ts_ms 遷移（舊表補欄＋回填）", () => {
   it("並行 ensureFlowSchema（新表、舊表各 10 個 × 5 輪）全部成功（advisory xact lock 串行化）", async () => {
     const burst = () => Promise.all(Array.from({ length: 10 }, () => ensureFlowSchema(db)));
     for (let round = 0; round < 5; round += 1) {
-      await h.exec("DROP TABLE IF EXISTS flow_events");
-      await h.exec("DROP TABLE IF EXISTS flow_rejections");
-      await h.exec("DROP FUNCTION IF EXISTS flow_ts_ms(TEXT)");
+      for (const sql of RESET) await h.exec(sql);
       await burst();
       await toLegacy();
       await putRaw(VALID);
