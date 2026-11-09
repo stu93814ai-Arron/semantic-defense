@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ThresholdEditor } from "./ThresholdEditor";
@@ -9,11 +9,7 @@ afterEach(() => {
 });
 
 describe("ThresholdEditor（白名單頁可編輯門檻）", () => {
-  beforeEach(() => {
-    // no-op
-  });
-
-  it("顯示目前 case／auto 並可提交合法值；每次變更顯示稽核提示", async () => {
+  it("顯示 bounds 與目前 case／auto；可提交合法值並顯示稽核提示", async () => {
     const user = userEvent.setup();
     const saves: { case: number; auto: number }[] = [];
     render(
@@ -26,6 +22,8 @@ describe("ThresholdEditor（白名單頁可編輯門檻）", () => {
       />,
     );
     expect(screen.getByTestId("threshold-editor")).toBeTruthy();
+    expect(screen.getByTestId("threshold-bounds").textContent).toMatch(/0\.3/);
+    expect(screen.getByTestId("threshold-bounds").textContent).toMatch(/0\.7/);
     const caseInput = screen.getByTestId("threshold-case") as HTMLInputElement;
     const autoInput = screen.getByTestId("threshold-auto") as HTMLInputElement;
     expect(caseInput.value).toBe("0.5");
@@ -41,7 +39,7 @@ describe("ThresholdEditor（白名單頁可編輯門檻）", () => {
     );
   });
 
-  it("非法值顯示錯誤、不呼叫 onSave", async () => {
+  it("非法值顯示 violation 文案、不呼叫 onSave", async () => {
     const user = userEvent.setup();
     const saves: unknown[] = [];
     render(
@@ -61,7 +59,22 @@ describe("ThresholdEditor（白名單頁可編輯門檻）", () => {
     await user.type(autoInput, "0.5");
     await user.click(screen.getByTestId("threshold-save"));
     expect(saves).toEqual([]);
-    expect(screen.getByTestId("threshold-error").textContent).toMatch(/0/);
+    expect(screen.getByTestId("threshold-error").textContent.length).toBeGreaterThan(0);
+  });
+
+  it("case 低於 0.30 顯示下限文案", async () => {
+    const user = userEvent.setup();
+    render(
+      <ThresholdEditor
+        value={{ case: 0.5, auto: 0.9 }}
+        onSave={() => ({ ok: true as const, notice: "ok" })}
+      />,
+    );
+    const caseInput = screen.getByTestId("threshold-case");
+    await user.clear(caseInput);
+    await user.type(caseInput, "0.2");
+    await user.click(screen.getByTestId("threshold-save"));
+    expect(screen.getByTestId("threshold-error").textContent).toMatch(/0\.3/);
   });
 });
 

@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
+import { THRESHOLD_BOUNDS } from "@semantic-defense/contracts/browser";
 import { validateThresholds, type Thresholds } from "./thresholds";
 
 export type ThresholdSaveResult =
@@ -19,6 +20,7 @@ export function ThresholdEditor({ value, onSave }: Props) {
   const [autoStr, setAutoStr] = useState(String(value.auto));
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const B = THRESHOLD_BOUNDS;
 
   useEffect(() => {
     setCaseStr(String(value.case));
@@ -34,7 +36,7 @@ export function ThresholdEditor({ value, onSave }: Props) {
     const v = validateThresholds(next);
     if (!v.ok) {
       setNotice(null);
-      setError("門檻須滿足 0 ≤ case ≤ auto ≤ 1");
+      setError(v.message);
       return;
     }
     const r = onSave(v.value);
@@ -50,15 +52,19 @@ export function ThresholdEditor({ value, onSave }: Props) {
   return (
     <section className="card" data-testid="threshold-editor">
       <h2>成案／自動上榜門檻</h2>
-      <form onSubmit={onSubmit}>
+      <p data-testid="threshold-bounds" className="muted">
+        成案（case）{B.case.min}–{B.case.max}；自動上榜（auto）{B.auto.min}–{B.auto.max}；且
+        case &lt; auto
+      </p>
+      <form noValidate onSubmit={onSubmit}>
         <label>
           成案門檻（case）
           <input
             data-testid="threshold-case"
             type="number"
             step="any"
-            min={0}
-            max={1}
+            min={B.case.min}
+            max={B.case.max}
             value={caseStr}
             onChange={(ev) => setCaseStr(ev.target.value)}
           />
@@ -69,8 +75,8 @@ export function ThresholdEditor({ value, onSave }: Props) {
             data-testid="threshold-auto"
             type="number"
             step="any"
-            min={0}
-            max={1}
+            min={B.auto.min}
+            max={B.auto.max}
             value={autoStr}
             onChange={(ev) => setAutoStr(ev.target.value)}
           />

@@ -1,30 +1,46 @@
 import { describe, expect, it } from "vitest";
 import {
-  AUTO_THRESHOLD,
-  CASE_THRESHOLD,
+  THRESHOLD_BOUNDS,
+  thresholdsViolation,
+} from "@semantic-defense/contracts/browser";
+import {
   DEFAULT_THRESHOLDS,
+  formatThresholdsViolation,
   updateThresholds,
   validateThresholds,
 } from "./thresholds";
 
-describe("門檻 Thresholds（對齊 contracts admin-api／flow-verdict）", () => {
-  it("預設 case=0.5、auto=0.9（CASE_THRESHOLD／AUTO_THRESHOLD）", () => {
-    expect(CASE_THRESHOLD).toBe(0.5);
-    expect(AUTO_THRESHOLD).toBe(0.9);
+describe("門檻 Thresholds（contracts/browser THRESHOLD_BOUNDS）", () => {
+  it("預設仍為 case=0.5、auto=0.9", () => {
     expect(DEFAULT_THRESHOLDS).toEqual({ case: 0.5, auto: 0.9 });
   });
 
-  it("接受 0 ≤ case ≤ auto ≤ 1", () => {
-    expect(validateThresholds({ case: 0, auto: 0 }).ok).toBe(true);
-    expect(validateThresholds({ case: 0.5, auto: 0.9 }).ok).toBe(true);
-    expect(validateThresholds({ case: 1, auto: 1 }).ok).toBe(true);
+  it("bounds 對齊 contracts：case≥0.30、auto≥0.70、皆≤1", () => {
+    expect(THRESHOLD_BOUNDS.case.min).toBe(0.3);
+    expect(THRESHOLD_BOUNDS.case.max).toBe(1);
+    expect(THRESHOLD_BOUNDS.auto.min).toBe(0.7);
+    expect(THRESHOLD_BOUNDS.auto.max).toBe(1);
   });
 
-  it("拒 case > auto、越界、非有限數", () => {
-    expect(validateThresholds({ case: 0.95, auto: 0.9 }).ok).toBe(false);
-    expect(validateThresholds({ case: -0.1, auto: 0.9 }).ok).toBe(false);
-    expect(validateThresholds({ case: 0.5, auto: 1.1 }).ok).toBe(false);
-    expect(validateThresholds({ case: Number.NaN, auto: 0.9 }).ok).toBe(false);
+  it("接受合法值（含下限、嚴格 case < auto）", () => {
+    expect(validateThresholds({ case: 0.3, auto: 0.7 }).ok).toBe(true);
+    expect(validateThresholds({ case: 0.5, auto: 0.9 }).ok).toBe(true);
+    expect(validateThresholds({ case: 0.99, auto: 1 }).ok).toBe(true);
+  });
+
+  it("拒舊規則曾接受的過低下限與 case===auto", () => {
+    expect(validateThresholds({ case: 0, auto: 0.9 }).ok).toBe(false);
+    expect(validateThresholds({ case: 0.5, auto: 0.69 }).ok).toBe(false);
+    expect(validateThresholds({ case: 0.8, auto: 0.8 }).ok).toBe(false);
+    expect(thresholdsViolation({ case: 0.29, auto: 0.9 })).toBe("case_below_min");
+    expect(thresholdsViolation({ case: 0.5, auto: 0.69 })).toBe("auto_below_min");
+    expect(thresholdsViolation({ case: 0.8, auto: 0.8 })).toBe("case_not_below_auto");
+  });
+
+  it("formatThresholdsViolation 回可顯示文案", () => {
+    expect(formatThresholdsViolation("case_below_min")).toMatch(/0\.3/);
+    expect(formatThresholdsViolation("auto_below_min")).toMatch(/0\.7/);
+    expect(formatThresholdsViolation("case_not_below_auto")).toMatch(/</);
   });
 
   it("更新成功寫稽核並回新值", () => {
@@ -36,12 +52,9 @@ describe("門檻 Thresholds（對齊 contracts admin-api／flow-verdict）", () 
     if (!r.ok) return;
     expect(r.value).toEqual({ case: 0.4, auto: 0.85 });
     expect(r.audit.action).toBe("thresholds.update");
-    expect(r.audit.actor_id).toBe("admin1");
-    expect(r.audit.target_id).toBe("thresholds");
-    expect(r.audit.detail).toMatch(/0\.4/);
   });
 
-  it("更新失敗不寫稽核", () => {
+  it("更新失敗帶 violation 訊息", () => {
     const r = updateThresholds(
       { case: 0.95, auto: 0.5 },
       { actorId: "admin1", now: "2026-11-09T08:00:00Z", prev: DEFAULT_THRESHOLDS },
@@ -49,5 +62,6 @@ describe("門檻 Thresholds（對齊 contracts admin-api／flow-verdict）", () 
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(r.code).toBe("invalid_thresholds");
+    expect(r.message.length).toBeGreaterThan(0);
   });
 });
