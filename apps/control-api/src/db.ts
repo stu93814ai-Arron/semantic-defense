@@ -60,6 +60,18 @@ const SCHEMA_STATEMENTS = [
   created_at BIGINT NOT NULL,
   expires_at BIGINT NULL CHECK (expires_at IS NULL OR expires_at > created_at)
 )`,
+  `CREATE TABLE IF NOT EXISTS blocklist_entries (
+  entry_id UUID PRIMARY KEY,
+  ip TEXT NOT NULL,
+  source TEXT NOT NULL CHECK (source IN ('manual','auto')),
+  confidence DOUBLE PRECISION NOT NULL CHECK (confidence >= 0 AND confidence <= 1),
+  case_id UUID NOT NULL,
+  created_at BIGINT NOT NULL,
+  expires_at BIGINT NOT NULL CHECK (expires_at > created_at),
+  approved_by TEXT NOT NULL,
+  approved_at BIGINT NOT NULL CHECK (approved_at >= created_at AND approved_at <= expires_at),
+  revoked_at BIGINT NULL CHECK (revoked_at IS NULL OR revoked_at >= created_at)
+)`,
   `CREATE TABLE IF NOT EXISTS audit_events (
   id BIGSERIAL PRIMARY KEY,
   action TEXT NOT NULL,

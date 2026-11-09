@@ -10,6 +10,7 @@ import { registerSensorTokenRoutes } from "./sensor-tokens.js";
 import { registerAuditRoute } from "./audit.js";
 import { registerThresholdRoutes } from "./thresholds.js";
 import { registerWhitelistRoutes } from "./whitelist.js";
+import { registerBlacklistRoutes } from "./blacklist.js";
 
 export type BuildAppOptions = {
   idleTimeoutMs?: number;
@@ -201,6 +202,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<ControlApi> 
   registerAuditRoute(app, db);
   registerThresholdRoutes(app, db, now);
   registerWhitelistRoutes(app, db, now);
+  registerBlacklistRoutes(app, db, now);
   app.setNotFoundHandler((_req, reply) => reply.code(404).send({ error: "Not Found" }));
   if (opts.beforeReady) await opts.beforeReady(app);
   if (opts.management) {

@@ -19,7 +19,7 @@ export async function seedPhase2Fixtures(app: SeedApp): Promise<void> {
   await app.db.query("SELECT pg_advisory_lock($1)", [SEED_LOCK]);
   try {
     await app.db.exec(
-      "TRUNCATE TABLE audit_events, thresholds, allowlist_entries, sensor_tokens, sessions, apps, users, login_failures RESTART IDENTITY CASCADE",
+      "TRUNCATE TABLE audit_events, thresholds, allowlist_entries, blocklist_entries, sensor_tokens, sessions, apps, users, login_failures RESTART IDENTITY CASCADE",
     );
     const users: [string, string, Role, string?, string?][] = [
       ["operator1", "pass-operator-1", "operator"],
