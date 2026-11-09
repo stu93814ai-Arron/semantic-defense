@@ -18,6 +18,6 @@ export async function truncatePhase2Tables(db: {
   exec(sql: string): Promise<unknown>;
 }): Promise<void> {
   await db.exec(
-    "TRUNCATE TABLE audit_events, thresholds, allowlist_entries, blocklist_entries, sensor_tokens, sessions, apps, users RESTART IDENTITY CASCADE",
+    "TRUNCATE TABLE audit_events, thresholds, allowlist_entries, blocklist_entries, blacklist_cases, case_hits, sensor_tokens, sessions, apps, users RESTART IDENTITY CASCADE",
   );
 }

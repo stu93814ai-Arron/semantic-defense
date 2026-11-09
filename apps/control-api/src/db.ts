@@ -76,6 +76,34 @@ const SCHEMA_STATEMENTS = [
   // ended_at：只放 DB、不進契約（過期 sweep 設 expires_at；撤回設撤回時間）。同 IP 至多一筆 ended_at IS NULL。
   // 註：IF NOT EXISTS 不會幫舊表加 ended_at 欄；本階段不做 migration。
   "CREATE UNIQUE INDEX IF NOT EXISTS blocklist_one_active ON blocklist_entries (ip) WHERE ended_at IS NULL",
+  // 成案流程 commit 6（計畫 §5）：待審與命中明細。註：IF NOT EXISTS 不會改舊表；本階段不做 migration。
+  `CREATE TABLE IF NOT EXISTS blacklist_cases (
+  case_id UUID PRIMARY KEY,
+  ip TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('open','approved','rejected','expired','auto_listed')),
+  max_confidence DOUBLE PRECISION NOT NULL CHECK (max_confidence >= 0 AND max_confidence <= 1),
+  hit_count INTEGER NOT NULL CHECK (hit_count >= 1),
+  has_late BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at BIGINT NOT NULL,
+  expires_at BIGINT NOT NULL CHECK (expires_at = created_at + 86400000),
+  last_hit_at BIGINT NOT NULL CHECK (last_hit_at >= created_at),
+  resolved_by TEXT NULL,
+  resolved_at BIGINT NULL,
+  CHECK ((state = 'open') = (resolved_at IS NULL))
+)`,
+  "CREATE UNIQUE INDEX IF NOT EXISTS blacklist_cases_one_open ON blacklist_cases (ip) WHERE state = 'open'",
+  `CREATE TABLE IF NOT EXISTS case_hits (
+  src_ip TEXT NOT NULL,
+  sensor_id TEXT NOT NULL,
+  app_id TEXT NOT NULL,
+  window_start BIGINT NOT NULL,
+  confidence DOUBLE PRECISION NOT NULL,
+  ontime_confidence DOUBLE PRECISION NULL,
+  first_seen_at BIGINT NOT NULL,
+  updated_at BIGINT NOT NULL,
+  PRIMARY KEY (src_ip, sensor_id, app_id, window_start)
+)`,
+  "CREATE INDEX IF NOT EXISTS case_hits_ip_window ON case_hits (src_ip, window_start)",
   `CREATE TABLE IF NOT EXISTS audit_events (
   id BIGSERIAL PRIMARY KEY,
   action TEXT NOT NULL,
