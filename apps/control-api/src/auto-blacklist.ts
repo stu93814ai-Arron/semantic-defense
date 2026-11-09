@@ -15,6 +15,7 @@ import { insertActiveBlocklistEntry } from "./blocklist-store.js";
  * 4. 經 insertActiveBlocklistEntry 寫入（同 IP 已有生效列 → already_listed：不延長、不寫稽核）；
  *    黑名單項目 approved_by=system:auto、created_at=approved_at=now、expires_at=now+24h
  *    與 blacklist.auto_list 稽核（信心、依據 case_id、時間）同一 tx。
+ * now：呼叫端必須傳 buildApp 注入的 clock（與撤回同一個；資安殘留 5），不得自行 Date.now()。
  */
 export const AUTO_LIST_TTL_MS = 24 * 60 * 60 * 1000;
 export type AutoListInput = { ip: string; confidence: number; case_id: string };

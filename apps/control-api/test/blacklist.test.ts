@@ -24,12 +24,12 @@ async function as(username: string, password: string): Promise<string> {
   return r.cookie!;
 }
 const op = () => as("operator1", "pass-operator-1");
-async function seedEntry(ip = "198.51.100.1"): Promise<string> {
+async function seedEntry(ip = "198.51.100.1", created = CREATED): Promise<string> {
   const id = randomUUID();
   await app.db.query(
     `INSERT INTO blocklist_entries (entry_id, ip, source, confidence, case_id, created_at, expires_at, approved_by, approved_at, revoked_at)
      VALUES ($1,$2,'auto',0.95,$3,$4,$5,'system:auto',$4,NULL)`,
-    [id, ip, randomUUID(), CREATED, CREATED + 24 * 3600_000],
+    [id, ip, randomUUID(), created, created + 24 * 3600_000],
   );
   return id;
 }
@@ -60,6 +60,16 @@ describe("黑名單讀取／撤回（operator）", () => {
     expect(r.json()).toMatchObject({ entry_id: id, revoked_at: new Date(NOW).toISOString() });
     expect((await revoke(c, id)).statusCode).toBe(409);
     expect((await audits()).map((a) => [a.action, a.actor, a.detail.entry_id])).toEqual([["blacklist.revoke", "operator1", id]]);
+  });
+
+  it("時鐘護欄（資安殘留 5）：created_at 在 app 時鐘之後的項目撤回 → 409 clock_skew，不撞 CHECK 回 500、不寫稽核、不改列", async () => {
+    await boot();
+    const id = await seedEntry("198.51.100.2", NOW + 3600_000);
+    const r = await revoke(await op(), id);
+    expect([r.statusCode, r.json()]).toEqual([409, { error: "clock_skew" }]);
+    expect(await audits()).toEqual([]);
+    expect((await app.db.query("SELECT revoked_at, ended_at FROM blocklist_entries WHERE entry_id = $1", [id])).rows)
+      .toEqual([{ revoked_at: null, ended_at: null }]);
   });
 
   it("兩人同時撤回：只有一個 200、只留一筆稽核", async () => {

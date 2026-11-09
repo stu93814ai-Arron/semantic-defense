@@ -9,6 +9,8 @@ import type { Role } from "./auth.js";
  * - 時間以 epoch ms 存；回應轉 RFC3339，形狀＝contracts 黑名單項目。
  * - 撤回：revoked_at IS NULL 才更新（條件式 UPDATE 序列化並行；兩人同時只一個成功），與 blacklist.revoke 稽核同一 Db.tx。
  *   已撤回 → 409、不存在 → 404，皆不寫稽核。撤回同時設 ended_at（已 sweep 者保留原值），之後同 IP 可再上榜。
+ * - 時鐘（資安殘留 5）：撤回時間取 buildApp 注入的 now()，與 auto 寫入同一個 clock（auto 由呼叫端傳入 app 的 now()）。
+ *   撤回時間早於 created_at → 409 {error:"clock_skew"}，不寫稽核、不改列（否則會撞 revoked_at／ended_at 的 CHECK 變 500）。
  */
 const OPERATOR: Role[] = ["operator"];
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -40,13 +42,15 @@ export function registerBlacklistRoutes(app: FastifyInstance, db: Db, now: () =>
     const out = await db.tx(async (q) => {
       const r = await q.query<BlocklistRow>(
         `UPDATE blocklist_entries SET revoked_at = $2, ended_at = COALESCE(ended_at, $2)
-         WHERE entry_id = $1 AND revoked_at IS NULL RETURNING ${BLOCKLIST_COLS}`,
+         WHERE entry_id = $1 AND revoked_at IS NULL AND created_at <= $2 RETURNING ${BLOCKLIST_COLS}`,
         [id, at],
       );
       const row = r.rows[0];
       if (!row) {
-        const exists = await q.query("SELECT 1 FROM blocklist_entries WHERE entry_id = $1", [id]);
-        return exists.rows.length ? (409 as const) : (404 as const);
+        // 0 列：不存在 404；已撤回 409；未撤回卻沒更新＝撤回時間早於 created_at（時鐘不一致）→ 409 clock_skew，不撞 CHECK
+        const cur = await q.query<{ revoked_at: string | null }>("SELECT revoked_at FROM blocklist_entries WHERE entry_id = $1", [id]);
+        if (!cur.rows[0]) return 404 as const;
+        return cur.rows[0].revoked_at === null ? ("clock_skew" as const) : (409 as const);
       }
       const e = toBlocklistEntry(row);
       await writeAudit(q, { action: "blacklist.revoke", actor: req.user!.username, sensor_id: null, at,
@@ -55,6 +59,7 @@ export function registerBlacklistRoutes(app: FastifyInstance, db: Db, now: () =>
     });
     if (out === 404) return reply.code(404).send({ error: "查無黑名單項目" });
     if (out === 409) return reply.code(409).send({ error: "已撤回" });
+    if (out === "clock_skew") return reply.code(409).send({ error: "clock_skew" });
     return out;
   });
 }
