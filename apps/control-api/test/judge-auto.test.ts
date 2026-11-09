@@ -16,7 +16,7 @@ import { AUTO_LOCK } from "../src/auto-breaker.js";
 let app: ControlApi;
 afterEach(async () => { if (app) await app.close(); });
 
-const IP = "203.0.113.20";
+const IP = "64.0.113.20";
 const CIDR = `${IP}/32`;
 async function boot(tokens: Record<string, string[]> = { "s-1": ["app-1", "app-2"], "s-2": ["app-1", "app-2"] },
   opts: Parameters<typeof bootJudgeApp>[0] = {}) {
@@ -122,7 +122,7 @@ describe("E3.A 與白名單", () => {
 
   it("白名單無案路徑：E3.A 成立 → 不開案、不上榜，auto_suppressed{allowlist, case_id:null} 一筆；重掃不重寫", async () => {
     await boot();
-    await allow("203.0.113.0/24");
+    await allow("64.0.113.0/24");
     await three(["app-1", "app-2", "app-1"]);
     await tick();
     await hit({ at: T0 - 5 * MIN, app: "app-1", n: 5, port0: 5000 });
@@ -134,7 +134,7 @@ describe("E3.A 與白名單", () => {
 
   it("白名單無案路徑：E3.A 不成立（只有 2 次）→ 不寫 auto_suppressed", async () => {
     await boot();
-    await allow("203.0.113.0/24");
+    await allow("64.0.113.0/24");
     await hit({ at: T0 - 15 * MIN, app: "app-1" });
     await hit({ at: T0 - 5 * MIN, app: "app-2" });
     await tick();
@@ -145,7 +145,7 @@ describe("E3.A 與白名單", () => {
     await boot();
     await three(["app-1", "app-2", "app-1"]);
     let calls = 0;
-    await tick(T0, { beforeAutoList: async () => { calls += 1; await allow("203.0.113.0/24"); } });
+    await tick(T0, { beforeAutoList: async () => { calls += 1; await allow("64.0.113.0/24"); } });
     expect(calls).toBe(1);
     expect(await listed()).toEqual([]);
     const [c] = await kases();
@@ -156,7 +156,7 @@ describe("E3.A 與白名單", () => {
 
   it("autoListInTx 順序（A 裁定 11-09 第 2 點）：白名單先於 below_auto → 白名單內且信心未達 auto 回 allowlisted", async () => {
     await boot();
-    await allow("203.0.113.0/24");
+    await allow("64.0.113.0/24");
     expect(await writeAutoBlocklistEntry(app.db, { ip: IP, confidence: 0.5, case_id: randomUUID() }, T0)).toEqual({ status: "allowlisted" });
   });
 });
@@ -201,7 +201,7 @@ describe("E3.A 冷卻（同一 canonical IP 撤回後 2 小時內不自動上榜
 
   it("涵蓋該 IP 的 /24 剛撤回不算 → 照常上榜", async () => {
     await boot();
-    await revoked("203.0.113.0/24", "manual", 30 * MIN);
+    await revoked("64.0.113.0/24", "manual", 30 * MIN);
     await three(["app-1", "app-2", "app-1"]);
     await tick();
     expect(await active()).toEqual([{ ip: CIDR }]);
@@ -218,7 +218,7 @@ describe("E3.A 冷卻（同一 canonical IP 撤回後 2 小時內不自動上榜
 /** 熔斷測試共用：近 1 小時內已有 n 筆 auto 項目（SQL 直塞，各自不同 IP）。 */
 const autos = (n: number, at = T0 - 30 * MIN) => app.db.query(
   `INSERT INTO blocklist_entries (entry_id, ip, source, confidence, case_id, created_at, expires_at, approved_by, approved_at)
-   SELECT gen_random_uuid(), '198.51.100.' || i || '/32', 'auto', 1, gen_random_uuid(), $2::bigint, $2::bigint + 86400000, 'system:auto', $2::bigint
+   SELECT gen_random_uuid(), '64.51.100.' || i || '/32', 'auto', 1, gen_random_uuid(), $2::bigint, $2::bigint + 86400000, 'system:auto', $2::bigint
    FROM generate_series(1, $1::int) AS i`, [n, at]);
 const attempt = (ip: string, at = T0) => app.db.tx((q) =>
   autoListInTx(q, { ip, confidence: 1, case_id: randomUUID() }, at, { gates: { breakerPerHour: 50 } }));
@@ -230,9 +230,9 @@ describe("E3.A 熔斷（1 小時內 source=auto ≥ N 筆 → 退回人工審核
   it("第 50 筆上榜；第 51 筆擋下並寫一次 auto_breaker_open；第 52 筆不重寫 open", async () => {
     await boot();
     await autos(49);
-    expect((await attempt("203.0.113.50")).status).toBe("listed");
-    expect((await attempt("203.0.113.51")).status).toBe("breaker");
-    expect((await attempt("203.0.113.52")).status).toBe("breaker");
+    expect((await attempt("64.0.113.50")).status).toBe("listed");
+    expect((await attempt("64.0.113.51")).status).toBe("breaker");
+    expect((await attempt("64.0.113.52")).status).toBe("breaker");
     expect(await audits("blacklist.auto_breaker_open")).toEqual([{ actor: "system:auto", sensor_id: null, detail: W }]);
     expect(await opened()).toEqual([{ opened_at: String(T0) }]);
   });
@@ -254,20 +254,20 @@ describe("E3.A 熔斷（1 小時內 source=auto ≥ N 筆 → 退回人工審核
   it("視窗過了：tick 在 AUTO_LOCK 下補判一次 → auto_breaker_close 只寫一次；之後照常上榜", async () => {
     await boot();
     await autos(50);
-    expect((await attempt("203.0.113.51")).status).toBe("breaker");
+    expect((await attempt("64.0.113.51")).status).toBe("breaker");
     await tick(T0 + 31 * MIN);
     await tick(T0 + 32 * MIN);
     expect(await audits("blacklist.auto_breaker_close")).toEqual([{ actor: "system:auto", sensor_id: null, detail: { count: 0, limit: 50 } }]);
     expect(await opened()).toEqual([{ opened_at: null }]);
-    expect((await attempt("203.0.113.53", T0 + 33 * MIN)).status).toBe("listed");
+    expect((await attempt("64.0.113.53", T0 + 33 * MIN)).status).toBe("listed");
     expect(await audits("blacklist.auto_breaker_close")).toHaveLength(1);
   });
 
   it("autoListInTx 嘗試時也判恢復：開著但已低於 N → 寫 close 一次並上榜", async () => {
     await boot();
     await autos(50);
-    expect((await attempt("203.0.113.51")).status).toBe("breaker");
-    expect((await attempt("203.0.113.52", T0 + 31 * MIN)).status).toBe("listed");
+    expect((await attempt("64.0.113.51")).status).toBe("breaker");
+    expect((await attempt("64.0.113.52", T0 + 31 * MIN)).status).toBe("listed");
     expect((await audits("blacklist.auto_breaker_close")).map((a) => a.detail)).toEqual([{ count: 0, limit: 50 }]);
   });
 
@@ -282,13 +282,13 @@ describe("E3.A 熔斷：AUTO_LOCK 序列化與 auto_breaker 單列", () => {
     const waiting = async () => (await app.db.query<{ n: string }>(
       "SELECT count(*) AS n FROM pg_locks WHERE locktype = 'advisory' AND NOT granted")).rows[0]!.n;
     const a = app.db.tx(async (q) => {
-      const r = await autoListInTx(q, { ip: "203.0.113.60", confidence: 1, case_id: randomUUID() }, T0, { gates: { breakerPerHour: 50 } });
+      const r = await autoListInTx(q, { ip: "64.0.113.60", confidence: 1, case_id: randomUUID() }, T0, { gates: { breakerPerHour: 50 } });
       firstDone();
       for (let i = 0; i < 100 && (await waiting()) === "0"; i += 1) await new Promise((res) => setTimeout(res, 20));
       return r;
     });
     await gate;
-    const b = attempt("203.0.113.61");
+    const b = attempt("64.0.113.61");
     expect([(await a).status, (await b).status]).toEqual(["listed", "breaker"]);
   });
 
@@ -347,7 +347,7 @@ describe("白名單 SHARE 鎖與鎖順序（A 覆核）", () => {
     let waiter: number | null = null;
     let bg: Promise<void> = Promise.resolve();
     await tick(T0, { beforeAutoList: async () => {
-      const hold = await holdAllowlistInsert("203.0.113.0/24", T0 - DAY);
+      const hold = await holdAllowlistInsert("64.0.113.0/24", T0 - DAY);
       bg = (async () => { waiter = await waitShareWaiter(app.db); await hold.commit(); })();
     } });
     await bg;
@@ -361,7 +361,7 @@ describe("白名單 SHARE 鎖與鎖順序（A 覆核）", () => {
     await autos(50, T0 - 90 * MIN);
     await app.db.query("UPDATE auto_breaker SET opened_at = $1 WHERE id", [T0 - 70 * MIN]);
     await three(["app-1", "app-2", "app-1"]);
-    const hold = await holdAllowlistInsert("192.0.2.0/24", T0 - DAY);
+    const hold = await holdAllowlistInsert("64.0.2.0/24", T0 - DAY);
     const running = tick();
     const pid = await waitShareWaiter(app.db);
     const heldAuto = pid !== null && (await holdsAdvisory(app.db, pid, AUTO_LOCK));
@@ -381,7 +381,7 @@ describe("auto_suppressed 去重：同一 (ip, reason) 每小時最多一筆，�
   it("白名單無案：1 小時內第二次 E3.A 成立不再寫、log {deduped:1} 不帶 IP；滿 1 小時後再寫", async () => {
     await boot();
     lines = [];
-    await app.db.query("INSERT INTO allowlist_entries VALUES ($1, '203.0.113.0/24', 'office', 'admin1', $2, NULL)", [randomUUID(), T0 - DAY]);
+    await app.db.query("INSERT INTO allowlist_entries VALUES ($1, '64.0.113.0/24', 'office', 'admin1', $2, NULL)", [randomUUID(), T0 - DAY]);
     await three(["app-1", "app-2", "app-1"]);
     await runJudgeTick(app.db, T0, log);
     await more(T0);
@@ -389,7 +389,7 @@ describe("auto_suppressed 去重：同一 (ip, reason) 每小時最多一筆，�
     expect(await suppressed()).toEqual(["allowlist"]);
     expect(lines.map((l) => JSON.parse(l) as object)).toEqual([
       { deduped: 1, msg: "judge tick deduped auto_suppressed audits (1 per ip+reason per hour)" }]);
-    expect(lines.join("\n")).not.toContain("203.0.113");
+    expect(lines.join("\n")).not.toContain("64.0.113");
     for (const off of [40, 50, 60]) await hit({ at: T0 + off * MIN, app: off === 50 ? "app-2" : "app-1" });
     await runJudgeTick(app.db, T0 + 66 * MIN, log);
     expect(await suppressed()).toEqual(["allowlist", "allowlist"]);
@@ -415,12 +415,12 @@ describe("熔斷滑動視窗邊界（created_at > now − 1h）", () => {
   it("50 筆 auto 恰好建立於 1 小時前 → 不計入，第 51 次嘗試照常上榜", async () => {
     await boot();
     await autos(50, T0 - 60 * MIN);
-    expect((await attempt("203.0.113.70")).status).toBe("listed");
+    expect((await attempt("64.0.113.70")).status).toBe("listed");
   });
 
   it("50 筆 auto 建立於 1 小時前 + 1ms → 計入，第 51 次嘗試被熔斷", async () => {
     await boot();
     await autos(50, T0 - 60 * MIN + 1);
-    expect((await attempt("203.0.113.71")).status).toBe("breaker");
+    expect((await attempt("64.0.113.71")).status).toBe("breaker");
   });
 });

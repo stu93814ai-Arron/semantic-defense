@@ -170,7 +170,7 @@ describe("門檻 fail-closed 在判定路徑寫 log.warn（資安 R3 補缺）",
   it("自動上榜路徑：傳入 logger 時同樣寫 warn", async () => {
     await boot();
     await legacyThresholds();
-    const r = await writeAutoBlocklistEntry(app.db, { ip: "203.0.113.9", confidence: 0.5, case_id: randomUUID() }, T0, log);
+    const r = await writeAutoBlocklistEntry(app.db, { ip: "64.0.113.9", confidence: 0.5, case_id: randomUUID() }, T0, log);
     expect(r).toEqual({ status: "below_auto_threshold" });
     expect(lines.filter((l) => l.includes("violation"))).toHaveLength(1);
   });

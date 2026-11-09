@@ -37,9 +37,9 @@ describe("loadThresholds fail-closed", () => {
   it("舊表 {0,0} → 判定用 0.50／0.90；0.01、0.89 不上榜，0.90 上榜；DB 值不被改寫", async () => {
     await bootWithLegacyRow();
     expect(await loadThresholds(app.db)).toEqual({ case: 0.5, auto: 0.9 });
-    expect(await auto(0.01, "203.0.113.1")).toEqual({ status: "below_auto_threshold" });
-    expect(await auto(0.89, "203.0.113.2")).toEqual({ status: "below_auto_threshold" });
-    expect((await auto(0.9, "203.0.113.3")).status).toBe("listed");
+    expect(await auto(0.01, "64.0.113.1")).toEqual({ status: "below_auto_threshold" });
+    expect(await auto(0.89, "64.0.113.2")).toEqual({ status: "below_auto_threshold" });
+    expect((await auto(0.9, "64.0.113.3")).status).toBe("listed");
     expect((await app.db.query("SELECT case_threshold, auto_threshold FROM thresholds")).rows)
       .toEqual([{ case_threshold: 0, auto_threshold: 0 }]);
   });
