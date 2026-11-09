@@ -3,7 +3,7 @@ import { isIP } from "node:net";
 /**
  * 未授權來源 IP 速率限制（記憶體內、每 IP）。
  * - 僅計入認證失敗（401：缺／壞格式／找不到／錯 secret）
- * - 403（allowlist）與成功不計
+ * - 403（allowlist）與成功不計；有效 token 的請求完全不查限流（guard 先驗 Bearer）
  * - 來源 IP＝socket.remoteAddress（不讀 X-Forwarded-For）
  * - 約 AUTH_FAIL_LIMIT／AUTH_FAIL_WINDOW_MS → 429；窗口過後恢復 401
  * - 計數鍵（authFailKey）：IPv4 以 /32；IPv4-mapped IPv6（::ffff:a.b.c.d）視同 IPv4；其餘 IPv6 以 /64（大小寫、展開寫法皆正規化）

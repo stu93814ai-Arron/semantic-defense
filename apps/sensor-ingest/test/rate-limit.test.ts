@@ -59,6 +59,58 @@ describe("未授權來源 IP 速率限制", () => {
   });
 });
 
+describe("有效 token 的感測器不受來源限流影響（先驗 Bearer，再查限流）", () => {
+  const blockIp = async (app: Awaited<ReturnType<typeof buildIngest>>, ip: string) => {
+    for (let i = 0; i < AUTH_FAIL_LIMIT; i++) expect((await get(app, ip)).statusCode).toBe(401);
+    expect((await get(app, ip)).statusCode).toBe(429);
+  };
+
+  it("IPv4：攻擊者在同一 IP 打到 429 後，有效 token 從同一 IP 仍 200；無效 token 仍 429", async () => {
+    const app = await buildIngest({ db, requireHttps: false, now: () => T0 });
+    const ok = { authorization: `Bearer ${await seedToken(db, ["10.0.0.0/8"])}` };
+    await blockIp(app, "10.0.0.7");
+    expect((await get(app, "10.0.0.7", ok)).statusCode).toBe(200);
+    expect((await get(app, "10.0.0.7")).statusCode).toBe(429);
+    expect((await get(app, "10.0.0.7", {})).statusCode).toBe(429);
+    await app.close();
+  });
+
+  it("IPv6：攻擊者在同一 /64 打到 429 後，同 /64 的有效感測器 POST /v1/flows 仍 201；無效 token 仍 429", async () => {
+    const app = await buildIngest({ db, requireHttps: false, now: () => T0 });
+    const ok = { authorization: `Bearer ${await seedToken(db, ["2001:db8:1:2::/64"])}` };
+    await blockIp(app, "2001:db8:1:2::bad");
+    expect((await get(app, "2001:db8:1:2::5", ok)).statusCode).toBe(200);
+    const flow = await app.inject({
+      method: "POST", url: "/v1/flows", remoteAddress: "2001:db8:1:2::5", headers: ok,
+      payload: { flow_id: randomUUID(), app_id: "app-1", ts: "2026-11-05T12:00:00Z", src_ip: "203.0.113.5", dst_ip: "10.0.0.1",
+        src_port: 51234, dst_port: 443, protocol: "tcp", bytes_in: 10, bytes_out: 20, packets: 3, duration_ms: 5 },
+    });
+    expect(flow.statusCode).toBe(201);
+    expect((await get(app, "2001:db8:1:2::bad")).statusCode).toBe(429);
+    await app.close();
+  });
+
+  it("有效 token 的成功請求不計數：成功多次後，無效 token 仍要到第 31 次才 429", async () => {
+    const app = await buildIngest({ db, requireHttps: false, now: () => T0 });
+    const ok = { authorization: `Bearer ${await seedToken(db, ["10.0.0.0/8"])}` };
+    for (let i = 0; i < 10; i++) expect((await get(app, "10.0.0.8")).statusCode).toBe(401);
+    for (let i = 0; i < 50; i++) expect((await get(app, "10.0.0.8", ok)).statusCode).toBe(200);
+    for (let i = 10; i < AUTH_FAIL_LIMIT; i++) expect((await get(app, "10.0.0.8")).statusCode).toBe(401);
+    expect((await get(app, "10.0.0.8")).statusCode).toBe(429);
+    await app.close();
+  });
+
+  it("有效 token 但來源不在 allowlist：維持 403、不查也不計限流（封鎖中的 IP 也是 403）", async () => {
+    const app = await buildIngest({ db, requireHttps: false, now: () => T0 });
+    const ok = { authorization: `Bearer ${await seedToken(db, ["10.0.0.0/8"])}` };
+    await blockIp(app, "192.168.0.7");
+    expect((await get(app, "192.168.0.7", ok)).statusCode).toBe(403);
+    for (let i = 0; i < 40; i++) expect((await get(app, "192.168.0.8", ok)).statusCode).toBe(403);
+    expect((await get(app, "192.168.0.8")).statusCode).toBe(401);
+    await app.close();
+  });
+});
+
 describe("失敗計數 Map 上限與過期清理", () => {
   const MAX = 4;
   const block = (l: ReturnType<typeof createAuthFailLimiter>, ip: string, now: number) => {
