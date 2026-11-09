@@ -3,6 +3,11 @@ import { filterListed, withdrawListed } from "./listed";
 import { ipOnAllowlist } from "./allowlistMatch";
 import { approvePending, isPendingExpired, rejectPending } from "./pending";
 import { isPendingConfidence } from "./pendingBand";
+import {
+  DEFAULT_THRESHOLDS,
+  updateThresholds,
+  type Thresholds,
+} from "./thresholds";
 import type {
   AllowlistItem,
   AuditRecord,
@@ -53,6 +58,7 @@ let allowlist: AllowlistItem[] = [];
 let audits: AuditRecord[] = [];
 let resolved = new Set<string>();
 let backendUnreachable = false;
+let thresholds: Thresholds = { ...DEFAULT_THRESHOLDS };
 
 function nowIso(): string {
   return new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
@@ -76,7 +82,7 @@ export function listPending(): PendingCandidate[] {
   }
   return pending.filter((p) => {
     if (resolved.has(p.case_id)) return false;
-    if (!isPendingConfidence(p.confidence)) return false;
+    if (!isPendingConfidence(p.confidence, thresholds)) return false;
     if (ipOnAllowlist(p.ip, allowlist)) return false;
     return true;
   });
@@ -190,6 +196,28 @@ export function reviewRemoveAllowlist(entryId: string, actorId: string) {
   return result;
 }
 
+export function getThresholds(): Thresholds {
+  return { ...thresholds };
+}
+
+/**
+ * 更新門檻並寫稽核（每次變更）。僅接 demoStore；授權由 A 組 API 執行。
+ */
+export function reviewUpdateThresholds(
+  input: { case: number; auto: number },
+  actorId: string,
+) {
+  const result = updateThresholds(input, {
+    actorId,
+    now: nowIso(),
+    prev: thresholds,
+  });
+  if (!result.ok) return result;
+  thresholds = result.value;
+  audits = [...audits, result.audit];
+  return result;
+}
+
 /** 測試用：清空記憶體狀態（頁面預設空狀態）。 */
 export function resetDemoStoreForTests(): void {
   pending = [];
@@ -198,6 +226,7 @@ export function resetDemoStoreForTests(): void {
   audits = [];
   resolved = new Set();
   backendUnreachable = false;
+  thresholds = { ...DEFAULT_THRESHOLDS };
 }
 
 /** 測試用：填入示範待審／上榜資料。 */
@@ -208,6 +237,7 @@ export function seedFixturesForTests(): void {
   audits = [];
   resolved = new Set();
   backendUnreachable = false;
+  thresholds = { ...DEFAULT_THRESHOLDS };
 }
 
 /** 測試用：注入待審列（含到期／帶外信心等）。 */

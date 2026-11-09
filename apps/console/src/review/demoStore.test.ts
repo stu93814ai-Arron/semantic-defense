@@ -1,14 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  getThresholds,
   injectPendingForTests,
   isBackendUnreachable,
   listActive,
   listAllowlist,
+  listAudits,
   listPending,
   resetDemoStoreForTests,
   reviewAddAllowlist,
   reviewApprove,
   reviewReject,
+  reviewUpdateThresholds,
   reviewWithdraw,
   seedFixturesForTests,
   setBackendUnreachable,
@@ -89,5 +92,44 @@ describe("demoStore 待審信心帶過濾", () => {
     ]);
     const ips = listPending().map((p) => p.ip);
     expect(ips).toEqual(["198.51.100.11"]);
+  });
+});
+
+describe("demoStore 門檻 get／set（僅 demo，寫稽核）", () => {
+  it("預設 getThresholds 為 case 0.5／auto 0.9", () => {
+    expect(getThresholds()).toEqual({ case: 0.5, auto: 0.9 });
+  });
+
+  it("reviewUpdateThresholds 成功後 listPending 用新帶；並寫稽核", () => {
+    injectPendingForTests([
+      {
+        ip: "198.51.100.20",
+        confidence: 0.6,
+        case_id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        created_at: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
+      },
+      {
+        ip: "198.51.100.21",
+        confidence: 0.75,
+        case_id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+        created_at: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
+      },
+    ]);
+    expect(listPending().map((p) => p.ip)).toEqual([
+      "198.51.100.20",
+      "198.51.100.21",
+    ]);
+    const r = reviewUpdateThresholds({ case: 0.7, auto: 0.95 }, "admin1");
+    expect(r.ok).toBe(true);
+    expect(getThresholds()).toEqual({ case: 0.7, auto: 0.95 });
+    expect(listPending().map((p) => p.ip)).toEqual(["198.51.100.21"]);
+    expect(listAudits().some((a) => a.action === "thresholds.update")).toBe(true);
+  });
+
+  it("非法門檻拒絕且不變更", () => {
+    const before = getThresholds();
+    const r = reviewUpdateThresholds({ case: 0.95, auto: 0.5 }, "admin1");
+    expect(r.ok).toBe(false);
+    expect(getThresholds()).toEqual(before);
   });
 });
