@@ -1,6 +1,8 @@
 import { addAllowlist, removeAllowlist } from "./allowlistForm";
 import { filterListed, withdrawListed } from "./listed";
-import { approvePending, rejectPending } from "./pending";
+import { ipOnAllowlist } from "./allowlistMatch";
+import { approvePending, isPendingExpired, rejectPending } from "./pending";
+import { isPendingConfidence } from "./pendingBand";
 import type {
   AllowlistItem,
   AuditRecord,
@@ -50,16 +52,38 @@ let listed: ListedEntry[] = [];
 let allowlist: AllowlistItem[] = [];
 let audits: AuditRecord[] = [];
 let resolved = new Set<string>();
+let backendUnreachable = false;
 
 function nowIso(): string {
   return new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
 }
 
+export function setBackendUnreachable(value: boolean): void {
+  backendUnreachable = value;
+}
+
+export function isBackendUnreachable(): boolean {
+  return backendUnreachable;
+}
+
+/**
+ * 待審清單：信心帶內、未解決、不在白名單。
+ * 已到期仍回傳（畫面上標 already_expired），不從清單消失。
+ */
 export function listPending(): PendingCandidate[] {
-  return pending.filter((p) => !resolved.has(p.case_id));
+  if (backendUnreachable) {
+    return [];
+  }
+  return pending.filter((p) => {
+    if (resolved.has(p.case_id)) return false;
+    if (!isPendingConfidence(p.confidence)) return false;
+    if (ipOnAllowlist(p.ip, allowlist)) return false;
+    return true;
+  });
 }
 
 export function listActive(filter: SourceFilter = "all"): ListedEntry[] {
+  if (backendUnreachable) return [];
   return filterListed(listed, filter, nowIso());
 }
 
@@ -72,6 +96,13 @@ export function listAudits(): AuditRecord[] {
 }
 
 export function reviewApprove(caseId: string, actorId: string) {
+  if (backendUnreachable) {
+    return {
+      ok: false as const,
+      code: "backend_unreachable",
+      message: "後端無法連線，請稍後再試",
+    };
+  }
   const candidate = pending.find((p) => p.case_id === caseId);
   if (!candidate) {
     return { ok: false as const, code: "not_found", message: "查無待審項目" };
@@ -94,6 +125,13 @@ export function reviewReject(
   actorId: string,
   reason: RejectReason | string,
 ) {
+  if (backendUnreachable) {
+    return {
+      ok: false as const,
+      code: "backend_unreachable",
+      message: "後端無法連線，請稍後再試",
+    };
+  }
   const candidate = pending.find((p) => p.case_id === caseId);
   if (!candidate) {
     return { ok: false as const, code: "not_found", message: "查無待審項目" };
@@ -111,6 +149,13 @@ export function reviewReject(
 }
 
 export function reviewWithdraw(entryId: string, actorId: string) {
+  if (backendUnreachable) {
+    return {
+      ok: false as const,
+      code: "backend_unreachable",
+      message: "後端無法連線，請稍後再試",
+    };
+  }
   const entry = listed.find((e) => e.entry_id === entryId);
   if (!entry) {
     return { ok: false as const, code: "not_found", message: "查無上榜項目" };
@@ -152,6 +197,7 @@ export function resetDemoStoreForTests(): void {
   allowlist = [];
   audits = [];
   resolved = new Set();
+  backendUnreachable = false;
 }
 
 /** 測試用：填入示範待審／上榜資料。 */
@@ -161,4 +207,12 @@ export function seedFixturesForTests(): void {
   allowlist = [];
   audits = [];
   resolved = new Set();
+  backendUnreachable = false;
 }
+
+/** 測試用：注入待審列（含到期／帶外信心等）。 */
+export function injectPendingForTests(items: PendingCandidate[]): void {
+  pending = [...items];
+}
+
+export { isPendingExpired };
