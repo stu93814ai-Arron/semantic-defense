@@ -20,3 +20,10 @@ export async function waitShareWaiter(db: Queryable, timeoutMs = 3000): Promise<
   }
   return null;
 }
+
+/** 這個 backend 是否已持有某把 xact advisory lock（key < 2^31：classid 0、objid = key、objsubid 1）。 */
+export async function holdsAdvisory(db: Queryable, pid: number, key: number): Promise<boolean> {
+  const r = await db.query("SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND objid = $1 AND objsubid = 1 AND pid = $2 AND granted",
+    [key, pid]);
+  return r.rows.length > 0;
+}

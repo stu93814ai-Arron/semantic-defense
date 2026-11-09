@@ -13,6 +13,11 @@ export const AUTO_LOCK = 872_364_204;
 export const AUTO_BREAKER_WINDOW_MS = 60 * 60_000;
 export const AUTO_BREAKER_PER_HOUR = 50;
 
+/** 白名單 SHARE 鎖（擋並行新增／修改白名單，持有到 tx 結束）。鎖順序見 auto-blacklist.ts：一律先 SHARE 再 AUTO_LOCK。 */
+export const lockAllowlistShare = async (q: Queryable): Promise<void> => {
+  await q.query("LOCK TABLE allowlist_entries IN SHARE MODE");
+};
+
 export const lockAuto = async (q: Queryable): Promise<void> => {
   await q.query("SELECT pg_advisory_xact_lock($1)", [AUTO_LOCK]);
 };
@@ -36,9 +41,10 @@ export async function breakerTripped(q: Queryable, limit: number, now: number, l
   return tripped;
 }
 
-/** tick 用：熔斷開著才拿 AUTO_LOCK 重判（過窗 → 關並寫 close）；關著不拿鎖。 */
+/** tick 用：熔斷開著才重判（過窗 → 關並寫 close）；關著不拿鎖。照全域鎖順序先拿 SHARE 再拿 AUTO_LOCK。 */
 export async function recoverBreakerIfOpen(q: Queryable, limit: number, now: number, log?: WarnLog): Promise<void> {
   if ((await openedAt(q)) === null) return;
+  await lockAllowlistShare(q);
   await lockAuto(q);
   await breakerTripped(q, limit, now, log);
 }

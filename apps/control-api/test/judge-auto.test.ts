@@ -6,7 +6,8 @@ import { DAY, MIN, T0, bootJudgeApp, flowEvent } from "./helpers/judge.js";
 import { runJudgeTick, type TickOpts } from "../src/judge.js";
 import { autoListInTx, writeAutoBlocklistEntry } from "../src/auto-blacklist.js";
 import { requireDatabaseUrl } from "./helpers/pg.js";
-import { holdAllowlistInsert, waitShareWaiter } from "./helpers/locks.js";
+import { holdAllowlistInsert, holdsAdvisory, waitShareWaiter } from "./helpers/locks.js";
+import { AUTO_LOCK } from "../src/auto-breaker.js";
 
 /**
  * 成案流程 commit 9：E3.A 自動上榜條件（計畫 §1 步驟 4、§6.1、§7；A 裁定 11-09）。
@@ -353,5 +354,20 @@ describe("白名單 SHARE 鎖與鎖順序（A 覆核）", () => {
     expect(waiter).not.toBeNull();
     expect(await listed()).toEqual([]);
     expect((await audits("blacklist.auto_suppressed")).map((a) => a.detail.reason)).toEqual(["allowlist"]);
+  });
+
+  it("鎖順序 SHARE → AUTO_LOCK：熔斷開著時 tick 的恢復判定也先等 SHARE，等的當下不持有 AUTO_LOCK", async () => {
+    await boot();
+    await autos(50, T0 - 90 * MIN);
+    await app.db.query("UPDATE auto_breaker SET opened_at = $1 WHERE id", [T0 - 70 * MIN]);
+    await three(["app-1", "app-2", "app-1"]);
+    const hold = await holdAllowlistInsert("192.0.2.0/24", T0 - DAY);
+    const running = tick();
+    const pid = await waitShareWaiter(app.db);
+    const heldAuto = pid !== null && (await holdsAdvisory(app.db, pid, AUTO_LOCK));
+    await hold.commit();
+    await running;
+    expect([pid !== null, heldAuto]).toEqual([true, false]);
+    expect((await listed()).map((e) => e.ip)).toContain(CIDR);
   });
 });
