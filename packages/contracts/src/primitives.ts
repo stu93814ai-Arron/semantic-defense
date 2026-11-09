@@ -15,10 +15,13 @@ export const Rfc3339 = z.iso.datetime({ offset: true });
 export const SingleIp = z.string().refine(assertFlowSingleIp, { message: "single_ip" });
 
 /**
- * C0／C1 控制字元（含 \t \n \r、U+007F）、bidi 控制字元（U+061C、U+200E/200F、U+202A–202E、U+2066–2069），
- * 以及不可見字元：U+2028／2029（行／段分隔）、U+FEFF（BOM）、U+200B–200D（零寬）、U+2060–2064（WJ 與不可見運算子）。
+ * 以 Unicode 類別擋（資安殘留 2）：Cc（C0／C1 控制字元）、Cf（格式字元：bidi、零寬 U+200B–200F、U+FEFF、U+00AD、
+ * U+180E、U+FFF9–FFFB、tag 字元等）、Zl（U+2028）、Zp（U+2029）。另列 Lo 的填充字元 U+115F、U+3164，
+ * 以及整段 tag 區 U+E0000–E007F（其中 U+E0000、U+E0002–E001F 未指派，不屬 Cf，須明列）。
  */
-const CONTROL_OR_BIDI = /[\u0000-\u001F\u007F-\u009F\u061C\u200B-\u200F\u2028\u2029\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/u;
+const CONTROL_OR_BIDI = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u115F\u3164]/u;
+/** tag 區以 code point 比對（regex 寫 \u{E0000}-\u{E007F} 會被 security/detect-unsafe-regex 誤報）。 */
+const hasTagChar = (s: string): boolean => [...s].some((c) => c.codePointAt(0)! >= 0xe0000 && c.codePointAt(0)! <= 0xe007f);
 
 /** 未配對 surrogate → false（ES2024 String.prototype.isWellFormed；tsconfig lib 為 ES2022，故以型別轉接）。 */
 const isWellFormed = (s: string): boolean => (s as unknown as { isWellFormed(): boolean }).isWellFormed();
@@ -29,4 +32,4 @@ const isWellFormed = (s: string): boolean => (s as unknown as { isWellFormed(): 
  * isWellFormed 屬 ES2024：console 端需 Chrome 111+、Safari 16.4+、Firefox 119+。
  */
 export const Reason = z.string().min(1).max(200)
-  .refine((s) => isWellFormed(s) && !CONTROL_OR_BIDI.test(s), { message: "control_or_bidi_char" });
+  .refine((s) => isWellFormed(s) && !CONTROL_OR_BIDI.test(s) && !hasTagChar(s), { message: "control_or_bidi_char" });
