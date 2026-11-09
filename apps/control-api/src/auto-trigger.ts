@@ -7,6 +7,10 @@ import { autoListInTx, type AutoListOpts, type AutoListResult } from "./auto-bla
  * - 計數只看 case_hits（命中明細不掛在案上；白名單 IP 也照存），有案與白名單無案兩條路徑共用 countHighSeverity。
  * - 高嚴重命中＝ontime_confidence ≥ auto；30 分鐘以 window_start 對比伺服器 now；只計 token 未撤銷且 app 仍綁定者。
  * - 成立：≥3 次，且 ≥2 個不同 app_id 或 sensor_id。
+ * - 「3 次」＝3 筆 case_hits 列（sensor × app × 5 分鐘窗），刻意如此：同一個窗裡來自不同來源的 3 列也算 3 次，
+ *   因為「≥2 個不同的已綁定來源」本身已要求多來源互相佐證（A 覆核）。
+ * - 30 分鐘窗以 window_start（事件時間）對比伺服器 now：若 tick 積壓、晚處理，舊窗的命中會掉出窗外而不計，
+ *   結果是案件留在待審（fail safe，不會因積壓而自動上榜）。
  */
 export const E3A_WINDOW_MS = 30 * 60_000;
 export type HighCount = { hits: number; apps: number; sensors: number };
