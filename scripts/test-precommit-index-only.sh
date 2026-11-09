@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 驗證 .githooks/pre-commit 只驗 index、不碰工作目錄／stash。
-# 含：(1) 拋棄式 stub repo 快速案例 (a–d)＋(s) symlink 逃逸
+# 含：(1) 拋棄式 stub repo 快速案例 (a–d)＋(s) symlink 逃逸＋(v) .vite symlink
 #     (2) 真實 monorepo workspace 跨套件案例（實際 pnpm/tsc，不用 stub）
 set -euo pipefail
 
@@ -36,14 +36,15 @@ assert_files_eq() {
 BASE=$(mktemp -d "${TMPDIR:-/tmp}/sd-pci-test-XXXXXX")
 REAL=""
 cleanup_all() {
-  if [ -n "${REAL:-}" ]; then
+  if [ -n "${REAL:-}" ] && [ -d "$REAL" ]; then
     git -C "$ROOT" worktree remove --force "$REAL" 2>/dev/null || true
-    git -C "$ROOT" worktree prune 2>/dev/null || true
     rm -rf "${REAL:?}" 2>/dev/null || true
   fi
   rm -rf "${BASE:?}" 2>/dev/null || true
 }
-trap cleanup_all EXIT INT TERM
+trap cleanup_all EXIT
+trap 'cleanup_all; exit 130' INT
+trap 'cleanup_all; exit 143' TERM
 
 # ======================== (1) stub repo ========================
 REPO="$BASE/repo"
@@ -80,20 +81,24 @@ chmod +x "$BASE/bin/gitleaks" "$BASE/bin/pnpm"
 REAL_PATH="$PATH"
 export PATH="$BASE/bin:$PATH"
 
-{
-  awk '
-    BEGIN { skip=0 }
-    /^VER=8\.21\.2$/ { skip=1; print "# test stub gitleaks"; print "gitleaks version >/dev/null 2>&1 || true"; print "echo \"secrets: OK\""; next }
-    skip==1 && /^echo "secrets: OK"$/ { skip=0; next }
-    skip==1 { next }
-    { print }
-  ' "$HOOK"
-} > "$REPO/.githooks/pre-commit"
-chmod +x "$REPO/.githooks/pre-commit"
+install_hook_from() {
+  # $1 = source hook path → write stub-patched copy to REPO/.githooks/pre-commit
+  local src=$1
+  {
+    awk '
+      BEGIN { skip=0 }
+      /^VER=8\.21\.2$/ { skip=1; print "# test stub gitleaks"; print "gitleaks version >/dev/null 2>&1 || true"; print "echo \"secrets: OK\""; next }
+      skip==1 && /^echo "secrets: OK"$/ { skip=0; next }
+      skip==1 { next }
+      { print }
+    ' "$src"
+  } > "$REPO/.githooks/pre-commit"
+  chmod +x "$REPO/.githooks/pre-commit"
+}
+
+install_hook_from "$HOOK"
 grep -q 'test stub gitleaks' "$REPO/.githooks/pre-commit" || { echo "hook patch failed"; exit 1; }
 grep -q 'TMP_REAL' "$HOOK" || { echo "真實 hook 缺少 TMP_REAL"; exit 1; }
-grep -q 'assert_under_tmp\|指出暫存樹外' "$HOOK" || { echo "真實 hook 缺少路徑防護"; exit 1; }
-grep -q '\.vite' "$HOOK" || { echo "真實 hook 缺少 .vite 排除"; exit 1; }
 
 cat > "$REPO/package.json" << 'JSON'
 {
@@ -218,17 +223,43 @@ rm -f "$REPO/FAIL.marker" "$REPO/UNTRACKED_KEEP.txt"
 git -C "$REPO" checkout -q -- . 2>/dev/null || true
 git -C "$REPO" clean -fdq
 
-# (s) 暫存區 packages → 樹外 symlink；不得刪到樹外 SENTINEL
+# (s) 暫存區 packages → 樹外；SENTINEL 在 contracts/node_modules/ 以分辨修前修後
 echo "---- symlink escape case ----"
-OUTSIDE=$(mktemp -d "${TMPDIR:-/tmp}/sd-pci-outside-XXXXXX")
-echo 'SENTINEL_ALIVE' > "$OUTSIDE/SENTINEL"
-mkdir -p "$OUTSIDE/contracts/node_modules"
-# 換成 symlink 並寫入 index
-rm -rf "$REPO/packages"
-ln -s "$OUTSIDE" "$REPO/packages"
-git -C "$REPO" add -A
-# 確認 index 裡 packages 是 symlink
-git -C "$REPO" ls-files -s packages | head -3
+setup_symlink_escape() {
+  OUTSIDE=$(mktemp -d "${TMPDIR:-/tmp}/sd-pci-outside-XXXXXX")
+  mkdir -p "$OUTSIDE/contracts/node_modules"
+  echo 'SENTINEL_ALIVE' > "$OUTSIDE/contracts/node_modules/SENTINEL"
+  rm -rf "$REPO/packages"
+  ln -s "$OUTSIDE" "$REPO/packages"
+  git -C "$REPO" add -A
+  echo "$OUTSIDE"
+}
+
+# (s0) 舊版 c220b0b hook：應無法通過本案例判準（SENTINEL 被刪或無 ❌）
+OLD_HOOK_SRC=$(mktemp "$BASE/old-hook-XXXX")
+git -C "$ROOT" show c220b0b:.githooks/pre-commit > "$OLD_HOOK_SRC"
+OUTSIDE=$(setup_symlink_escape)
+install_hook_from "$OLD_HOOK_SRC"
+ec_old=$(run_hook)
+old_sentinel_ok=0
+[ -f "$OUTSIDE/contracts/node_modules/SENTINEL" ] && grep -q 'SENTINEL_ALIVE' "$OUTSIDE/contracts/node_modules/SENTINEL" && old_sentinel_ok=1
+old_has_reject=0
+grep -q '❌' "$BASE/hook.out" && old_has_reject=1 || true
+# 舊版對本案例應「不及格」：SENTINEL 沒了，或沒有 ❌ 拒絕訊息，或兩者
+if [ "$old_sentinel_ok" -eq 1 ] && [ "$old_has_reject" -eq 1 ] && [ "$ec_old" -ne 0 ]; then
+  echo "FAIL: (s0) 舊版 c220b0b 不應同時保住 SENTINEL＋❌＋非0（ec=$ec_old sentinel=$old_sentinel_ok reject=$old_has_reject）"
+  fail=$((fail+1))
+else
+  echo "PASS: (s0) 舊版 c220b0b 對 (s) 判準不及格（ec=$ec_old sentinel_ok=$old_sentinel_ok has_reject=$old_has_reject）"
+  pass=$((pass+1))
+fi
+rm -rf "${OUTSIDE:?}"
+git -C "$REPO" reset -q --hard HEAD 2>/dev/null || true
+git -C "$REPO" clean -fdq
+
+# (s1) 新版 hook
+OUTSIDE=$(setup_symlink_escape)
+install_hook_from "$HOOK"
 ec_s=$(run_hook)
 if [ "$ec_s" -ne 0 ]; then
   echo "PASS: (s) packages→outside symlink → reject (ec=$ec_s)"
@@ -238,17 +269,51 @@ else
   cat "$BASE/hook.out" || true
   fail=$((fail+1))
 fi
-if [ -f "$OUTSIDE/SENTINEL" ] && grep -q 'SENTINEL_ALIVE' "$OUTSIDE/SENTINEL"; then
-  echo "PASS: (s) SENTINEL still present"
+if grep -q '❌' "$BASE/hook.out" && grep -q '指出暫存樹外\|拒絕' "$BASE/hook.out"; then
+  echo "PASS: (s) output contains ❌ reject message"
+  pass=$((pass+1))
+else
+  echo "FAIL: (s) missing ❌ reject message"
+  cat "$BASE/hook.out" || true
+  fail=$((fail+1))
+fi
+if [ -f "$OUTSIDE/contracts/node_modules/SENTINEL" ] && grep -q 'SENTINEL_ALIVE' "$OUTSIDE/contracts/node_modules/SENTINEL"; then
+  echo "PASS: (s) SENTINEL still present under contracts/node_modules/"
   pass=$((pass+1))
 else
   echo "FAIL: (s) SENTINEL missing or overwritten"
   fail=$((fail+1))
 fi
-grep -E '指出暫存樹外|symlink' "$BASE/hook.out" | head -5 || true
 rm -rf "${OUTSIDE:?}"
-# 還原 stub repo packages 為普通目錄（後續若還用）
 git -C "$REPO" reset -q --hard HEAD 2>/dev/null || true
+git -C "$REPO" clean -fdq
+
+# (v) .vite 為指向樹外的 symlink：只刪連結、不拒絕、樹外 SENTINEL 仍在
+echo "---- .vite symlink case ----"
+install_hook_from "$HOOK"
+VITE_OUT=$(mktemp -d "${TMPDIR:-/tmp}/sd-pci-vite-XXXXXX")
+echo 'VITE_SENTINEL_ALIVE' > "$VITE_OUT/VITE_SENTINEL"
+mkdir -p "$REPO/packages/shared/node_modules"
+ln -s "$VITE_OUT" "$REPO/packages/shared/node_modules/.vite"
+# 不需 stage .vite（hook 從 WD 的 package nm 複製）
+ec_v=$(run_hook)
+if [ "$ec_v" -eq 0 ]; then
+  echo "PASS: (v) .vite symlink → allow (ec=0)"
+  pass=$((pass+1))
+else
+  echo "FAIL: (v) expected allow, got ec=$ec_v"
+  cat "$BASE/hook.out" || true
+  fail=$((fail+1))
+fi
+if [ -f "$VITE_OUT/VITE_SENTINEL" ] && grep -q 'VITE_SENTINEL_ALIVE' "$VITE_OUT/VITE_SENTINEL"; then
+  echo "PASS: (v) VITE_SENTINEL still present"
+  pass=$((pass+1))
+else
+  echo "FAIL: (v) VITE_SENTINEL destroyed"
+  fail=$((fail+1))
+fi
+rm -rf "${VITE_OUT:?}"
+rm -rf "$REPO/packages/shared/node_modules"
 git -C "$REPO" clean -fdq
 
 # ======================== (2) real workspace ========================
@@ -305,7 +370,6 @@ run_real_hook() {
   echo "$ec"
 }
 
-# (r1)
 sed -i 's/export const ADMIN_API_PATHS/export const ADMIN_API_PATHS_RENAMED_FOR_PCI_TEST/' "$ADMIN_SRC"
 sed -i 's/ADMIN_API_PATHS/ADMIN_API_PATHS_RENAMED_FOR_PCI_TEST/g' "$REAL/packages/contracts/test/admin-api.test.ts"
 git -C "$REAL" add -- packages/contracts/src/admin-api.ts packages/contracts/test/admin-api.test.ts
@@ -344,7 +408,6 @@ for d in "$ROOT"/packages/*/node_modules "$ROOT"/apps/*/node_modules; do
   fi
 done
 
-# (r2)
 sed -i 's/export const ADMIN_API_PATHS/export const ADMIN_API_PATHS_WD_ONLY_BROKEN/' "$ADMIN_SRC"
 git -C "$REAL" diff --name-only | grep -q 'admin-api.ts'
 if git -C "$REAL" diff --cached --name-only | grep -q 'admin-api.ts'; then

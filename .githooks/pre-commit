@@ -79,8 +79,10 @@ for d in "$ROOT"/packages/*/node_modules "$ROOT"/apps/*/node_modules; do
   mkdir -p "$parent"
   rm -rf "${dst:?}"
   cp -a "$d" "$dst"
-  # 排除 Vite 快取（若有）
-  if [ -e "$dst/.vite" ] || [ -L "$dst/.vite" ]; then
+  # 排除 Vite 快取（若有）：symlink 只刪連結本身，不跟隨、不因此拒絕提交
+  if [ -L "$dst/.vite" ]; then
+    rm -f "$dst/.vite"
+  elif [ -e "$dst/.vite" ]; then
     vite_dst=$(assert_under_tmp "$rel/.vite" "$dst/.vite")
     rm -rf "${vite_dst:?}"
   fi
