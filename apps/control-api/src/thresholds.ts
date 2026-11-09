@@ -12,7 +12,7 @@ import type { Role } from "./auth.js";
  * - 判定端以 loadThresholds 讀值餵給 judgeFlows(flows, thresholds)，與 GET 讀回同一來源。
  * - 變更與稽核（thresholds.update，detail 含 before／after）同一 Db.tx；值未變不寫稽核。
  * - zod 結構錯誤 → 400 不寫稽核；結構合法但違反上下限／case<auto → 400 並寫 thresholds.update_rejected
- *   （detail 含 before／attempted），不改值、不建列。
+ *   （detail 含 before／attempted／violation＝thresholdsViolation 代碼；只進 DB 稽核，契約不動），不改值、不建列。
  */
 const ADMIN: Role[] = ["platform_admin"];
 type Row = { case_threshold: number; auto_threshold: number };
@@ -31,10 +31,11 @@ export function registerThresholdRoutes(app: FastifyInstance, db: Db, now: () =>
     const parsed = ThresholdsShapeSchema.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: "請求格式錯誤" });
     const after = parsed.data;
-    if (thresholdsViolation(after)) {
+    const violation = thresholdsViolation(after);
+    if (violation) {
       await db.tx(async (q) => {
         await writeAudit(q, { action: "thresholds.update_rejected", actor: req.user!.username, sensor_id: null,
-          at: now(), detail: { before: await loadThresholds(q), attempted: after } });
+          at: now(), detail: { before: await loadThresholds(q), attempted: after, violation } });
       });
       return reply.code(400).send({ error: "請求格式錯誤" });
     }

@@ -79,19 +79,20 @@ describe("門檻上下限（case 0.30–1、auto 0.70–1、case<auto）", () =>
     await boot();
     const c = await admin();
     expect((await put(c, { case: 0.6, auto: 0.95 })).statusCode).toBe(200);
-    const bads = [
-      { case: 0.29, auto: 0.9 }, { case: 0.5, auto: 0.69 }, { case: 0.8, auto: 0.8 }, { case: 0.95, auto: 0.9 },
-      { case: -0.1, auto: 0.9 }, { case: 0.5, auto: 1.5 },
-    ];
-    for (const bad of bads) {
+    const cases = [
+      [{ case: 0.29, auto: 0.9 }, "case_below_min"], [{ case: 0.5, auto: 0.69 }, "auto_below_min"],
+      [{ case: 0.8, auto: 0.8 }, "case_not_below_auto"], [{ case: 0.95, auto: 0.9 }, "case_not_below_auto"],
+      [{ case: -0.1, auto: 0.9 }, "case_below_min"], [{ case: 0.5, auto: 1.5 }, "auto_above_max"],
+    ] as const;
+    for (const [bad] of cases) {
       const r = await put(c, bad);
       expect(r.statusCode, JSON.stringify(bad)).toBe(400);
       expect(r.json()).toEqual({ error: "請求格式錯誤" });
     }
     expect((await get(c)).json()).toEqual({ case: 0.6, auto: 0.95 });
     const before = { case: 0.6, auto: 0.95 };
-    expect((await audits()).slice(1)).toEqual(bads.map((attempted) => ({
-      action: "thresholds.update_rejected", actor: "admin1", detail: { before, attempted },
+    expect((await audits()).slice(1)).toEqual(cases.map(([attempted, violation]) => ({
+      action: "thresholds.update_rejected", actor: "admin1", detail: { before, attempted, violation },
     })));
   });
 
@@ -100,7 +101,7 @@ describe("門檻上下限（case 0.30–1、auto 0.70–1、case<auto）", () =>
     const c = await admin();
     expect((await put(c, { case: 0.29, auto: 0.9 })).statusCode).toBe(400);
     expect(await audits()).toEqual([{ action: "thresholds.update_rejected", actor: "admin1",
-      detail: { before: { case: 0.5, auto: 0.9 }, attempted: { case: 0.29, auto: 0.9 } } }]);
+      detail: { before: { case: 0.5, auto: 0.9 }, attempted: { case: 0.29, auto: 0.9 }, violation: "case_below_min" } }]);
     expect((await app.db.query("SELECT 1 FROM thresholds")).rows).toEqual([]);
   });
 
@@ -133,6 +134,30 @@ describe("門檻：原子性、DB 約束與判定一致", () => {
       await app.db.exec("ALTER TABLE audit_events DROP CONSTRAINT t_no_thr");
     }
     expect((await get(c)).json()).toEqual({ case: 0.5, auto: 0.9 });
+  });
+
+  it("拒絕稽核寫入失敗 → 500 固定字串，門檻不變；log 不含 pg detail（Failing row／嘗試值）", async () => {
+    const lines: string[] = [];
+    app = await buildApp({ idleTimeoutMs: 60_000, databaseUrl: requireDatabaseUrl(), now: () => 1_800_000_000_000,
+      logger: { level: "info", stream: { write: (l: string) => { lines.push(l); } } } });
+    await seedPhase2Fixtures(app);
+    const c = await admin();
+    await app.db.exec("ALTER TABLE audit_events ADD CONSTRAINT t_no_rej CHECK (action <> 'thresholds.update_rejected') NOT VALID");
+    let r;
+    try {
+      r = await put(c, { case: 0.2913, auto: 0.9 });
+    } finally {
+      await app.db.exec("ALTER TABLE audit_events DROP CONSTRAINT t_no_rej");
+    }
+    expect([r.statusCode, r.json()]).toEqual([500, { error: "伺服器錯誤" }]);
+    expect((await get(c)).json()).toEqual({ case: 0.5, auto: 0.9 });
+    expect((await app.db.query("SELECT 1 FROM thresholds")).rows).toEqual([]);
+    expect(await audits()).toEqual([]);
+    const errs = lines.map((l) => JSON.parse(l) as { level: number; err?: Record<string, unknown> }).filter((x) => x.level >= 50);
+    expect(errs).toHaveLength(1);
+    expect(errs[0]!.err).toMatchObject({ code: "23514", constraint: "t_no_rej" });
+    expect(errs[0]!.err).not.toHaveProperty("detail");
+    for (const leak of ["Failing row", "0.2913", "case_below_min"]) expect(lines.join("\n")).not.toContain(leak);
   });
 
   it.each([[0.95, 0.9], [0.8, 0.8], [0.29, 0.9], [0.5, 0.69], [0.5, 1.01]])(
