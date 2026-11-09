@@ -71,6 +71,24 @@ describe("ts_ms 遷移（舊表補欄＋回填）", () => {
   });
 });
 
+describe("R-A：flow_ts_ms 遇 'infinity'／'-infinity'（0A000 feature_not_supported）回 NULL，不讓遷移回滾", () => {
+  it("舊列 ts='infinity'／'-infinity'（ts_ms NULL）→ ensureFlowSchema 成功、兩列 ts_ms 仍為 NULL，合法列照常回填", async () => {
+    await ensureFlowSchema(db);
+    await toLegacy();
+    for (const ts of ["infinity", "-infinity", VALID]) await putRaw(ts);
+    await ensureFlowSchema(db);
+    expect(await tsMs()).toEqual([["-infinity", null], [VALID, Date.parse(VALID)], ["infinity", null]]);
+  });
+
+  it("handler 只列 data_exception 與 feature_not_supported（不得改成 WHEN OTHERS 吞掉所有錯誤）", async () => {
+    await ensureFlowSchema(db);
+    const r = await db.query<{ prosrc: string }>(
+      "SELECT prosrc FROM pg_proc WHERE proname = 'flow_ts_ms' AND pronamespace = current_schema()::regnamespace");
+    const handlers = [...r.rows[0]!.prosrc.matchAll(/WHEN\s+([\s\S]*?)\s+THEN/gi)].map((m) => m[1]!.split(/\s+OR\s+/i).map((c) => c.trim().toLowerCase()));
+    expect(handlers).toEqual([["data_exception", "feature_not_supported"]]);
+  });
+});
+
 describe("舊索引 flow_events_group (…, ts) 移除（Q3：grep 確認沒有查詢依 ts 文字過濾／排序）", () => {
   const indexes = async () => (await db.query<{ indexname: string }>(
     "SELECT indexname FROM pg_indexes WHERE schemaname = current_schema() AND tablename = 'flow_events' ORDER BY indexname")).rows

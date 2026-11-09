@@ -19,7 +19,7 @@ export const FLOW_SCHEMA_LOCK = 872_364_210;
 /**
  * 一個多語句 simple query＝一個隱含交易（不寫 BEGIN／COMMIT：中途出錯整串回滾，不會把 pool 連線留在 aborted 交易）。
  * ts_ms（ts slice，計畫 Q1–Q8）：ts 的 epoch ms，由 insertFlow 以 JS Date.parse 寫入；判定 tick 只讀 ts_ms、不再對 ts 做 ::timestamptz。
- * - flow_ts_ms：SQL 端同值換算（floor 到 ms），只吞 data_exception（class 22：0000 年、offset ±23:59…）回 NULL，其他錯誤照拋；
+ * - flow_ts_ms：SQL 端同值換算（floor 到 ms），只吞 data_exception（class 22：0000 年、offset ±23:59…）與 feature_not_supported（0A000：infinity／-infinity，R-A）回 NULL，其他錯誤照拋；
  *   ::timestamptz 依 TimeZone 設定，故 STABLE 不標 IMMUTABLE。
  * - 回填：每次啟動都跑 WHERE ts_ms IS NULL（舊列、滾動升級期間舊版 ingest 寫的列；Q2／Q4）。這是 flow_events 全表掃描，
  *   且整段持有 FLOW_SCHEMA_LOCK——見 docs R15 部署前檢查。
@@ -39,7 +39,7 @@ ALTER TABLE flow_events ADD COLUMN IF NOT EXISTS ts_ms BIGINT NULL;
 CREATE OR REPLACE FUNCTION flow_ts_ms(t TEXT) RETURNS BIGINT LANGUAGE plpgsql STABLE AS $fn$
 BEGIN
   RETURN floor(extract(epoch FROM t::timestamptz) * 1000)::bigint;
-EXCEPTION WHEN data_exception THEN
+EXCEPTION WHEN data_exception OR feature_not_supported THEN
   RETURN NULL;
 END
 $fn$;

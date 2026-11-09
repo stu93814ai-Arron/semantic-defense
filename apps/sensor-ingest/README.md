@@ -16,7 +16,7 @@
 
 ## ts_ms（判定分窗用）
 - `flow_events.ts_ms`（BIGINT，可 NULL）＝`ts` 的 epoch ms，寫入時以 JS `Date.parse` 算（算不出 → NULL）。判定 tick 只讀 `ts_ms`，`ts_ms IS NULL` 的列不分組、只計數（log `{null_ts:n}`），cursor 照常前進。
-- 啟動時 `ensureFlowSchema`（flow-store）在一個交易內、持有 advisory lock：補欄、建 `flow_ts_ms(TEXT)`（只吞 data_exception → NULL）、回填 `WHERE ts_ms IS NULL`、建索引 `flow_events_group_ms`、移除舊索引 `flow_events_group`。回填每次啟動都跑，會全表掃描 flow_events——見 `docs/deploy-checklist.md` R15。
+- 啟動時 `ensureFlowSchema`（flow-store）在一個交易內、持有 advisory lock：補欄、建 `flow_ts_ms(TEXT)`（只吞 data_exception 與 feature_not_supported → NULL）、回填 `WHERE ts_ms IS NULL`、建索引 `flow_events_group_ms`、移除舊索引 `flow_events_group`。回填每次啟動都跑，會全表掃描 flow_events——見 `docs/deploy-checklist.md` R15。
 
 ## 保留期
 年齡 ≥ 7 天（`now - received_at >= 7 * 24 * 60 * 60 * 1000`）即刪；每次寫入前執行，另 export `purgeExpired(db, now)`。
