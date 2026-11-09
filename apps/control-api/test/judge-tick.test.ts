@@ -279,6 +279,22 @@ describe("白名單 IP 不開案；已上榜 IP 只寫 hit_while_listed（commit
       .toEqual([{ expires_at: String(T0 + DAY / 2) }]);
   });
 
+  it("hit_while_listed 同一 entry_id 每小時最多一筆（伺服器時間）；多出來的命中每個 tick 一行 log 記數量（資安退回 R5）", async () => {
+    await boot();
+    const entry = await listed("203.0.113.5/32");
+    for (const w of [12, 7, 2]) await scan("203.0.113.5", T0 - w * MIN, T0 - MIN);
+    await runJudgeTick(app.db, T0, log);
+    await scan("203.0.113.5", T0 + 52 * MIN, T0 + 58 * MIN);
+    await runJudgeTick(app.db, T0 + 59 * MIN, log);
+    await scan("203.0.113.5", T0 + 59 * MIN, T0 + 59 * MIN + 30_000);
+    await runJudgeTick(app.db, T0 + 60 * MIN, log);
+    const rows = await app.db.query<{ at: string }>("SELECT at FROM audit_events WHERE action = 'blacklist.hit_while_listed' ORDER BY id");
+    expect(rows.rows.map((r) => Number(r.at))).toEqual([T0, T0 + 60 * MIN]);
+    expect((await audits()).every((a) => a.detail.entry_id === entry)).toBe(true);
+    expect(lines.map((l) => JSON.parse(l) as object)).toEqual([2, 1].map((n) =>
+      ({ suppressed: n, msg: "judge tick suppressed hit_while_listed audits (1 per entry per hour)" })));
+  });
+
   it("「已上榜」只認 canonical IP 完全相等且生效：生效的 /24、已撤回、已結束、已到期 → 照常成案、不寫稽核", async () => {
     await boot();
     await listed("203.0.113.0/24");
@@ -319,5 +335,17 @@ describe("case_hits 7 天清除依 first_seen_at（資安退回 R3）", () => {
     expect(at.rows).toEqual([{ first_seen_at: String(T0), updated_at: String(T0 + 6 * DAY) }]);
     await runJudgeTick(app.db, T0 + 7 * DAY);
     expect(await hits()).toEqual([]);
+  });
+});
+
+describe("hit_while_listed 去重查詢的 partial index（資安退回 R5）", () => {
+  it("audit_hit_while_listed_entry 已建立（action、detail->>'entry_id'、at；WHERE action）；重複初始化不報錯", async () => {
+    await boot();
+    const again = await buildApp({ databaseUrl: requireDatabaseUrl(), logger: false, judgeIntervalMs: 0 });
+    await again.close();
+    const r = await app.db.query<{ indexdef: string }>(
+      "SELECT indexdef FROM pg_indexes WHERE tablename = 'audit_events' AND indexname = 'audit_hit_while_listed_entry'");
+    expect(r.rows).toHaveLength(1);
+    expect(r.rows[0]!.indexdef).toMatch(/\(action, \(\(detail ->> 'entry_id'::text\)\), at\) WHERE \(action = 'blacklist\.hit_while_listed'::text\)/);
   });
 });

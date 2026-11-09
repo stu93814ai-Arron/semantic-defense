@@ -114,6 +114,9 @@ const SCHEMA_STATEMENTS = [
   at BIGINT NOT NULL,
   detail JSONB NOT NULL DEFAULT '{}'::jsonb
 )`,
+  // 資安退回 R5：hit_while_listed 每個 entry_id 每小時最多一筆，寫前查過去 1 小時（judge.ts auditedWithinHour）用的 partial index。
+  `CREATE INDEX IF NOT EXISTS audit_hit_while_listed_entry ON audit_events (action, (detail->>'entry_id'), at)
+   WHERE action = 'blacklist.hit_while_listed'`,
 ];
 
 /** 固定鍵：跨連線序列化 schema 遷移。 */

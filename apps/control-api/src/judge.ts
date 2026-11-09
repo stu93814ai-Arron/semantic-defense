@@ -34,8 +34,8 @@ type GroupKey = { sensor_id: string; app_id: string; src_ip: string; win: number
 /** 分組鍵欄位（窗由 ts 算，與 judgeFlows 同用 Date.parse）；新列另帶 received_at 推 cursor。 */
 type KeyRow = Pick<FlowEventRow, "sensor_id" | "app_id" | "src_ip" | "ts">;
 type ScanRow = KeyRow & Pick<FlowEventRow, "received_at">;
-/** 一個 tick 內共用：門檻、白名單判斷（每個 tick 只讀一次）、時間。 */
-type TickCtx = { th: FlowThresholds; isAllowlisted: (ip: string) => boolean; now: number };
+/** 一個 tick 內共用：門檻、白名單判斷（每個 tick 只讀一次）、時間、本 tick 計數（被去重的 hit_while_listed）。 */
+type TickCtx = { th: FlowThresholds; isAllowlisted: (ip: string) => boolean; now: number; stats: { suppressed: number } };
 
 /** upto：這批實際看到的最大 received_at（沒有新列 → null，cursor 不動）。不用 control-api 的 now，ingest 時鐘較慢時才不會漏列。 */
 async function scanGroups(q: Queryable, cursor: number, now: number): Promise<{ keys: GroupKey[]; upto: number | null }> {
@@ -60,18 +60,32 @@ const toFlow = (r: FlowEventRow): FlowMetadataEvent => ({
   bytes_out: Number(r.bytes_out), packets: Number(r.packets), duration_ms: Number(r.duration_ms),
 });
 
+/** hit_while_listed 去重視窗：同一 entry_id 在這段時間內（伺服器時間）最多一筆稽核（資安退回 R5）。 */
+export const HIT_WHILE_LISTED_EVERY_MS = 60 * 60_000;
+
+/** 去重狀態不另存：直接查 audit_events 本身過去 1 小時有沒有同 entry_id 的 hit_while_listed。 */
+async function auditedWithinHour(q: Queryable, entryId: string, now: number): Promise<boolean> {
+  const r = await q.query(
+    `SELECT 1 FROM audit_events WHERE action = 'blacklist.hit_while_listed' AND detail->>'entry_id' = $1 AND at > $2 LIMIT 1`,
+    [entryId, now - HIT_WHILE_LISTED_EVERY_MS]);
+  return r.rows.length > 0;
+}
+
 /**
  * 已上榜（canonical IP 完全相等、ended_at／revoked_at 為 NULL、expires_at > now）→ 不開案、不延長；
- * 命中第一次寫入時寫一筆 blacklist.hit_while_listed（重掃不重寫）。回是否已上榜。
+ * 命中第一次寫入時寫一筆 blacklist.hit_while_listed（重掃不重寫），同一 entry_id 每小時最多一筆，
+ * 多出來的計入 stats.suppressed（tick 結束記一行 log）。回是否已上榜。
  */
-async function onActiveBlocklist(q: Queryable, k: GroupKey, confidence: number, created: boolean, now: number): Promise<boolean> {
+async function onActiveBlocklist(q: Queryable, k: GroupKey, confidence: number, created: boolean, ctx: TickCtx): Promise<boolean> {
+  const { now } = ctx;
   const ip = hostCidr(k.src_ip)!;
   const r = await q.query<{ entry_id: string }>(
     `SELECT entry_id FROM blocklist_entries
      WHERE ip = $1 AND ended_at IS NULL AND revoked_at IS NULL AND expires_at > $2`, [ip, now]);
   const entry = r.rows[0];
   if (!entry) return false;
-  if (created) {
+  if (created && (await auditedWithinHour(q, entry.entry_id, now))) ctx.stats.suppressed += 1;
+  else if (created) {
     await writeAudit(q, { action: "blacklist.hit_while_listed", actor: "system:auto", sensor_id: k.sensor_id, at: now,
       detail: { ip, entry_id: entry.entry_id, app_id: k.app_id, window_start: new Date(k.win).toISOString(), confidence } });
   }
@@ -83,7 +97,8 @@ async function onActiveBlocklist(q: Queryable, k: GroupKey, confidence: number, 
  * src_ip 不是可上榜的主機位址（hostCidr 拒收：127/8、0.0.0.0、多播、link-local、::1、廣播…）→ 整組跳過回 "skipped"，
  * 否則 upsertCaseHit 拋錯會讓整個 tick rollback、cursor 永遠卡住（資安退回 B1）。
  */
-async function judgeGroup(q: Queryable, k: GroupKey, { th, isAllowlisted, now }: TickCtx): Promise<"hit" | "miss" | "skipped"> {
+async function judgeGroup(q: Queryable, k: GroupKey, ctx: TickCtx): Promise<"hit" | "miss" | "skipped"> {
+  const { th, isAllowlisted, now } = ctx;
   if (hostCidr(k.src_ip) === null) return "skipped";
   const rows = (await q.query<FlowEventRow>(
     `SELECT * FROM flow_events WHERE sensor_id = $1 AND app_id = $2 AND src_ip = $3
@@ -96,10 +111,16 @@ async function judgeGroup(q: Queryable, k: GroupKey, { th, isAllowlisted, now }:
   const { created } = await upsertCaseHit(q, { src_ip: k.src_ip, sensor_id: k.sensor_id, app_id: k.app_id,
     window_start: k.win, confidence: all.confidence, ontime_confidence: ontimeConfidence }, now);
   if (isAllowlisted(k.src_ip)) return "hit";
-  if (await onActiveBlocklist(q, k, all.confidence, created, now)) return "hit";
+  if (await onActiveBlocklist(q, k, all.confidence, created, ctx)) return "hit";
   if (created) await accumulateCase(q, { ip: k.src_ip, confidence: all.confidence, late: ontime.length < rows.length }, now);
   else await raiseCaseMax(q, k.src_ip, all.confidence, now);
   return "hit";
+}
+
+/** 每個 tick 各一行，只記數量、不記 IP：跳過的非主機位址組（B1）、被去重的 hit_while_listed（R5）。 */
+function logTickCounts(log: WarnLog | undefined, skipped: number, suppressed: number): void {
+  if (skipped > 0) log?.warn({ skipped }, "judge tick skipped non-host src_ip groups");
+  if (suppressed > 0) log?.warn({ suppressed }, "judge tick suppressed hit_while_listed audits (1 per entry per hour)");
 }
 
 export async function runJudgeTick(db: Db, now: number, log?: WarnLog): Promise<TickResult> {
@@ -111,11 +132,10 @@ export async function runJudgeTick(db: Db, now: number, log?: WarnLog): Promise<
     await expireOpenCases(q, now);
     const cur = (await q.query<{ received_upto: string }>("SELECT received_upto FROM judge_cursor WHERE id")).rows[0];
     const { keys, upto } = await scanGroups(q, Number(cur?.received_upto ?? 0), now);
-    const ctx: TickCtx = { th, isAllowlisted: await loadAllowlist(q, now), now };
+    const ctx: TickCtx = { th, isAllowlisted: await loadAllowlist(q, now), now, stats: { suppressed: 0 } };
     const n = { hit: 0, miss: 0, skipped: 0 };
     for (const k of keys) n[await judgeGroup(q, k, ctx)] += 1;
-    // 只記數量，不記 IP
-    if (n.skipped > 0) log?.warn({ skipped: n.skipped }, "judge tick skipped non-host src_ip groups");
+    logTickCounts(log, n.skipped, ctx.stats.suppressed);
     // 依 first_seen_at（第一次寫入、伺服器時間）清：重掃會一直刷新 updated_at，用它清會永遠清不掉（資安退回 R3）
     await q.query("DELETE FROM case_hits WHERE first_seen_at <= $1", [now - RETENTION_MS]);
     await q.query("DELETE FROM blacklist_cases WHERE state <> 'open' AND resolved_at <= $1", [now - RETENTION_MS]);
