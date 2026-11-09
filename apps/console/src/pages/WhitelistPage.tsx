@@ -1,10 +1,12 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { useAuth } from "../auth";
 import {
   listAllowlist,
   reviewAddAllowlist,
   reviewRemoveAllowlist,
+  reviewUpdateAllowlist,
 } from "../review/demoStore";
+import type { AllowlistItem } from "../review/types";
 import { WhitelistThresholdSection } from "../review/WhitelistThresholdSection";
 
 export function WhitelistPage() {
@@ -34,12 +36,6 @@ export function WhitelistPage() {
     refresh();
   }
 
-  function onRemove(id: string) {
-    if (!user) return;
-    reviewRemoveAllowlist(id, user.username);
-    refresh();
-  }
-
   return (
     <main>
       <h1>白名單</h1>
@@ -55,7 +51,11 @@ export function WhitelistPage() {
         onReason={setReason}
         onSubmit={onSubmit}
       />
-      <AllowlistList items={items} onRemove={onRemove} />
+      <AllowlistList
+        items={items}
+        actorId={user?.username}
+        onChanged={refresh}
+      />
     </main>
   );
 }
@@ -70,7 +70,7 @@ function AllowlistForm(props: {
 }) {
   const { cidr, reason, error, onCidr, onReason, onSubmit } = props;
   return (
-    <form className="card" onSubmit={onSubmit}>
+    <form className="card" noValidate onSubmit={onSubmit}>
       <label>
         IP 或 CIDR
         <input
@@ -96,10 +96,11 @@ function AllowlistForm(props: {
 }
 
 function AllowlistList(props: {
-  items: ReturnType<typeof listAllowlist>;
-  onRemove: (id: string) => void;
+  items: AllowlistItem[];
+  actorId: string | undefined;
+  onChanged: () => void;
 }) {
-  const { items, onRemove } = props;
+  const { items, actorId, onChanged } = props;
   if (items.length === 0) {
     return (
       <div data-testid="empty-state" className="card">
@@ -110,20 +111,84 @@ function AllowlistList(props: {
   return (
     <ul data-testid="whitelist-list">
       {items.map((item) => (
-        <li key={item.entry_id} className="card">
-          <p>
-            {item.cidr} — {item.reason}
-          </p>
-          <button
-            type="button"
-            className="btn"
-            data-testid={`whitelist-remove-${item.entry_id}`}
-            onClick={() => onRemove(item.entry_id)}
-          >
-            刪除
-          </button>
-        </li>
+        <AllowlistRow
+          key={item.entry_id}
+          item={item}
+          actorId={actorId}
+          onChanged={onChanged}
+        />
       ))}
     </ul>
+  );
+}
+
+function AllowlistRow(props: {
+  item: AllowlistItem;
+  actorId: string | undefined;
+  onChanged: () => void;
+}) {
+  const { item, actorId, onChanged } = props;
+  const [reason, setReason] = useState(item.reason);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    setReason(item.reason);
+  }, [item.reason]);
+
+  function onUpdate(e: FormEvent) {
+    e.preventDefault();
+    if (!actorId) return;
+    const r = reviewUpdateAllowlist(
+      item.entry_id,
+      { reason, expires_at: item.expires_at },
+      actorId,
+    );
+    if (!r.ok) {
+      setError(r.message);
+      return;
+    }
+    setError(null);
+    onChanged();
+  }
+
+  function onRemove() {
+    if (!actorId) return;
+    reviewRemoveAllowlist(item.entry_id, actorId);
+    onChanged();
+  }
+
+  return (
+    <li className="card">
+      <p>
+        {item.cidr} — {item.reason}
+      </p>
+      <form noValidate onSubmit={onUpdate}>
+        <label>
+          理由
+          <input
+            data-testid={`whitelist-update-reason-${item.entry_id}`}
+            value={reason}
+            onChange={(ev) => setReason(ev.target.value)}
+          />
+        </label>{" "}
+        <button
+          className="btn btn-primary"
+          type="submit"
+          data-testid={`whitelist-update-${item.entry_id}`}
+        >
+          更新
+        </button>{" "}
+        <button
+          type="button"
+          className="btn"
+          data-testid={`whitelist-remove-${item.entry_id}`}
+          onClick={onRemove}
+        >
+          刪除
+        </button>
+        {error ? (
+          <p data-testid={`whitelist-update-error-${item.entry_id}`}>{error}</p>
+        ) : null}
+      </form>
+    </li>
   );
 }

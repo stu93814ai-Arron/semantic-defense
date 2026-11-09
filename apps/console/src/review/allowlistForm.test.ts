@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addAllowlist, removeAllowlist, validateAllowlistCidr } from "./allowlistForm";
+import { addAllowlist, removeAllowlist, updateAllowlist, validateAllowlistCidr } from "./allowlistForm";
 import type { AllowlistItem } from "./types";
 
 describe("白名單新增／刪除與格式（contracts assertAllowlistCidr）", () => {
@@ -72,5 +72,49 @@ describe("白名單新增／刪除與格式（contracts assertAllowlistCidr）",
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.audit.action).toBe("whitelist.remove");
+  });
+});
+
+describe("白名單 reason（AllowlistCreate／Update schema）", () => {
+  it("拒控制字元、bidi、ZWJ、lone surrogate", () => {
+    for (const bad of ["\n夥伴", "辦\u200d公室", "\ud800", "\u200e出口"]) {
+      const r = addAllowlist(
+        { cidr: "203.0.113.0/24", reason: bad },
+        { actorId: "admin1", now: "2026-11-05T03:00:00Z" },
+      );
+      expect(r.ok, bad).toBe(false);
+      if (!r.ok) {
+        expect(r.code).toBe("invalid_reason");
+        expect(r.message.length).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it("updateAllowlist 以 AllowlistUpdateSchema 驗證 reason", () => {
+    const item: AllowlistItem = {
+      entry_id: "w1",
+      cidr: "203.0.113.0/24",
+      reason: "夥伴",
+      created_by: "admin1",
+      created_at: "2026-11-05T00:00:00Z",
+      expires_at: null,
+    };
+    const ok = updateAllowlist(
+      item,
+      { reason: "更新理由", expires_at: null },
+      { actorId: "admin1", now: "2026-11-05T05:00:00Z" },
+    );
+    expect(ok.ok).toBe(true);
+    if (!ok.ok) return;
+    expect(ok.value.reason).toBe("更新理由");
+    expect(ok.audit.action).toBe("whitelist.update");
+
+    const bad = updateAllowlist(
+      item,
+      { reason: "x\u0000y", expires_at: null },
+      { actorId: "admin1", now: "2026-11-05T05:00:00Z" },
+    );
+    expect(bad.ok).toBe(false);
+    if (!bad.ok) expect(bad.code).toBe("invalid_reason");
   });
 });

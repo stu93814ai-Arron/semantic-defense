@@ -1,4 +1,4 @@
-import { addAllowlist, removeAllowlist } from "./allowlistForm";
+import { addAllowlist, removeAllowlist, updateAllowlist } from "./allowlistForm";
 import { filterListed, withdrawListed } from "./listed";
 import { ipOnAllowlist } from "./allowlistMatch";
 import { approvePending, isPendingExpired, rejectPending } from "./pending";
@@ -192,6 +192,22 @@ export function reviewRemoveAllowlist(entryId: string, actorId: string) {
   const result = removeAllowlist(item, { actorId, now: nowIso() });
   if (!result.ok) return result;
   allowlist = allowlist.filter((e) => e.entry_id !== entryId);
+  audits = [...audits, result.audit];
+  return result;
+}
+
+export function reviewUpdateAllowlist(
+  entryId: string,
+  input: { reason: string; expires_at: string | null },
+  actorId: string,
+) {
+  const item = allowlist.find((e) => e.entry_id === entryId);
+  if (!item) {
+    return { ok: false as const, code: "not_found", message: "查無白名單項目" };
+  }
+  const result = updateAllowlist(item, input, { actorId, now: nowIso() });
+  if (!result.ok) return result;
+  allowlist = allowlist.map((e) => (e.entry_id === entryId ? result.value : e));
   audits = [...audits, result.audit];
   return result;
 }
