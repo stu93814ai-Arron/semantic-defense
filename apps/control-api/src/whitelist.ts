@@ -1,0 +1,89 @@
+import { randomUUID } from "node:crypto";
+import type { FastifyInstance } from "fastify";
+import {
+  ADMIN_API_PATHS, AllowlistCreateSchema, AllowlistUpdateSchema, type AllowlistEntry,
+} from "@semantic-defense/contracts";
+import type { Db } from "./db.js";
+import { writeAudit } from "./audit.js";
+import type { Role } from "./auth.js";
+
+/**
+ * ③a 白名單 CRUD（MONITOR §3 白名單項目、§7a：僅 platform_admin）。
+ * - 時間以 epoch ms 存；回應轉 RFC3339。entry_id／created_by（username）／created_at 由伺服端填。
+ * - expires_at 非 null 時須 > created_at，否則 400。
+ * - 每筆寫入與稽核（whitelist.create／update／delete）同一 Db.tx；稽核失敗則不生效。
+ */
+const ADMIN: Role[] = ["platform_admin"];
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const COLS = "entry_id, cidr, reason, created_by, created_at, expires_at";
+type Row = { entry_id: string; cidr: string; reason: string; created_by: string; created_at: string; expires_at: string | null };
+type Params = { Params: { entryId: string } };
+
+const iso = (ms: string | number) => new Date(Number(ms)).toISOString();
+const toEntry = (r: Row): AllowlistEntry => ({
+  entry_id: r.entry_id, cidr: r.cidr, reason: r.reason, created_by: r.created_by,
+  created_at: iso(r.created_at), expires_at: r.expires_at === null ? null : iso(r.expires_at),
+});
+const expiresMs = (s: string | null) => (s === null ? null : Date.parse(s));
+const validExpiry = (createdAt: number, exp: number | null) => exp === null || exp > createdAt;
+
+export function registerWhitelistRoutes(app: FastifyInstance, db: Db, now: () => number): void {
+  const P = ADMIN_API_PATHS;
+  app.get(P.whitelist, { config: { roles: ADMIN } }, async () => {
+    const r = await db.query<Row>(`SELECT ${COLS} FROM allowlist_entries ORDER BY created_at, entry_id`);
+    return { items: r.rows.map(toEntry) };
+  });
+
+  app.post(P.whitelist, { config: { roles: ADMIN } }, async (req, reply) => {
+    const p = AllowlistCreateSchema.safeParse(req.body);
+    const at = now();
+    if (!p.success || !validExpiry(at, expiresMs(p.data.expires_at))) return reply.code(400).send({ error: "請求格式錯誤" });
+    const actor = req.user!.username;
+    const row = await db.tx(async (q) => {
+      const r = await q.query<Row>(
+        `INSERT INTO allowlist_entries (${COLS}) VALUES ($1,$2,$3,$4,$5,$6) RETURNING ${COLS}`,
+        [randomUUID(), p.data.cidr, p.data.reason, actor, at, expiresMs(p.data.expires_at)],
+      );
+      const e = toEntry(r.rows[0]!);
+      await writeAudit(q, { action: "whitelist.create", actor, sensor_id: null, at, detail: { ...e } });
+      return e;
+    });
+    return reply.code(201).send(row);
+  });
+
+  app.patch<Params>(P.whitelistEntry, { config: { roles: ADMIN } }, async (req, reply) => {
+    const id = req.params.entryId;
+    if (!UUID_RE.test(id)) return reply.code(404).send({ error: "查無白名單項目" });
+    const p = AllowlistUpdateSchema.safeParse(req.body);
+    if (!p.success) return reply.code(400).send({ error: "請求格式錯誤" });
+    const out = await db.tx(async (q) => {
+      const cur = (await q.query<Row>(`SELECT ${COLS} FROM allowlist_entries WHERE entry_id = $1 FOR UPDATE`, [id])).rows[0];
+      if (!cur) return 404 as const;
+      if (!validExpiry(Number(cur.created_at), expiresMs(p.data.expires_at))) return 400 as const;
+      const r = await q.query<Row>(
+        `UPDATE allowlist_entries SET reason = $2, expires_at = $3 WHERE entry_id = $1 RETURNING ${COLS}`,
+        [id, p.data.reason, expiresMs(p.data.expires_at)],
+      );
+      const e = toEntry(r.rows[0]!);
+      await writeAudit(q, { action: "whitelist.update", actor: req.user!.username, sensor_id: null, at: now(),
+        detail: { entry_id: id, before: toEntry(cur), after: e } });
+      return e;
+    });
+    if (out === 404) return reply.code(404).send({ error: "查無白名單項目" });
+    if (out === 400) return reply.code(400).send({ error: "請求格式錯誤" });
+    return out;
+  });
+
+  app.delete<Params>(P.whitelistEntry, { config: { roles: ADMIN } }, async (req, reply) => {
+    const id = req.params.entryId;
+    if (!UUID_RE.test(id)) return reply.code(404).send({ error: "查無白名單項目" });
+    const ok = await db.tx(async (q) => {
+      const r = await q.query<Row>(`DELETE FROM allowlist_entries WHERE entry_id = $1 RETURNING ${COLS}`, [id]);
+      if (!r.rows[0]) return false;
+      await writeAudit(q, { action: "whitelist.delete", actor: req.user!.username, sensor_id: null, at: now(),
+        detail: { ...toEntry(r.rows[0]) } });
+      return true;
+    });
+    return ok ? reply.code(204).send() : reply.code(404).send({ error: "查無白名單項目" });
+  });
+}

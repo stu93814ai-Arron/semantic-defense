@@ -52,6 +52,14 @@ const SCHEMA_STATEMENTS = [
   auto_threshold DOUBLE PRECISION NOT NULL,
   CHECK (0 <= case_threshold AND case_threshold <= auto_threshold AND auto_threshold <= 1)
 )`,
+  `CREATE TABLE IF NOT EXISTS allowlist_entries (
+  entry_id UUID PRIMARY KEY,
+  cidr TEXT NOT NULL,
+  reason TEXT NOT NULL CHECK (char_length(reason) BETWEEN 1 AND 200),
+  created_by TEXT NOT NULL,
+  created_at BIGINT NOT NULL,
+  expires_at BIGINT NULL CHECK (expires_at IS NULL OR expires_at > created_at)
+)`,
   `CREATE TABLE IF NOT EXISTS audit_events (
   id BIGSERIAL PRIMARY KEY,
   action TEXT NOT NULL,
