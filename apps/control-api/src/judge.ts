@@ -3,7 +3,7 @@ import { RETENTION_MS, flowEventsReady, type FlowEventRow } from "@semantic-defe
 import type { Db, Queryable } from "./db.js";
 import { loadThresholds, type WarnLog } from "./thresholds.js";
 import { accumulateCase, expireOpenCases, raiseCaseMax, upsertCaseHit } from "./cases.js";
-import { allowlisted, hostCidr } from "./auto-blacklist.js";
+import { hostCidr, loadAllowlist } from "./auto-blacklist.js";
 import { writeAudit } from "./audit.js";
 
 /**
@@ -31,15 +31,19 @@ export type TickResult = { ran: boolean; groups: number; hits: number };
 const NOOP: TickResult = { ran: false, groups: 0, hits: 0 };
 
 type GroupKey = { sensor_id: string; app_id: string; src_ip: string; win: number };
-type ScanRow = Pick<FlowEventRow, "sensor_id" | "app_id" | "src_ip" | "ts" | "received_at">;
+/** 分組鍵欄位（窗由 ts 算，與 judgeFlows 同用 Date.parse）；新列另帶 received_at 推 cursor。 */
+type KeyRow = Pick<FlowEventRow, "sensor_id" | "app_id" | "src_ip" | "ts">;
+type ScanRow = KeyRow & Pick<FlowEventRow, "received_at">;
+/** 一個 tick 內共用：門檻、白名單判斷（每個 tick 只讀一次）、時間。 */
+type TickCtx = { th: FlowThresholds; isAllowlisted: (ip: string) => boolean; now: number };
 
 /** upto：這批實際看到的最大 received_at（沒有新列 → null，cursor 不動）。不用 control-api 的 now，ingest 時鐘較慢時才不會漏列。 */
 async function scanGroups(q: Queryable, cursor: number, now: number): Promise<{ keys: GroupKey[]; upto: number | null }> {
   const fresh = (await q.query<ScanRow>(
     `SELECT sensor_id, app_id, src_ip, ts, received_at FROM flow_events
      WHERE received_at > $1 AND received_at <= $2 ORDER BY received_at LIMIT ${JUDGE_BATCH}`, [cursor, now])).rows;
-  const overlap = (await q.query<ScanRow>(
-    `SELECT DISTINCT sensor_id, app_id, src_ip, ts, '0' AS received_at FROM flow_events
+  const overlap = (await q.query<KeyRow>(
+    `SELECT sensor_id, app_id, src_ip, ts FROM flow_events
      WHERE received_at > $1 AND received_at <= $2`, [cursor - JUDGE_OVERLAP_MS, cursor])).rows;
   const keys = new Map<string, GroupKey>();
   for (const r of [...overlap, ...fresh]) {
@@ -75,7 +79,7 @@ async function onActiveBlocklist(q: Queryable, k: GroupKey, confidence: number, 
 }
 
 /** 重讀整組並判定；confidence ≥ case → 存命中（第一次寫入時累加待審），回 true。 */
-async function judgeGroup(q: Queryable, k: GroupKey, th: FlowThresholds, now: number): Promise<boolean> {
+async function judgeGroup(q: Queryable, k: GroupKey, { th, isAllowlisted, now }: TickCtx): Promise<boolean> {
   const rows = (await q.query<FlowEventRow>(
     `SELECT * FROM flow_events WHERE sensor_id = $1 AND app_id = $2 AND src_ip = $3
        AND ts::timestamptz >= to_timestamp($4 / 1000.0) AND ts::timestamptz < to_timestamp($5 / 1000.0)`,
@@ -86,7 +90,7 @@ async function judgeGroup(q: Queryable, k: GroupKey, th: FlowThresholds, now: nu
   const ontimeConfidence = ontime.length > 0 ? judgeFlows(ontime, th)[0]!.confidence : null;
   const { created } = await upsertCaseHit(q, { src_ip: k.src_ip, sensor_id: k.sensor_id, app_id: k.app_id,
     window_start: k.win, confidence: all.confidence, ontime_confidence: ontimeConfidence }, now);
-  if (await allowlisted(q, k.src_ip, now)) return true;
+  if (isAllowlisted(k.src_ip)) return true;
   if (await onActiveBlocklist(q, k, all.confidence, created, now)) return true;
   if (created) await accumulateCase(q, { ip: k.src_ip, confidence: all.confidence, late: ontime.length < rows.length }, now);
   else await raiseCaseMax(q, k.src_ip, all.confidence, now);
@@ -103,7 +107,8 @@ export async function runJudgeTick(db: Db, now: number, log?: WarnLog): Promise<
     const cur = (await q.query<{ received_upto: string }>("SELECT received_upto FROM judge_cursor WHERE id")).rows[0];
     const { keys, upto } = await scanGroups(q, Number(cur?.received_upto ?? 0), now);
     let hits = 0;
-    for (const k of keys) if (await judgeGroup(q, k, th, now)) hits += 1;
+    const ctx: TickCtx = { th, isAllowlisted: await loadAllowlist(q, now), now };
+    for (const k of keys) if (await judgeGroup(q, k, ctx)) hits += 1;
     await q.query("DELETE FROM case_hits WHERE updated_at <= $1", [now - RETENTION_MS]);
     await q.query("DELETE FROM blacklist_cases WHERE state <> 'open' AND resolved_at <= $1", [now - RETENTION_MS]);
     if (upto !== null) {

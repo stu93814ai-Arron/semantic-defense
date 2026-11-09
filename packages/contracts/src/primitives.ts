@@ -18,6 +18,7 @@ export const SingleIp = z.string().refine(assertFlowSingleIp, { message: "single
  * 以 Unicode 類別擋（資安殘留 2）：Cc（C0／C1 控制字元）、Cf（格式字元：bidi、零寬 U+200B–200F、U+FEFF、U+00AD、
  * U+180E、U+FFF9–FFFB、tag 字元等）、Zl（U+2028）、Zp（U+2029）。另列 Lo 的填充字元 U+115F、U+3164，
  * 以及整段 tag 區 U+E0000–E007F（其中 U+E0000、U+E0002–E001F 未指派，不屬 Cf，須明列）。
+ * 刻意：擋 tag 字元會連帶擋掉英格蘭、蘇格蘭、威爾斯這類分區旗幟 emoji（以 tag 序列組成）；一般國旗 emoji 仍可。
  */
 const CONTROL_OR_BIDI = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u115F\u3164]/u;
 /** tag 區以 code point 比對（regex 寫 \u{E0000}-\u{E007F} 會被 security/detect-unsafe-regex 誤報）。 */

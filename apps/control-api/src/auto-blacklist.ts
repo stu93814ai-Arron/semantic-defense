@@ -29,20 +29,21 @@ export type AutoListResult =
 const addrOf = (s: string) => s.split("/")[0]!;
 const family = (addr: string) => (isIP(addr) === 6 ? "ipv6" : "ipv4");
 
-/** ip（單一位址，可帶 /32、/128）是否落在未到期白名單內（CIDR 包含）。判定 tick 也用。 */
-export async function allowlisted(q: Queryable, ip: string, now: number): Promise<boolean> {
+/** 讀一次未到期白名單，回判斷函式：ip（單一位址，可帶 /32、/128）是否落在其中（CIDR 包含）。判定 tick 每個 tick 讀一次。 */
+export async function loadAllowlist(q: Queryable, now: number): Promise<(ip: string) => boolean> {
   const r = await q.query<{ cidr: string }>(
     "SELECT cidr FROM allowlist_entries WHERE expires_at IS NULL OR expires_at > $1", [now]);
-  if (r.rows.length === 0) return false;
+  if (r.rows.length === 0) return () => false;
   const list = new BlockList();
   for (const { cidr } of r.rows) {
     const [addr, p] = cidr.split("/") as [string, string | undefined];
     const fam = family(addr);
     list.addSubnet(addr, p === undefined ? (fam === "ipv6" ? 128 : 32) : Number(p), fam);
   }
-  const addr = addrOf(ip);
-  return list.check(addr, family(addr));
+  return (ip) => { const addr = addrOf(ip); return list.check(addr, family(addr)); };
 }
+
+const allowlisted = async (q: Queryable, ip: string, now: number): Promise<boolean> => (await loadAllowlist(q, now))(ip);
 
 /** 主機前綴正規化：合法 /32、/128（含無前綴）→ `<canonical address>/<prefix>`；否則 null。 */
 export function hostCidr(raw: string): string | null {

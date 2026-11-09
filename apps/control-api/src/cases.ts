@@ -68,6 +68,8 @@ export async function upsertCaseHit(q: Queryable, h: CaseHit, now: number): Prom
 /**
  * 重掃（命中已存在）時只把同 IP 的 open 待審 max_confidence 以 GREATEST 拉高（A 裁定 11-09）：
  * hit_count 不加、expires_at 不延長、last_hit_at 不動（只在新命中第一次寫入時更新）；不是 open 或已到期就不更新。
+ * 已知且接受：case_hits 不記 case_id，只依 IP 找目前 open 的那筆。所以舊命中（屬於已收掉的舊 case）因遲到的 flow
+ * 被重掃時，可能拉高同 IP 新 case 的最高分。
  */
 export async function raiseCaseMax(q: Queryable, ip: string, confidence: number, now: number): Promise<void> {
   await q.query(
