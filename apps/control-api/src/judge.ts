@@ -237,8 +237,8 @@ export async function runJudgeTick(db: Db, now: number, log?: WarnLog, opts: Tic
     const n = { hit: 0, miss: 0, skipped: 0, failed: 0 };
     for (const k of keys) n[await judgeGroupIsolated(q, k, ctx)] += 1;
     logTickCounts(log, n, ctx.stats);
-    // 實際處理的組（扣掉 skipped）全部失敗 → 不前進 cursor（資安 R14b）：整個 tick 失敗 rollback，錯誤訊息只帶數量
-    if (n.failed > 0 && n.failed === keys.length - n.skipped) throw new Error(`judge tick: every group failed (${n.failed})`);
+    // R14b（全部組失敗就整個 tick 失敗）已移除（A 裁示 R18）：ts slice 後判定只讀 ts_ms，22007／22008／22009 只回滾該組、cursor 照常前進；
+    // 非這三碼的錯誤仍在 judgeGroupIsolated 往外丟，整個 tick 回滾（B3／R14a）
     // 依 first_seen_at（第一次寫入、伺服器時間）清：重掃會一直刷新 updated_at，用它清會永遠清不掉（資安退回 R3）
     await q.query("DELETE FROM case_hits WHERE first_seen_at <= $1", [now - RETENTION_MS]);
     await q.query("DELETE FROM blacklist_cases WHERE state <> 'open' AND resolved_at <= $1", [now - RETENTION_MS]);
