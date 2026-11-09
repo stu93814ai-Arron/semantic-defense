@@ -20,3 +20,14 @@ export async function insertFlowEvents(db: FlowDb, seeds: readonly FlowSeed[]): 
   for (const s of seeds) if (await insertFlow(db, s.flow, s.sensorId, s.receivedAt)) n += 1;
   return n;
 }
+
+/** 同 insertFlowEvents，但新增的列 ts_ms 設回 NULL：模擬 ts_ms 之前的舊列／滾動升級期間舊版 ingest 寫的列。 */
+export async function insertLegacyFlowEvents(db: FlowDb, seeds: readonly FlowSeed[]): Promise<number> {
+  let n = 0;
+  for (const s of seeds) {
+    if (!(await insertFlow(db, s.flow, s.sensorId, s.receivedAt))) continue;
+    await db.query("UPDATE flow_events SET ts_ms = NULL WHERE sensor_id = $1 AND flow_id = $2", [s.sensorId, s.flow.flow_id]);
+    n += 1;
+  }
+  return n;
+}

@@ -33,6 +33,23 @@ describe("insertFlow", () => {
   });
 });
 
+describe("insertFlow 寫 ts_ms（Q1：JS Date.parse；與 SQL 回填 flow_ts_ms 同值）", () => {
+  const TS = ["2026-11-05T12:00:00Z", "2026-11-05T20:00:00+08:00", "2026-11-05T12:00:00+15:59", "2026-11-05T12:00:00-15:59",
+    "2026-11-05T12:00:00.123456Z", "2028-02-29T23:59:59.999999-03:30"];
+
+  it("JS 寫入值 ＝ Date.parse ＝ 同列 flow_ts_ms(ts) 回填值", async () => {
+    for (const ts of TS) await insertFlow(db, { ...flow(), ts }, "s-1", T0);
+    const r = await db.query<{ ts: string; js: string; sql: string }>("SELECT ts, ts_ms AS js, flow_ts_ms(ts) AS sql FROM flow_events");
+    expect(r.rows.map((x) => [x.ts, Number(x.js), Number(x.sql)]).sort())
+      .toEqual(TS.map((ts) => [ts, Date.parse(ts), Date.parse(ts)]).sort());
+  });
+
+  it("Date.parse 不出數字（NaN）→ ts_ms NULL，照常寫入", async () => {
+    expect(await insertFlow(db, { ...flow(), ts: "not-a-time" }, "s-1", T0)).toBe(true);
+    expect((await db.query<{ ts_ms: string | null }>("SELECT ts_ms FROM flow_events")).rows).toEqual([{ ts_ms: null }]);
+  });
+});
+
 describe("7 天清除（年齡 ≥ 7d 刪）", () => {
   it("RETENTION_MS = 7 * 24 * 60 * 60 * 1000", () => {
     expect(RETENTION_MS).toBe(604_800_000);

@@ -71,15 +71,21 @@ export async function purgeExpired(db: FlowDb, now: number): Promise<number> {
   return ev.rows.length + rej.rows.length;
 }
 
-/** 寫入一筆；同 sensor 重複 flow_id → false（不同 sensor 可重用 flow_id）。 */
+/** ts 的 epoch ms（Q1：JS Date.parse，與 SQL flow_ts_ms 同值）；解析不出數字 → NULL。 */
+const tsMsOf = (ts: string): number | null => {
+  const ms = Date.parse(ts);
+  return Number.isFinite(ms) ? ms : null;
+};
+
+/** 寫入一筆（含 ts_ms）；同 sensor 重複 flow_id → false（不同 sensor 可重用 flow_id）。 */
 export async function insertFlow(db: FlowDb, f: FlowMetadataEvent, sensorId: string, now: number): Promise<boolean> {
   const r = await db.query<{ flow_id: string }>(
     `INSERT INTO flow_events (flow_id, app_id, ts, src_ip, dst_ip, src_port, dst_port, protocol,
-       bytes_in, bytes_out, packets, duration_ms, sensor_id, received_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+       bytes_in, bytes_out, packets, duration_ms, sensor_id, received_at, ts_ms)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
      ON CONFLICT (sensor_id, flow_id) DO NOTHING RETURNING flow_id`,
     [f.flow_id, f.app_id, f.ts, f.src_ip, f.dst_ip, f.src_port, f.dst_port, f.protocol,
-      f.bytes_in, f.bytes_out, f.packets, f.duration_ms, sensorId, now],
+      f.bytes_in, f.bytes_out, f.packets, f.duration_ms, sensorId, now, tsMsOf(f.ts)],
   );
   return r.rows.length === 1;
 }

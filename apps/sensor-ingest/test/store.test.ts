@@ -35,6 +35,14 @@ describe("③c 存入 flow_events（單筆 body＝一個 FlowMetadataEvent）", 
     await app.close();
   });
 
+  it("ts_ms（ts slice）：ingest 寫入 ts 的 epoch ms（Date.parse），判定 tick 據此分窗", async () => {
+    const { app, post } = await setup();
+    expect((await post(flow({ ts: "2027-01-15T15:00:00.123456+08:00" }))).statusCode).toBe(201);
+    const r = await db.query<{ ts_ms: string }>("SELECT ts_ms FROM flow_events");
+    expect(r.rows.map((x) => Number(x.ts_ms))).toEqual([Date.parse("2027-01-15T07:00:00.123Z")]);
+    await app.close();
+  });
+
   it("多欄（payload／url／headers）、缺欄、自報 sensor_id、陣列 → 400 且不寫入", async () => {
     const { app, post } = await setup();
     const missing: Record<string, unknown> = flow();

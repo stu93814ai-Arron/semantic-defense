@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FlowMetadataEvent } from "@semantic-defense/contracts";
 import { flowEventsReady, type FlowDb } from "../src/read.js";
-import { createFlowTables, insertFlowEvents } from "../src/testing.js";
+import { createFlowTables, insertFlowEvents, insertLegacyFlowEvents } from "../src/testing.js";
 import { openSchemaDb } from "./helpers.js";
 
 /** 測試入口 ./testing（A 組領航員 11-09）：只有建表與塞資料的測試輔助，DDL 仍走 write.ts。 */
@@ -39,5 +39,13 @@ describe("flow-store/testing", () => {
     expect(rows.map((r) => [r.src_ip, r.sensor_id, Number(r.received_at)])).toEqual([
       ["203.0.113.5", "s-1", 1000], ["2001:db8::1", "s-2", 3000],
     ]);
+  });
+
+  it("insertLegacyFlowEvents：模擬舊版 ingest（ts_ms NULL），其餘同 insertFlowEvents", async () => {
+    await createFlowTables(db);
+    const a = flow("64.0.113.7");
+    expect(await insertLegacyFlowEvents(db, [{ flow: a, sensorId: "s-9", receivedAt: 1 }, { flow: a, sensorId: "s-9", receivedAt: 2 }])).toBe(1);
+    const r = await db.query<{ ts: string; ts_ms: string | null }>("SELECT ts, ts_ms FROM flow_events WHERE sensor_id = 's-9'");
+    expect(r.rows).toEqual([{ ts: a.ts, ts_ms: null }]);
   });
 });
