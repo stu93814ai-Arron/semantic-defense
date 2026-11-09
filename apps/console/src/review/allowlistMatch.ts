@@ -90,7 +90,6 @@ function ipv6InCidr(ip: string, cidr: string): boolean {
   return (ipv6ToBigInt(baseParts) & mask) === (ipv6ToBigInt(targetParts) & mask);
 }
 
-
 function ipFamily(ip: string): 0 | 4 | 6 {
   if (ipv4ToInt(ip) !== null) return 4;
   if (expandIpv6(ip) !== null) return 6;
