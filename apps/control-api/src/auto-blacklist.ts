@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { BlockList, isIP } from "node:net";
-import { BlocklistEntrySchema, assertIpOrCidr, isHostPrefix, type BlocklistEntry } from "@semantic-defense/contracts";
+import { BlocklistEntrySchema, parseCidr, type BlocklistEntry } from "@semantic-defense/contracts";
 import type { Db, Queryable } from "./db.js";
 import { writeAudit } from "./audit.js";
 import { loadThresholds } from "./thresholds.js";
@@ -8,7 +8,8 @@ import { BLOCKLIST_COLS, toBlocklistEntry, type BlocklistRow } from "./blacklist
 
 /**
  * ④ source=auto 寫入邊界（內部函式，不開 HTTP）。不含觸發條件（命中次數、去重、冷卻、熔斷）。
- * 1. ip 只收 /32、/128（contracts ip-cidr 規則）→ 否則 invalid_ip。
+ * 1. ip 只收 /32、/128（contracts ip-cidr 規則，IPv6 須已是 canonical 小寫）→ 否則 invalid_ip。
+ *    存放一律正規化為 `<address>/32` 或 `<address>/128`（單一 IP 與帶前綴寫法存成同一值）。
  * 2. 同一 tx 內：鎖白名單（SHARE，擋並行新增／修改），讀目前 auto 門檻；confidence < auto → below_auto_threshold。
  * 3. 命中未到期白名單 → allowlisted（白名單永遠優先，不上榜）。
  * 4. 寫入黑名單項目（approved_by=system:auto、created_at=approved_at=now、expires_at=now+24h）
@@ -39,15 +40,23 @@ async function allowlisted(q: Queryable, ip: string, now: number): Promise<boole
   return list.check(addr, family(addr));
 }
 
+/** 主機前綴正規化：合法 /32、/128（含無前綴）→ `<canonical address>/<prefix>`；否則 null。 */
+export function hostCidr(raw: string): string | null {
+  const p = parseCidr(raw);
+  if (!p || p.prefix !== (p.version === 4 ? 32 : 128)) return null;
+  return `${p.address}/${p.prefix}`;
+}
+
 export async function writeAutoBlocklistEntry(db: Db, input: AutoListInput, now: number): Promise<AutoListResult> {
-  if (!assertIpOrCidr(input.ip) || !isHostPrefix(input.ip)) return { status: "invalid_ip" };
+  const ip = hostCidr(input.ip);
+  if (ip === null) return { status: "invalid_ip" };
   return db.tx(async (q): Promise<AutoListResult> => {
     await q.query("LOCK TABLE allowlist_entries IN SHARE MODE");
     const { auto } = await loadThresholds(q);
     if (!(input.confidence >= auto)) return { status: "below_auto_threshold" };
-    if (await allowlisted(q, input.ip, now)) return { status: "allowlisted" };
+    if (await allowlisted(q, ip, now)) return { status: "allowlisted" };
     const draft = BlocklistEntrySchema.parse({
-      entry_id: randomUUID(), ip: input.ip, source: "auto", confidence: input.confidence, case_id: input.case_id,
+      entry_id: randomUUID(), ip, source: "auto", confidence: input.confidence, case_id: input.case_id,
       created_at: new Date(now).toISOString(), expires_at: new Date(now + AUTO_LIST_TTL_MS).toISOString(),
       approved_by: "system:auto", approved_at: new Date(now).toISOString(), revoked_at: null,
     });

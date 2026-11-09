@@ -33,12 +33,12 @@ describe("writeAutoBlocklistEntry", () => {
     if (r.status !== "listed") return;
     expect(BlocklistEntrySchema.safeParse(r.entry).success).toBe(true);
     expect(r.entry).toMatchObject({
-      ip: "203.0.113.7", source: "auto", confidence: 0.95, case_id: i.case_id, approved_by: "system:auto", revoked_at: null,
+      ip: "203.0.113.7/32", source: "auto", confidence: 0.95, case_id: i.case_id, approved_by: "system:auto", revoked_at: null,
       created_at: new Date(NOW).toISOString(), approved_at: new Date(NOW).toISOString(), expires_at: new Date(NOW + DAY).toISOString(),
     });
     expect(await count("blocklist_entries")).toBe(1);
     expect(await autoAudits()).toEqual([{ actor: "system:auto", detail: {
-      entry_id: r.entry.entry_id, ip: "203.0.113.7", confidence: 0.95, case_id: i.case_id, expires_at: r.entry.expires_at } }]);
+      entry_id: r.entry.entry_id, ip: "203.0.113.7/32", confidence: 0.95, case_id: i.case_id, expires_at: r.entry.expires_at } }]);
   });
 
   it.each(["203.0.113.7/32", "2001:db8::7", "2001:db8::7/128"])("接受主機前綴 %s", async (ip) => {
@@ -46,6 +46,31 @@ describe("writeAutoBlocklistEntry", () => {
     expect((await writeAutoBlocklistEntry(app.db, input(ip), NOW)).status).toBe("listed");
   });
 
+});
+
+describe("writeAutoBlocklistEntry：ip 正規化", () => {
+  it.each([
+    ["203.0.113.7", "203.0.113.7/32"], ["203.0.113.7/32", "203.0.113.7/32"],
+    ["2001:db8::7", "2001:db8::7/128"], ["2001:db8::7/128", "2001:db8::7/128"], ["2001:db8:0:1::a", "2001:db8:0:1::a/128"],
+  ])("ip 正規化：%s 存成 %s（DB 與回傳一致）", async (ip, stored) => {
+    await boot();
+    const r = await writeAutoBlocklistEntry(app.db, input(ip), NOW);
+    expect(r.status === "listed" && r.entry.ip).toBe(stored);
+    const rows = (await app.db.query<{ ip: string }>("SELECT ip FROM blocklist_entries")).rows;
+    expect(rows).toEqual([{ ip: stored }]);
+  });
+
+  it("1.2.3.4 與 1.2.3.4/32 存成同一個值（去重延後：兩筆皆寫入）", async () => {
+    await boot();
+    await writeAutoBlocklistEntry(app.db, input("1.2.3.4"), NOW);
+    await writeAutoBlocklistEntry(app.db, input("1.2.3.4/32"), NOW);
+    const rows = (await app.db.query<{ ip: string }>("SELECT ip FROM blocklist_entries ORDER BY created_at")).rows;
+    expect(rows.map((x) => x.ip)).toEqual(["1.2.3.4/32", "1.2.3.4/32"]);
+  });
+
+});
+
+describe("writeAutoBlocklistEntry：拒絕與邊界", () => {
   it.each(["203.0.113.0/24", "2001:db8::/64", "127.0.0.1", "::ffff:203.0.113.7", "2001:DB8::7", "not-an-ip"])(
     "非 /32、/128 或非法 IP %s → invalid_ip，不寫入、不寫稽核", async (ip) => {
       await boot();
