@@ -20,8 +20,9 @@ const DDL = [
   PRIMARY KEY (sensor_id, flow_id)
 )`,
   "CREATE INDEX IF NOT EXISTS flow_events_received_at ON flow_events (received_at)",
-  // app_id 未綁定的拒絕紀錄：只記 sensor_id＋時間，不記 payload；與 flow_events 同 7 天清除
-  "CREATE TABLE IF NOT EXISTS flow_rejections (sensor_id TEXT NOT NULL, at BIGINT NOT NULL)",
+  // app_id 未綁定的拒絕紀錄：只記 id（代理 PK）＋sensor_id＋時間，不記 payload；與 flow_events 同 7 天清除。
+  // 註：IF NOT EXISTS 不會改既有舊表（無 id）的結構；本階段不做 migration。
+  "CREATE TABLE IF NOT EXISTS flow_rejections (id BIGSERIAL PRIMARY KEY, sensor_id TEXT NOT NULL, at BIGINT NOT NULL)",
   "CREATE INDEX IF NOT EXISTS flow_rejections_at ON flow_rejections (at)",
 ];
 

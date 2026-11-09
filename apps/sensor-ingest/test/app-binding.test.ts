@@ -32,7 +32,7 @@ describe("allowed_app_ids 綁定", () => {
     expect(r.statusCode).toBe(403);
     expect(await count("flow_events")).toBe(0);
     const rej = await db.query<Record<string, unknown>>("SELECT * FROM flow_rejections");
-    expect(rej.rows).toEqual([{ sensor_id: sensorId, at: String(T0) }]);
+    expect(rej.rows).toEqual([{ id: "1", sensor_id: sensorId, at: String(T0) }]);
     expect(JSON.stringify(rej.rows)).not.toContain(f.flow_id);
     await app.close();
   });

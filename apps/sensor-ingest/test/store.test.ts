@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { buildIngest } from "../src/app.js";
-import { RETENTION_MS, ensureFlowSchema, purgeExpired } from "../src/store.js";
+import { RETENTION_MS, ensureFlowSchema, purgeExpired, recordRejection } from "../src/store.js";
 import { openTestDb, seedToken } from "./helpers.js";
 
 let db: Awaited<ReturnType<typeof openTestDb>>;
@@ -110,5 +110,35 @@ describe("③c 7 天清除（年齡 ≥ 7d 刪）", () => {
       "SELECT at FROM flow_rejections WHERE sensor_id = $1 ORDER BY at", [sid],
     );
     expect(left.rows.map((r) => Number(r.at))).toEqual([T0 + 1]);
+  });
+});
+
+describe("flow_rejections 主鍵", () => {
+  it("欄位只有 id（BIGSERIAL PK）、sensor_id、at；不記 payload", async () => {
+    await ensureFlowSchema(db);
+    const cols = await db.query<{ column_name: string; column_default: string | null }>(
+      `SELECT column_name, column_default FROM information_schema.columns
+       WHERE table_schema = current_schema() AND table_name = 'flow_rejections' ORDER BY ordinal_position`,
+    );
+    expect(cols.rows.map((c) => c.column_name)).toEqual(["id", "sensor_id", "at"]);
+    expect(cols.rows[0]!.column_default).toMatch(/^nextval\(/);
+    const pk = await db.query<{ column_name: string }>(
+      `SELECT k.column_name FROM information_schema.table_constraints t
+       JOIN information_schema.key_column_usage k
+         ON k.constraint_name = t.constraint_name AND k.table_schema = t.table_schema
+       WHERE t.table_schema = current_schema() AND t.table_name = 'flow_rejections' AND t.constraint_type = 'PRIMARY KEY'`,
+    );
+    expect(pk.rows.map((r) => r.column_name)).toEqual(["id"]);
+  });
+
+  it("同一 sensor 同一 ms 被拒兩次 → 兩筆都保留", async () => {
+    await ensureFlowSchema(db);
+    await recordRejection(db, "sensor-dup", T0);
+    await recordRejection(db, "sensor-dup", T0);
+    const r = await db.query<{ id: string; sensor_id: string; at: string }>(
+      "SELECT id, sensor_id, at FROM flow_rejections ORDER BY id",
+    );
+    expect(r.rows.map((x) => [x.sensor_id, Number(x.at)])).toEqual([["sensor-dup", T0], ["sensor-dup", T0]]);
+    expect(new Set(r.rows.map((x) => x.id)).size).toBe(2);
   });
 });
