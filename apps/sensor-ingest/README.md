@@ -14,6 +14,10 @@
 - `POST /v1/flows`：body＝單一 FlowMetadataEvent（contracts strict）。自報 `sensor_id`／多欄／缺欄 → **400**；`ts` 超前收到時間 >5 分鐘 → **400** `{error:"ts 超前接收時間"}`、早於 now − 7 天（RETENTION_MS）→ **400** `{error:"ts 早於保留期限"}`（兩者剛好等於上限仍收；皆先於 app_id 綁定檢查，不寫 `flow_rejections`；7 天內遲到照存）；`app_id` 不在 token 的 `allowed_app_ids` → **403**（只記 `flow_rejections(sensor_id, at)`，不記 payload、不入庫）；同 sensor 重複 `flow_id` → **409**（PK `(sensor_id, flow_id)`）；成功 → **201**。
   寫入表 `flow_events`：契約欄位＋`sensor_id`（取自 token）＋`received_at`（注入時鐘 now）。token 撤銷不刪舊列。
 
+## ts_ms（判定分窗用）
+- `flow_events.ts_ms`（BIGINT，可 NULL）＝`ts` 的 epoch ms，寫入時以 JS `Date.parse` 算（算不出 → NULL）。判定 tick 只讀 `ts_ms`，`ts_ms IS NULL` 的列不分組、只計數（log `{null_ts:n}`），cursor 照常前進。
+- 啟動時 `ensureFlowSchema`（flow-store）在一個交易內、持有 advisory lock：補欄、建 `flow_ts_ms(TEXT)`（只吞 data_exception → NULL）、回填 `WHERE ts_ms IS NULL`、建索引 `flow_events_group_ms`、移除舊索引 `flow_events_group`。回填每次啟動都跑，會全表掃描 flow_events——見 `docs/deploy-checklist.md` R15。
+
 ## 保留期
 年齡 ≥ 7 天（`now - received_at >= 7 * 24 * 60 * 60 * 1000`）即刪；每次寫入前執行，另 export `purgeExpired(db, now)`。
 
