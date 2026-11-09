@@ -17,6 +17,8 @@ describe("管理面 HTTP 契約：路徑常數", () => {
       blacklist: "/api/blacklist",
       blacklistRevoke: "/api/blacklist/:entryId/revoke",
       blacklistPending: "/api/blacklist/pending",
+      blacklistPendingApprove: "/api/blacklist/pending/:caseId/approve",
+      blacklistPendingReject: "/api/blacklist/pending/:caseId/reject",
       whitelist: "/api/whitelist",
       whitelistEntry: "/api/whitelist/:entryId",
     });
@@ -71,8 +73,8 @@ describe("門檻 {case, auto}", () => {
 });
 
 describe("黑名單待審候選（以 case_id 為鍵）", () => {
-  const P = { ip: "203.0.113.10", confidence: 0.6, case_id: CASE, created_at: T };
-  it("只有 ip、confidence、case_id、created_at", () => {
+  const P = { ip: "203.0.113.10", confidence: 0.6, case_id: CASE, created_at: T, hit_count: 1, last_hit_at: T };
+  it("只有 ip、confidence（累加期間最高分）、case_id、created_at、hit_count、last_hit_at", () => {
     expect(ok(PendingCandidateSchema, P)).toBe(true);
     expect(ok(PendingCandidateSchema, { ...P, ip: "2001:db8::1" })).toBe(true);
     expect(ok(PendingCandidateSchema, { ...P, ip: "203.0.113.10/32" })).toBe(true);
@@ -92,6 +94,18 @@ describe("黑名單待審候選（以 case_id 為鍵）", () => {
     expect(ok(PendingCandidateSchema, { ...P, created_at: "yesterday" })).toBe(false);
     expect(ok(PendingCandidateListSchema, { items: [P] })).toBe(true);
     expect(ok(PendingCandidateListSchema, { items: [P], total: 1 })).toBe(false);
+  });
+  it.each([0, -1, 1.5, Number.NaN, "1", null])("hit_count 須為整數 ≥1：拒 %s", (hit_count) => {
+    expect(ok(PendingCandidateSchema, { ...P, hit_count })).toBe(false);
+  });
+  it("hit_count 大值可過；last_hit_at 須 RFC3339；計畫外欄位（expires_at、state、has_late）整份拒收", () => {
+    expect(ok(PendingCandidateSchema, { ...P, hit_count: 1234 })).toBe(true);
+    expect(ok(PendingCandidateSchema, { ...P, last_hit_at: "2026-11-09T08:00:00+08:00" })).toBe(true);
+    expect(ok(PendingCandidateSchema, { ...P, last_hit_at: "yesterday" })).toBe(false);
+    expect(ok(PendingCandidateSchema, { ...P, last_hit_at: 1_800_000_000_000 })).toBe(false);
+    for (const extra of [{ expires_at: T }, { state: "open" }, { has_late: false }]) {
+      expect(ok(PendingCandidateSchema, { ...P, ...extra }), JSON.stringify(extra)).toBe(false);
+    }
   });
 });
 

@@ -58,6 +58,15 @@ describe("contracts ./browser 入口（瀏覽器安全）", () => {
     expect(b).toBe(new Map(Object.entries(main)).get(name));
   });
 
+  it("browser 入口帶有待審核准／退回路徑與新版待審候選 schema（hit_count、last_hit_at）", () => {
+    expect(browser.ADMIN_API_PATHS.blacklistPendingApprove).toBe("/api/blacklist/pending/:caseId/approve");
+    expect(browser.ADMIN_API_PATHS.blacklistPendingReject).toBe("/api/blacklist/pending/:caseId/reject");
+    const p = { ip: "203.0.113.10", confidence: 0.6, case_id: "11111111-1111-4111-8111-111111111111",
+      created_at: "2026-11-09T00:00:00Z", hit_count: 2, last_hit_at: "2026-11-09T00:05:00Z" };
+    expect(browser.PendingCandidateSchema.safeParse(p).success).toBe(true);
+    expect(browser.PendingCandidateSchema.safeParse({ ...p, hit_count: 0 }).success).toBe(false);
+  });
+
   it("模組圖的外部依賴只有 zod", () => {
     const { external } = moduleGraph(resolve(SRC, "../", pkg.exports["./browser"]!));
     expect(external.sort()).toEqual(["zod"]);

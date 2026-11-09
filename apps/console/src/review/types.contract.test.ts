@@ -13,6 +13,8 @@ describe("console 類型對齊 contracts（欄位形狀）", () => {
       confidence: 0.55,
       case_id: "11111111-1111-4111-8111-111111111111",
       created_at: "2026-11-05T00:00:00Z",
+      hit_count: 1,
+      last_hit_at: "2026-11-05T00:00:00Z",
       candidate_id: "legacy",
     };
     expect(
@@ -21,6 +23,8 @@ describe("console 類型對齊 contracts（欄位形狀）", () => {
         confidence: c.confidence,
         case_id: c.case_id,
         created_at: c.created_at,
+        hit_count: c.hit_count,
+        last_hit_at: c.last_hit_at,
       }).success,
     ).toBe(true);
   });

@@ -70,24 +70,31 @@ describe("demoStore 整合決策", () => {
 
 describe("demoStore 待審信心帶過濾", () => {
   it("帶外信心不進清單；0.50 進、0.90 不進", () => {
+    const at = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
     injectPendingForTests([
       {
         ip: "198.51.100.10",
         confidence: 0.49,
         case_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-        created_at: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
+        created_at: at,
+        hit_count: 1,
+        last_hit_at: at,
       },
       {
         ip: "198.51.100.11",
         confidence: 0.5,
         case_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-        created_at: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
+        created_at: at,
+        hit_count: 1,
+        last_hit_at: at,
       },
       {
         ip: "198.51.100.12",
         confidence: 0.9,
         case_id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
-        created_at: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
+        created_at: at,
+        hit_count: 1,
+        last_hit_at: at,
       },
     ]);
     const ips = listPending().map((p) => p.ip);
@@ -101,18 +108,23 @@ describe("demoStore 門檻 get／set（僅 demo，寫稽核）", () => {
   });
 
   it("reviewUpdateThresholds 成功後 listPending 用新帶；並寫稽核", () => {
+    const at = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
     injectPendingForTests([
       {
         ip: "198.51.100.20",
         confidence: 0.6,
         case_id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
-        created_at: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
+        created_at: at,
+        hit_count: 1,
+        last_hit_at: at,
       },
       {
         ip: "198.51.100.21",
         confidence: 0.75,
         case_id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
-        created_at: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
+        created_at: at,
+        hit_count: 1,
+        last_hit_at: at,
       },
     ]);
     expect(listPending().map((p) => p.ip)).toEqual([

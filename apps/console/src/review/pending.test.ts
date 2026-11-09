@@ -12,6 +12,8 @@ const base: PendingCandidate = {
   confidence: 0.55,
   case_id: "11111111-1111-4111-8111-111111111111",
   created_at: "2026-11-05T00:00:00Z",
+  hit_count: 1,
+  last_hit_at: "2026-11-05T00:00:00Z",
 };
 
 const ctx = (over: Partial<ApproveContext> = {}): ApproveContext => ({
