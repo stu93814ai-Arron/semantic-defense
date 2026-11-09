@@ -44,3 +44,36 @@ SELECT sensor_id, count(*) FROM flow_events WHERE ts_ms IS NULL GROUP BY sensor_
 -- 確認已跑過最新回填（重啟 sensor-ingest）後仍為 NULL 才刪
 DELETE FROM flow_events WHERE ts_ms IS NULL;
 ```
+
+## R-B（部署前必修，須在 default-on 切片之前合入）：每次啟動的遷移鎖住 flow_events
+
+**現況問題**：
+
+- `ALTER TABLE flow_events ADD COLUMN IF NOT EXISTS ts_ms` 即使欄位已存在也會拿 **ACCESS EXCLUSIVE** 鎖。這把鎖在同一個遷移交易裡持有到回填結束。
+- 資安實測 1.2M 列：期間 flow_events 的 insert 等了 **17.8 秒**。
+- 永久為 NULL 的列（無法換算的 ts）每次啟動都被 `UPDATE … WHERE ts_ms IS NULL` 重寫一次。表從 **269MB 長到 643MB**。
+
+**預定修法（三項都要做）**：
+
+1. ALTER 前先查 `information_schema.columns`，欄位已存在就不執行 ALTER（不拿 ACCESS EXCLUSIVE）。
+2. 回填移出 schema 交易，改成分批執行（每批有上限、各自 commit），不再整段持鎖。
+3. 無法換算的列刪除，或另外標記（例如標記欄位），讓回填不再每次重寫它們。
+
+**部署前**：修好之前不得部署到有實際流量的環境；修法合入後再移除本段。
+
+## R-C：首次升級的鎖、表大小與舊 infinity 列
+
+(a) **啟動時的 DROP INDEX 與 ALTER 都拿 AccessExclusive**。部署前先在維護窗口手動移除舊索引，啟動時的 `DROP INDEX IF EXISTS` 就會跳過：
+
+```sql
+-- 不能在交易內執行
+DROP INDEX CONCURRENTLY IF EXISTS flow_events_group;
+```
+
+(b) **首次回填會重寫整張表**：每一列都更新一次 `ts_ms`。預期表大小約翻倍（直到 VACUUM 回收），並產生大量 WAL。部署前確認磁碟與複寫／備份的 WAL 空間足夠。
+
+(c) **舊列 ts 為 `infinity`／`-infinity`**：Postgres 對這兩個值換算 epoch 時丟 0A000（不在 22 類）。R-A 之後 `flow_ts_ms` 也吞 0A000 並回 NULL，所以這些列的 `ts_ms` 留 NULL、判定略過，處理方式同 R15「無法換算的舊列」。R-A 之前的版本遇到這種列會讓整個遷移回滾、ingest 起不來。
+
+## R-D：小數 ≥7 位時 SQL 與 JS 可能差 1ms（已接受）
+
+ts 的小數秒超過 6 位時，Postgres 解析時會捨入到微秒，JS `Date.parse` 則直接截到毫秒，兩者可能差 1ms。這只影響由 SQL 回填的舊列（新列由 ingest 用 JS 寫入），A 已接受，不另處理。
