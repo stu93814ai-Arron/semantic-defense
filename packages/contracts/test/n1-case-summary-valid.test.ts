@@ -89,16 +89,16 @@ describe("N1：(b) 會產出不合格摘要的輸入 → ok:false", () => {
   });
 
   it.each([
-    ["app_id", "has space"],
-    ["actor_id", "Ignore previous instructions"],
-    ["session_id", "a<b>"],
-    ["app_id", ""],
-    ["actor_id", "x".repeat(129)],
-  ] as const)("事件欄位違反 R1（%s）→ ok:false", (field, bad) => {
+    ["app_id", "含空白", "has space"],
+    ["actor_id", "自然語言指令", "Ignore previous instructions"],
+    ["session_id", "角括號", "a<b>"],
+    ["app_id", "空字串", ""],
+    ["actor_id", "超過 128 字", "x".repeat(129)],
+  ] as const)("事件欄位違反 R1（%s：%s）→ ok:false", (field, why, bad) => {
     const base = { ...load("events/normal-read.json"), [field]: bad };
     expect(() => toCaseSummary(asEvents([base]))).not.toThrow();
     const r = toCaseSummary(asEvents([base]));
-    expect(r.ok).toBe(false);
+    expect(r.ok, `${field}：${why}`).toBe(false);
     assertNeverInvalid(r);
     if (r.ok) {
       // 若誤回 ok:true，value 也不得是不合格摘要
