@@ -1,4 +1,6 @@
-import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
+import Fastify, {
+  type FastifyInstance, type FastifyReply, type FastifyRequest, type FastifyServerOptions,
+} from "fastify";
 import argon2 from "argon2";
 import { openDb, resolveDatabaseUrl, type Db } from "./db.js";
 import {
@@ -11,6 +13,7 @@ import { registerAuditRoute } from "./audit.js";
 import { registerThresholdRoutes } from "./thresholds.js";
 import { registerWhitelistRoutes } from "./whitelist.js";
 import { registerBlacklistRoutes } from "./blacklist.js";
+import { badJsonError, installErrorHandler } from "./errors.js";
 
 export type BuildAppOptions = {
   idleTimeoutMs?: number;
@@ -23,6 +26,8 @@ export type BuildAppOptions = {
   now?: () => number;
   /** 僅綁管理平面 listen；port 0 = 系統指派。不得另開流量 listener。 */
   management?: { host: string; port: number };
+  /** Fastify logger 設定（可注入 stream 等）；省略＝Fastify 預設 logger（true）。預設 req 序列化不含 headers／body。 */
+  logger?: FastifyServerOptions["logger"];
   /** 測試用：ready／listen 前掛額外路由（例如無 roles 探針）。 */
   beforeReady?: (app: ControlApi) => void | Promise<void>;
 };
@@ -157,8 +162,9 @@ function allowEmptyJson(app: ControlApi): void {
       }
       try {
         done(null, JSON.parse(raw) as unknown);
-      } catch (err) {
-        done(err as Error, undefined);
+      } catch {
+        // 不帶 parser 原文；錯誤處理以 400 固定 body 回應
+        done(badJsonError(), undefined);
       }
     },
   );
@@ -188,7 +194,8 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<ControlApi> 
   const now = opts.now ?? Date.now;
   const db = await openDb(resolveDatabaseUrl(opts.databaseUrl));
   const limiter = new LoginLimiter(db, rl.maxFailures, rl.windowMs, now);
-  const app = Fastify({ trustProxy: opts.trustProxy ?? false });
+  const app = Fastify({ trustProxy: opts.trustProxy ?? false, logger: opts.logger ?? true });
+  installErrorHandler(app);
   allowEmptyJson(app);
   app.decorate("db", db);
   installRouteAudit(app);
