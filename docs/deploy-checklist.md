@@ -50,8 +50,8 @@ DELETE FROM flow_events WHERE ts_ms IS NULL;
 **現況問題**：
 
 - `ALTER TABLE flow_events ADD COLUMN IF NOT EXISTS ts_ms` 即使欄位已存在也會拿 **ACCESS EXCLUSIVE** 鎖。這把鎖在同一個遷移交易裡持有到回填結束。
-- 資安實測 1.2M 列：期間 flow_events 的 insert 等了 **17.8 秒**。
-- 永久為 NULL 的列（無法換算的 ts）每次啟動都被 `UPDATE … WHERE ts_ms IS NULL` 重寫一次。表從 **269MB 長到 643MB**。
+- 資安實測 1.2M 列：期間 flow_events 的 insert 等了 **17.8 秒**。判定的一般 SELECT 也會被擋（實測 **1.54 秒**）。
+- 表從 **269MB 長到 643MB**：大部分來自首次回填重寫整表（到 **576MB**，見 R-C (b)）；之後每次啟動，永久為 NULL 的列（無法換算的 ts）又被 `UPDATE … WHERE ts_ms IS NULL` 重寫一次，只再多約 **67MB**。
 
 **預定修法（三項都要做）**：
 
@@ -74,6 +74,6 @@ DROP INDEX CONCURRENTLY IF EXISTS flow_events_group;
 
 (c) **舊列 ts 為 `infinity`／`-infinity`**：Postgres 對這兩個值換算 epoch 時丟 0A000（不在 22 類）。R-A 之後 `flow_ts_ms` 也吞 0A000 並回 NULL，所以這些列的 `ts_ms` 留 NULL、判定略過，處理方式同 R15「無法換算的舊列」。R-A 之前的版本遇到這種列會讓整個遷移回滾、ingest 起不來。
 
-## R-D：小數 ≥7 位時 SQL 與 JS 可能差 1ms（已接受）
+## R-D：小數 ≥7 位時 SQL 與 JS 可能差 1ms（已由使用者接受（2026-11-09 23:21，由 PM 轉達））
 
-ts 的小數秒超過 6 位時，Postgres 解析時會捨入到微秒，JS `Date.parse` 則直接截到毫秒，兩者可能差 1ms。這只影響由 SQL 回填的舊列（新列由 ingest 用 JS 寫入），A 已接受，不另處理。
+ts 的小數秒超過 6 位時，Postgres 解析時會捨入到微秒，JS `Date.parse` 則直接截到毫秒，兩者可能差 1ms。這只影響由 SQL 回填的舊列（新列由 ingest 用 JS 寫入），已由使用者接受（2026-11-09 23:21，由 PM 轉達），不另處理。
