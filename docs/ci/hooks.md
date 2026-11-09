@@ -24,10 +24,10 @@ pre-commit 只檢查**暫存區（index）**的內容，不讀工作目錄未暫
 
 
 ### 已知殘留（gitleaks 加白）
-pre-commit 內嵌的 gitleaks 目錄掃描目前沒有完整的 allowlist／路徑排除設定；誤報或需加白的案例**先不在 hook 內改程式**，由 CI 閘門（`pnpm gate:clean`／GitHub Actions `quality`）兜底。後續若要在 hook 對齊 secrets 設定，另開變更。
+pre-commit 對暫存區做 gitleaks 目錄掃描時，**會尊循暫存區裡的** `.gitleaks.toml` **與** `gitleaks:allow` **註解**。因此提交者可以把這類設定一併 `git add`，替自己的 secret 加白——這點與改成 index-only **之前的舊版 hook 行為相同**（舊版掃工作目錄時同樣會吃到這些加白）。hook 內**先不改這段行為**；由 CI 的 GitHub Actions `quality` 與 `pnpm gate:clean`（正式 secrets 關卡）兜底。若日後要收緊 hook 端加白，另開變更。
 
 ## 測試
-`scripts/test-precommit-index-only.sh`：拋棄式 stub 驗證 (a)–(d)；**(s)** `packages → 樹外`（SENTINEL 在 `contracts/node_modules/`，輸出須含 ❌；並對照舊版 c220b0b 會不及格）；**(v)** `.vite` 為樹外 symlink 時只刪連結、放行；真實 monorepo (r1)(r2)。trap：INT→130、TERM→143；只 `git worktree remove --force` 自己建的路徑（不做全域 prune）。
+`scripts/test-precommit-index-only.sh`：拋棄式 stub 驗證 (a)–(d)；**(s)** `packages → 樹外`（SENTINEL 在 `contracts/node_modules/`，輸出須含 ❌；並以 (s0) 用舊版 c220b0b **驗證 (s) 判準本身**會不及格（非評價現行 hook））；**(v)** `.vite` 為樹外 symlink 時只刪連結、放行；真實 monorepo (r1)(r2)。trap：INT→130、TERM→143；只 `git worktree remove --force` 自己建的路徑（不做全域 prune）。
 
 ## `git commit -n`（跳過 hook）規範
 - 只有緊急情況才可以使用。

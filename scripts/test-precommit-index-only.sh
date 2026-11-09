@@ -235,7 +235,8 @@ setup_symlink_escape() {
   echo "$OUTSIDE"
 }
 
-# (s0) 舊版 c220b0b hook：應無法通過本案例判準（SENTINEL 被刪或無 ❌）
+# (s0) 判準校正：用舊版 c220b0b hook 跑同一套 (s) 判準，預期「不及格」
+# （只證明判準能分辨修前行為；不評價現行 hook 好壞——現行由下面 (s)/(s1) 測）
 OLD_HOOK_SRC=$(mktemp "$BASE/old-hook-XXXX")
 git -C "$ROOT" show c220b0b:.githooks/pre-commit > "$OLD_HOOK_SRC"
 OUTSIDE=$(setup_symlink_escape)
@@ -247,10 +248,10 @@ old_has_reject=0
 grep -q '❌' "$BASE/hook.out" && old_has_reject=1 || true
 # 舊版對本案例應「不及格」：SENTINEL 沒了，或沒有 ❌ 拒絕訊息，或兩者
 if [ "$old_sentinel_ok" -eq 1 ] && [ "$old_has_reject" -eq 1 ] && [ "$ec_old" -ne 0 ]; then
-  echo "FAIL: (s0) 舊版 c220b0b 不應同時保住 SENTINEL＋❌＋非0（ec=$ec_old sentinel=$old_sentinel_ok reject=$old_has_reject）"
+  echo "FAIL: (s0) 判準校正失敗：舊版不應同時通過 SENTINEL＋❌＋非0（ec=$ec_old sentinel=$old_sentinel_ok reject=$old_has_reject）"
   fail=$((fail+1))
 else
-  echo "PASS: (s0) 舊版 c220b0b 對 (s) 判準不及格（ec=$ec_old sentinel_ok=$old_sentinel_ok has_reject=$old_has_reject）"
+  echo "PASS: (s0) 判準校正：舊版 c220b0b 對 (s) 判準不及格（ec=$ec_old sentinel_ok=$old_sentinel_ok has_reject=$old_has_reject）"
   pass=$((pass+1))
 fi
 rm -rf "${OUTSIDE:?}"
