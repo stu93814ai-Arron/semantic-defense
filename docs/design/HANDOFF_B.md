@@ -41,3 +41,24 @@ HTML 原始檔在 `docs/design/mockups/direction-*.html`，可直接開瀏覽器
 - [ ] ←→↑↓ Home End 可切換，Space/Enter 可選，focus 環可見。
 - [ ] D 在側欄底部、E 在頂欄右側、登入頁右上角都有。
 - [ ] 兩主題下文字對比 ≥ 4.5:1（以 `mockups/contrast.md` 色值為準）；切換不改版面尺寸。
+
+## 5. `/apps/new` 應用接入（2026-11-09 新增）
+> 時程提醒：PLAN-ADDENDUM-MONITOR.md 已把應用接入順延到第 6 階段起，實作時程以增補為準；設計稿先備好。完整規格見 DESIGN_SYSTEM.md 第 10 節。
+
+| 狀態 | data-state | nordic 稿 | italian 稿 | 完成鈕 |
+|---|---|---|---|---|
+| 尚無合法事件 | `no-events` | `apps-new-nordic-no-events.png` | `apps-new-italian-no-events.png` | 停用＋原因 |
+| 已收到事件 | `received` | `apps-new-nordic-received.png` | `apps-new-italian-received.png` | 可用 |
+| 載入 | `loading` | `apps-new-nordic-loading.png` | `apps-new-italian-loading.png` | 停用 |
+| 空 | `empty` | `apps-new-nordic-empty.png` | `apps-new-italian-empty.png` | 停用 |
+| 錯誤（不合法事件／連線失敗） | `error` + `data-error` | `apps-new-nordic-error.png` | `apps-new-italian-error.png` | 合法 0 筆時停用 |
+
+實作檢查清單：
+- [ ] 每個狀態都看得到「◉ 只觀察模式」徽章與「不產生限制草案、不呼叫模型」說明。
+- [ ] 頁面沒有限制草案、AI 建議、倒數、核准／退回元件；此頁不發出任何模型或意圖 API 請求。
+- [ ] 合法筆數 0 時「完成接入」`aria-disabled="true"`＋`aria-describedby` 原因文字（不用 `disabled`，保留焦點）。
+- [ ] 不合法事件不計入筆數，另顯示「已拒收 N 筆」；danger 橫幅 `role="alert"`。
+- [ ] 筆數＋最後一筆時間（含時區）在事件寫入後出現；右卡 `aria-live="polite"`。
+- [ ] 事件列表只顯示 `route_template` 與 `response_class`，不顯示參數值、本文、標頭；權杖不出現在前端。
+- [ ] 只有 `app_owner` 看得到；其他角色顯示無權限頁。
+- [ ] nordic／italian 兩主題都對照過稿。

@@ -58,3 +58,26 @@
 | D | primary 連結 #4F6B57 | sf #FBF8F2 | 5.54:1 | ✓ |
 | E | primary 導覽／連結 #A4472C | sf #FFFFFF | 5.97:1 | ✓ |
 | E | primary 導覽／連結 #A4472C | bg #FAF8F5 | 5.63:1 | ✓ |
+
+### /apps/new（2026-11-09 新增組合）
+
+| 方向 | 前景 | 背景 | 對比 | AA |
+|---|---|---|---|---|
+| D（nordic） | /apps/new 等待事件橫幅 info #3E5F78 | 7% 淡底 #EEEDE9 | 5.76:1 | ✓ |
+| D（nordic） | /apps/new 已收到橫幅 success #3F6B4A | 8% 淡底 #ECEDE5 | 5.22:1 | ✓ |
+| D（nordic） | /apps/new 只觀察徽章 info #3E5F78 | 10% 淡底 #E8E9E6 | 5.53:1 | ✓ |
+| D（nordic） | /apps/new 錯誤橫幅 danger #9E3B2C | 7% 淡底 #F4EBE4 | 5.73:1 | ✓ |
+| D（nordic） | /apps/new 連線失敗橫幅 warning #8A5A12 | 8% 淡底 #F2EBE0 | 4.99:1 | ✓ |
+| D（nordic） | 主題切換未選段 text-muted #5F574B | surface-2 #ECE4D6 | 5.64:1 | ✓ |
+| D（nordic） | 主題切換選中段 text #2E2A24 | surface #FBF8F2 | 13.45:1 | ✓ |
+| D（nordic） | 停用「完成接入」 neutral #6B6358 | surface-2 #ECE4D6 | 4.68:1 | ✓ |
+| D（nordic） | 步驟已完成 success #3F6B4A | bg #F4EFE6 | 5.37:1 | ✓ |
+| E（italian） | /apps/new 等待事件橫幅 info #3B5675 | 7% 淡底 #F1F3F5 | 6.81:1 | ✓ |
+| E（italian） | /apps/new 已收到橫幅 success #3B6B52 | 8% 淡底 #EFF3F1 | 5.50:1 | ✓ |
+| E（italian） | /apps/new 只觀察徽章 info #3B5675 | 10% 淡底 #EBEEF1 | 6.50:1 | ✓ |
+| E（italian） | /apps/new 錯誤橫幅 danger #A3262A | 7% 淡底 #F9F0F0 | 6.54:1 | ✓ |
+| E（italian） | /apps/new 連線失敗橫幅 warning #87570F | 8% 淡底 #F5F2EC | 5.53:1 | ✓ |
+| E（italian） | 主題切換未選段 text-muted #5E5751 | surface-2 #F1EDE8 | 6.09:1 | ✓ |
+| E（italian） | 主題切換選中段 text #1E1C1A | surface #FFFFFF | 16.99:1 | ✓ |
+| E（italian） | 停用「完成接入」 neutral #6A635D | surface-2 #F1EDE8 | 5.07:1 | ✓ |
+| E（italian） | 步驟已完成 success #3B6B52 | bg #FAF8F5 | 5.81:1 | ✓ |

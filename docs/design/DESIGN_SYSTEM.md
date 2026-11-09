@@ -2,6 +2,7 @@
 
 > **版本 v1.0（2026-11-05 定案）**：預設主題 **D 北歐溫潤**（`<html data-theme="nordic">`），使用者可切換為 **E 義式極簡**（`data-theme="italian"`）。A／B／C 已否決（見附錄）。
 > v1.0 調色：橡木漸層由 #C9A57A→#B88F62 調亮為 **#D2B288→#C6A072**，橡木上的字標由 #3D3226 改為 **#33291F**（原組合疊木紋後僅 3.88:1，未達 AA）。新增 tokens `--color-wood-from`、`--color-wood-to`、`--color-on-wood`、`--color-on-wood-muted`。
+> 2026-11-09：新增第 10 節 `/apps/new` 狀態規格（不改 v1.0 tokens）。
 > 視覺稿：`direction-d-*.png`、`direction-e-*.png`；HTML／產生腳本：`mockups/gen_de.py`；對比表：`mockups/contrast.md`；B 組交接：`HANDOFF_B.md`。
 
 ## 1. 設計理念
@@ -255,6 +256,60 @@ export function ThemeSwitch() {
 | E | primary 導覽／連結 #A4472C | bg #FAF8F5 | 5.63:1 | ✓ |
 
 v1.0 補測：橡木區、側欄、主色作文字等先前未測組合全部 ≥ 4.5:1（最低 5.13:1，D primary 連結 on bg）。全表最低值 D 4.66:1、E 5.07:1。
+
+## 10. `/apps/new` 應用接入：狀態規格（2026-11-09 新增）
+
+依據：PLAN.md「階段 3：應用接入」。注意：`PLAN-ADDENDUM-MONITOR.md` 第 8 節已把原第 3 階段（應用接入）順延到「6 起」，現行第 3 階段是黑名單／白名單頁。本節是先備好的設計稿，B 組實作時程以增補為準。
+角色：`app_owner`（側欄只顯示「應用接入」「應用地圖」）。其他角色進入此頁顯示無權限頁，不回空白。
+視覺稿：`apps-new-{nordic|italian}-{no-events|received|loading|empty|error}.png`；HTML：`mockups/apps-new-*.html`；產生腳本：`mockups/gen_apps.py`。
+
+### 10.1 版面與元件
+- **頁首**：眉標「應用接入 / 新增」＋標題「接入新應用」＋**只觀察徽章**（`.observe`，info 色、10% 淡底、D 膠囊／E 直角），文案「◉ 只觀察模式」；下方說明「接入後只收事件、建立地圖，不產生限制草案、不呼叫模型。」徽章在所有狀態都存在。
+- **步驟條**：1 基本資料 → 2 入口設定 → 3 等待合法事件 → 4 完成接入。完成段 success 色加「✓」；目前段 primary 粗線加粗字；未到段 border 色。用 `<ol aria-label="接入步驟">`，目前段加 `aria-current="step"`。
+- **左卡「應用資料」**：應用名稱、應用代號（app_id，英數與連字號）、事件來源（應用反向代理／存取紀錄）。固定提示「入口權杖由平台管理員於控制程序設定，不在此畫面顯示。」（權杖不進前端）
+- **右卡「事件接收」**：合法事件筆數（襯線 56px，`lining-nums tabular-nums`）、最後一筆時間（含時區，例如 `2026-11-09 15:18:42（UTC+8）`）、最近 3 筆（時間／路徑樣板／`response_class` 標籤）。**只顯示 `route_template` 與 `response_class`，不顯示參數值、本文、標頭。** 容器 `aria-live="polite"`，只在筆數從 0 變成 ≥1 或錯誤出現時朗讀。
+- **底部動作**：主要「完成接入」、次要「稍後再完成」。按鈕停用時旁邊顯示原因（ⓘ＋文字），按鈕帶 `aria-disabled="true"` 和 `aria-describedby` 指向原因。停用時不用 `disabled` 屬性，保留焦點讓報讀器念得到原因。
+- **禁止出現**：限制草案、AI 建議、倒數、核准／退回按鈕、任何模型相關字樣（除了「不呼叫模型」的說明）。
+
+### 10.2 狀態表
+| 狀態 | data-state | 橫幅 | 右卡 | 完成鈕 | 原因文案 |
+|---|---|---|---|---|---|
+| 空（首次進入、未填） | `empty` | 無 | 「尚未開始接收」＋「填完應用資料並儲存後，這裡會即時顯示入口送來的事件。」 | 停用 | 請先填完應用資料。 |
+| 載入 | `loading` | 無 | 骨架（`aria-busy="true"`）＋「正在讀取事件筆數…」 | 停用 | 正在確認事件… |
+| 尚無合法事件 | `no-events` | info「**等待事件** 應用已儲存。入口送來合法事件後即可完成接入。」 | 筆數 0、時間「—」、「等待入口送來第一筆事件… 每 5 秒自動更新。請在應用上操作任一功能（例如開啟訂單頁）以產生事件。」 | **停用** | 尚未收到合法事件，至少需要 1 筆才能完成接入。 |
+| 已收到事件 | `received` | success「**已收到合法事件** 可以完成接入。完成後此應用以『只觀察』模式運作。」 | 筆數 N、最後一筆時間、最近 3 筆 | **可用** | — |
+| 錯誤：不合法事件 | `error` + `data-error="invalid"` | danger（`role="alert"`）「**收到不合法事件** N 筆含不允許的欄位（參數值、本文或標頭），已整份拒收。請檢查入口設定。」 | 筆數仍為合法筆數；「已拒收 N 筆不合法事件（不計入筆數）。」 | 合法筆數為 0 時停用 | 同「尚無合法事件」 |
+| 錯誤：連線失敗 | `error` + `data-error="gateway"` | warning「**入口連線失敗** 最近 N 分鐘無法連上「X」。重新連線」 | 保留上次數字 | 合法筆數為 0 時停用 | 同上 |
+兩種錯誤可以同時出現（稿中一起畫），danger 在上。合法筆數已 ≥1 時又發生錯誤：完成鈕仍可用，橫幅照常顯示。
+
+### 10.3 驗收對照（PLAN.md 階段 3 三條）
+| PLAN 驗收 | 畫面怎麼證明 | 對應稿 |
+|---|---|---|
+| 沒有收到至少一筆合法事件，完成鈕不可用 | `empty`／`loading`／`no-events`／`error`（合法 0 筆）時完成鈕 `aria-disabled` 並顯示原因；不合法事件不計入筆數 | `apps-new-*-no-events.png`、`-empty`、`-loading`、`-error` |
+| 接入過程不產生限制草案，也不呼叫模型 | 全程顯示「只觀察模式」徽章與說明；頁面沒有任何限制草案／AI 建議區塊；前端不呼叫任何意圖或模型 API（測試可斷言網路請求清單） | 全部 10 張 |
+| 事件寫入後，頁面能看到筆數與最後一筆時間 | `received`：筆數＋最後一筆時間（含時區）＋最近 3 筆 | `apps-new-*-received.png` |
+
+### 10.4 新色組合對比（腳本實測，全部 ≥ 4.5:1，最低 4.68:1）
+| 方向 | 前景 | 背景 | 對比 | AA |
+|---|---|---|---|---|
+| D（nordic） | /apps/new 等待事件橫幅 info #3E5F78 | 7% 淡底 #EEEDE9 | 5.76:1 | ✓ |
+| D（nordic） | /apps/new 已收到橫幅 success #3F6B4A | 8% 淡底 #ECEDE5 | 5.22:1 | ✓ |
+| D（nordic） | /apps/new 只觀察徽章 info #3E5F78 | 10% 淡底 #E8E9E6 | 5.53:1 | ✓ |
+| D（nordic） | /apps/new 錯誤橫幅 danger #9E3B2C | 7% 淡底 #F4EBE4 | 5.73:1 | ✓ |
+| D（nordic） | /apps/new 連線失敗橫幅 warning #8A5A12 | 8% 淡底 #F2EBE0 | 4.99:1 | ✓ |
+| D（nordic） | 主題切換未選段 text-muted #5F574B | surface-2 #ECE4D6 | 5.64:1 | ✓ |
+| D（nordic） | 主題切換選中段 text #2E2A24 | surface #FBF8F2 | 13.45:1 | ✓ |
+| D（nordic） | 停用「完成接入」 neutral #6B6358 | surface-2 #ECE4D6 | 4.68:1 | ✓ |
+| D（nordic） | 步驟已完成 success #3F6B4A | bg #F4EFE6 | 5.37:1 | ✓ |
+| E（italian） | /apps/new 等待事件橫幅 info #3B5675 | 7% 淡底 #F1F3F5 | 6.81:1 | ✓ |
+| E（italian） | /apps/new 已收到橫幅 success #3B6B52 | 8% 淡底 #EFF3F1 | 5.50:1 | ✓ |
+| E（italian） | /apps/new 只觀察徽章 info #3B5675 | 10% 淡底 #EBEEF1 | 6.50:1 | ✓ |
+| E（italian） | /apps/new 錯誤橫幅 danger #A3262A | 7% 淡底 #F9F0F0 | 6.54:1 | ✓ |
+| E（italian） | /apps/new 連線失敗橫幅 warning #87570F | 8% 淡底 #F5F2EC | 5.53:1 | ✓ |
+| E（italian） | 主題切換未選段 text-muted #5E5751 | surface-2 #F1EDE8 | 6.09:1 | ✓ |
+| E（italian） | 主題切換選中段 text #1E1C1A | surface #FFFFFF | 16.99:1 | ✓ |
+| E（italian） | 停用「完成接入」 neutral #6A635D | surface-2 #F1EDE8 | 5.07:1 | ✓ |
+| E（italian） | 步驟已完成 success #3B6B52 | bg #FAF8F5 | 5.81:1 | ✓ |
 
 ---
 ## 附錄：已否決方向（A 深色值勤控制台、B 淺色清爽企業、C 高對比緊湊）
