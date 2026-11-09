@@ -19,13 +19,23 @@ type Row = { case_threshold: number; auto_threshold: number };
 const toThresholds = (r: Row | undefined): Thresholds =>
   r ? { case: r.case_threshold, auto: r.auto_threshold } : { ...DEFAULT_THRESHOLDS };
 
-export async function loadThresholds(db: Queryable): Promise<Thresholds> {
+type WarnLog = { warn(obj: object, msg: string): void };
+
+/**
+ * 讀目前生效門檻（fail-closed）：無列 → 預設；列值不符目前上下限（舊表舊 CHECK 留下的值）→ 退回預設 0.50／0.90 並 log.warn。
+ * 不寫回 DB、不做 migration；GET 與判定端都走這裡，回的就是實際生效值。
+ */
+export async function loadThresholds(db: Queryable, log?: WarnLog): Promise<Thresholds> {
   const r = await db.query<Row>("SELECT case_threshold, auto_threshold FROM thresholds WHERE id");
-  return toThresholds(r.rows[0]);
+  const t = toThresholds(r.rows[0]);
+  const violation = thresholdsViolation(t);
+  if (!violation) return t;
+  log?.warn({ violation, stored: t }, "thresholds 列值不符上下限，改用預設值");
+  return { ...DEFAULT_THRESHOLDS };
 }
 
 export function registerThresholdRoutes(app: FastifyInstance, db: Db, now: () => number): void {
-  app.get(ADMIN_API_PATHS.thresholds, { config: { roles: ADMIN } }, async () => loadThresholds(db));
+  app.get(ADMIN_API_PATHS.thresholds, { config: { roles: ADMIN } }, async (req) => loadThresholds(db, req.log));
 
   app.put(ADMIN_API_PATHS.thresholds, { config: { roles: ADMIN } }, async (req, reply) => {
     const parsed = ThresholdsShapeSchema.safeParse(req.body);
@@ -35,7 +45,7 @@ export function registerThresholdRoutes(app: FastifyInstance, db: Db, now: () =>
     if (violation) {
       await db.tx(async (q) => {
         await writeAudit(q, { action: "thresholds.update_rejected", actor: req.user!.username, sensor_id: null,
-          at: now(), detail: { before: await loadThresholds(q), attempted: after, violation } });
+          at: now(), detail: { before: await loadThresholds(q, req.log), attempted: after, violation } });
       });
       return reply.code(400).send({ error: "請求格式錯誤" });
     }
