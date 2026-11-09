@@ -76,3 +76,19 @@ describe("control-api logMethod 處理直接傳 Error（A 組領航員修正 3�
     expect(out).toContain("while GET /q");
   });
 });
+
+describe("control-api noQuery 遇到引號不中斷（資安退回 R1）", () => {
+  it("/p?a\"b&token=SECRET：err.message、msg、stack 都不含 SECRET", async () => {
+    const lines: string[] = [];
+    app = await buildApp({ idleTimeoutMs: 60_000, databaseUrl: requireDatabaseUrl(),
+      logger: { level: "info", stream: { write: (l: string) => { lines.push(l); } } } });
+    const e = new Error(`fail at /p?a"b&token=${SECRET}`);
+    app.log.error(e);
+    app.log.error({ err: e }, `while GET /p?a"b&token=${SECRET}`);
+    type Rec = { msg?: string; err?: { message?: string; stack?: string } };
+    const recs = lines.map((l) => JSON.parse(l) as Rec);
+    const fields = recs.flatMap((r) => [r.msg, r.err?.message, r.err?.stack]);
+    expect(fields.filter((f) => typeof f !== "string" || f.includes(SECRET))).toEqual([]);
+    expect(recs.map((r) => r.msg)).toEqual(["fail at /p", "while GET /p"]);
+  });
+});

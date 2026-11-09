@@ -82,3 +82,16 @@ describe("sensor-ingest logMethod 處理直接傳 Error（A 組領航員修正 3
     await app.close();
   });
 });
+
+describe("sensor-ingest noQuery 遇到引號不中斷（資安退回 R1）", () => {
+  it("/p?a\"b&token=SECRET：err.message、msg、stack 都不含 SECRET", async () => {
+    const out: { msg?: string; err?: { message?: string; stack?: string } }[] = [];
+    const app = Fastify({ logger: withSafeReqLog({ level: "info", stream: { write: (l: string) => { out.push(JSON.parse(l) as never); } } }) });
+    const quoted = `/p?a"b&token=${SECRET}`;
+    app.log.error(new Error(`fail at ${quoted}`));
+    app.log.error({ err: new Error(`fail at ${quoted}`) }, `while GET ${quoted}`);
+    for (const r of out) for (const f of [r.msg, r.err?.message, r.err?.stack]) expect(f).not.toContain(SECRET);
+    expect(out.map((r) => [r.msg, r.err?.message])).toEqual([["fail at /p", "fail at /p"], ["while GET /p", "fail at /p"]]);
+    await app.close();
+  });
+});
