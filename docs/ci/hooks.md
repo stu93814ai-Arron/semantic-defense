@@ -10,7 +10,7 @@ hook 都放在有納管的 `.githooks/`，透過 `core.hooksPath` 啟用，不�
 ## 內容
 | hook | 做什麼 | 約略時間 |
 |---|---|---|
-| pre-commit | gitleaks → `pnpm typecheck` → `pnpm lint --max-warnings=0` | 約 8–10 秒 |
+| pre-commit | 只驗**暫存區（index）**：匯出 index → gitleaks → `pnpm typecheck` → `pnpm lint --max-warnings=0` | 約 8–12 秒 |
 | pre-push | `pnpm typecheck` ＋ `pnpm lint --max-warnings=0`，和閘門步驟 2–3 相同 | 6–7 秒 |
 
 pre-push 只是快速檢查，不會寫入 gate-history。正式紀錄仍然要跑 `pnpm gate:clean <rev>`。
@@ -18,7 +18,12 @@ pre-push 只是快速檢查，不會寫入 gate-history。正式紀錄仍然要�
 ## 注意
 遠端庫已公開。推送到遠端時 pre-push 會跑型別檢查與 lint。完整閘門在 GitHub Actions（見 [github-actions.md](./github-actions.md)）。合入 `main` 的快轉契約、現況保護，以及尚未套用的修正，都寫在該檔。GitHub 的「必須線性歷史」不是快轉。
 
-pre-commit 檢查的是**工作目錄的內容**，不是只看暫存區。如果別人有未提交、但會讓 lint 或 typecheck 失敗的檔案，也可能擋住你的 commit。遇到這種情況請先通知那個人。
+pre-commit 只檢查**暫存區（index）**的內容，不讀工作目錄未暫存的改動。實作方式：`git checkout-index -a --prefix=<tmpdir>/` 匯出 index 到暫存目錄，再把本 worktree 的 `node_modules` 用 symlink 接過去跑檢查；`trap` 保證結束時刪掉暫存目錄。不用 `git stash`，因此不會碰到主目錄「禁止 stash」規則，也不會動到別人 worktree 既有的 stash 堆疊。
+
+因此：已 `git add` 的紅碼會擋 commit；只存在工作目錄、尚未暫存的紅碼不會擋。請仍養成「要提交的變更都先 add」的習慣。
+
+## 測試
+`.ci/test-precommit-index-only.sh`：在拋棄式 repo 驗證 (a) 暫存紅／WD 綠 → 拒、(b) 暫存綠／WD 紅 → 過、(c) WD／index／stash 不變、(d) 中途失敗仍還原。
 
 ## `git commit -n`（跳過 hook）規範
 - 只有緊急情況才可以使用。
@@ -27,7 +32,7 @@ pre-commit 檢查的是**工作目錄的內容**，不是只看暫存區。如�
 - 跳過 hook 的 commit 仍然要通過正式閘門（`pnpm gate:clean`）。
 
 ## 各組專用 worktree（PM 裁示）
-hook 檢查的是整個工作目錄，如果大家共用一個目錄，就會互相擋住，所以每組使用自己的 worktree：
+各組仍使用自己的 worktree（避免互相改到同一工作目錄）；pre-commit 已改為只驗 index，未暫存的改動不再互相擋住 commit：
 
 | 目錄 | 分支 | 用途 |
 |---|---|---|
@@ -51,7 +56,7 @@ hook 檢查的是整個工作目錄，如果大家共用一個目錄，就會互
 ```bash
 cd /workspace/semantic-defense-a        # B 組用 -b，分支用 team-b
 git rebase main                          # 先同步最新的 main
-# 開發 → git commit（hook 只檢查這個目錄）
+# 開發 → git add → git commit（hook 只檢查暫存區／index）
 git rebase main                          # 送合入前再同步一次，有衝突在這裡解決
 # 通知整合守門員合入
 ```
