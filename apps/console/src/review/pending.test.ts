@@ -79,3 +79,31 @@ describe("待審核准／退回", () => {
     expect(second.code).toBe("already_resolved");
   });
 });
+
+describe("待審核准與白名單 IPv6", () => {
+  it("白名單 IPv6 CIDR 網段命中時核准被拒", () => {
+    const cand: PendingCandidate = {
+      ...base,
+      candidate_id: "c-v6",
+      ip: "2001:db8::abcd",
+    };
+    const r = approvePending(
+      cand,
+      ctx({
+        allowlist: [
+          {
+            entry_id: "a-v6",
+            cidr: "2001:db8::/32",
+            reason: "實驗室",
+            created_by: "admin1",
+            created_at: "2026-11-01T00:00:00Z",
+            expires_at: null,
+          },
+        ],
+      }),
+    );
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.code).toBe("on_allowlist");
+  });
+});
