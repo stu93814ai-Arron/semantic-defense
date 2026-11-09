@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { AllowlistCreateSchema, AllowlistEntrySchema, AllowlistUpdateSchema } from "../src/index.js";
 
-/** reason 拒收 C0／C1 控制字元與 bidi 控制字元；長度 1–200；`<script>` 不擋（輸出端跳脫）。 */
+/** reason 拒收 C0／C1 控制字元、bidi 控制字元、零寬／分隔／BOM 等不可見字元與未配對 surrogate；長度 1–200；`<script>` 不擋（輸出端跳脫）。 */
 const BAD = [
   "\u0000", "\u0001", "\t", "\n", "\r", "\u001f", "\u007f", "\u0080", "\u0085", "\u009f",
   "\u200e", "\u200f", "\u202a", "\u202b", "\u202c", "\u202d", "\u202e", "\u2066", "\u2067", "\u2068", "\u2069",
+  // 資安 R2：ALM、行／段分隔、BOM、零寬（ZWSP／ZWNJ／ZWJ）、WJ 與不可見運算子
+  "\u061c", "\u2028", "\u2029", "\ufeff", "\u200b", "\u200c", "\u200d", "\u2060", "\u2061", "\u2062", "\u2063", "\u2064",
+  // 未配對 surrogate（isWellFormed() 為 false）
+  "\ud800", "\udbff", "\udc00", "\udfff",
 ];
 const hex = (s: string) => `U+${s.codePointAt(0)!.toString(16).padStart(4, "0").toUpperCase()}`;
 const ENTRY = {
@@ -28,5 +32,9 @@ describe.each(schemas)("%s.reason", (_n, schema, base) => {
     }
     expect(schema.safeParse({ ...base, reason: "" }).success).toBe(false);
     expect(schema.safeParse({ ...base, reason: "x".repeat(201) }).success).toBe(false);
+  });
+  it("surrogate 順序顛倒（低位在前）→ 拒收；正常配對（emoji）→ 接受", () => {
+    expect(schema.safeParse({ ...base, reason: "a\udc00\ud800b" }).success).toBe(false);
+    expect(schema.safeParse({ ...base, reason: "a\ud83d\udd12b" }).success).toBe(true);
   });
 });

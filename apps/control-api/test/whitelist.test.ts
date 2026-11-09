@@ -59,11 +59,13 @@ describe("白名單 CRUD（platform_admin）", () => {
     await boot();
     const c = await admin();
     for (const bad of [undefined, {}, { ...C, cidr: "10.0.0.1/8" }, { ...C, cidr: "127.0.0.0/8" }, { ...C, extra: 1 },
-      { ...C, entry_id: UNKNOWN }, { ...C, expires_at: "2026-11-08T00:00:00Z" }, { ...C, reason: "" }]) {
+      { ...C, entry_id: UNKNOWN }, { ...C, expires_at: "2026-11-08T00:00:00Z" }, { ...C, reason: "" },
+      { ...C, reason: "a\ud800b" }, { ...C, reason: "a\u2028b" }, { ...C, reason: "a\ufeffb" }]) {
       expect((await req(c, "POST", LIST, bad)).statusCode, JSON.stringify(bad)).toBe(400);
     }
     const { entry_id } = (await req(c, "POST", LIST, C)).json() as { entry_id: string };
-    for (const bad of [{ reason: "r" }, { reason: "r", expires_at: null, cidr: "10.0.0.0/8" }, { reason: "r", expires_at: "2026-11-01T00:00:00Z" }]) {
+    for (const bad of [{ reason: "r" }, { reason: "r", expires_at: null, cidr: "10.0.0.0/8" }, { reason: "r", expires_at: "2026-11-01T00:00:00Z" },
+      { reason: "x\udc00", expires_at: null }, { reason: "x\u200by", expires_at: null }]) {
       expect((await req(c, "PATCH", one(entry_id), bad)).statusCode, JSON.stringify(bad)).toBe(400);
     }
     expect((await req(c, "PATCH", one(UNKNOWN), { reason: "r", expires_at: null })).statusCode).toBe(404);
