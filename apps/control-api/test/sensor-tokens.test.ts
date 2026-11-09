@@ -155,6 +155,58 @@ describe("感測器 token 撤銷", () => {
   });
 });
 
+describe("感測器 token 撤銷稽核", () => {
+  type Audit = { action: string; actor: string; sensor_id: string | null; detail: Record<string, unknown> };
+  const audits = async () =>
+    (await app.db.query<Audit>("SELECT action, actor, sensor_id, detail FROM audit_events ORDER BY id")).rows;
+  const revoke = (c: string, id: string) =>
+    app.inject({ method: "POST", url: `/api/sensors/tokens/${id}/revoke`, headers: cookieHeader(c) });
+
+  it("撤銷成功寫一筆 sensor_token.revoke（actor＝username、sensor_id 正確），detail／回應不含 token／secret／hash", async () => {
+    await boot();
+    const c = await admin();
+    const { sensor_id, token } = (await issue(c, OK)).json() as { sensor_id: string; token: string };
+    const r = await revoke(c, sensor_id);
+    expect(r.statusCode).toBe(204);
+    const rows = (await audits()).filter((x) => x.action === "sensor_token.revoke");
+    expect(rows.map((x) => [x.action, x.actor, x.sensor_id])).toEqual([["sensor_token.revoke", "admin1", sensor_id]]);
+    const hash = (await rowOf(sensor_id))!.token_hash;
+    const res = await app.inject({ method: "GET", url: "/api/audit", headers: cookieHeader(c) });
+    for (const s of [token, token.split(".")[1]!, hash, "token_hash"]) {
+      expect(JSON.stringify(rows[0]!.detail)).not.toContain(s);
+      expect(r.body).not.toContain(s);
+      expect(res.body).not.toContain(s);
+    }
+  });
+
+  it("不存在（404）、重複撤銷（仍 204）、非 platform_admin（403）都不寫 revoke 稽核", async () => {
+    await boot();
+    const c = await admin();
+    const { sensor_id } = (await issue(c, OK)).json() as { sensor_id: string };
+    expect((await revoke(c, "00000000-0000-4000-8000-000000000000")).statusCode).toBe(404);
+    for (const [u, p] of [["operator1", "pass-operator-1"], ["owner1", "pass-owner-1"]] as const) {
+      expect((await revoke(await cookieFor(u, p), sensor_id)).statusCode).toBe(403);
+    }
+    expect((await audits()).filter((x) => x.action === "sensor_token.revoke")).toEqual([]);
+    expect((await revoke(c, sensor_id)).statusCode).toBe(204);
+    expect((await revoke(c, sensor_id)).statusCode).toBe(204);
+    expect((await audits()).filter((x) => x.action === "sensor_token.revoke")).toHaveLength(1);
+  });
+
+  it("稽核寫入失敗 → 撤銷一併不生效（同一交易）", async () => {
+    await boot();
+    const c = await admin();
+    const { sensor_id } = (await issue(c, OK)).json() as { sensor_id: string };
+    await app.db.exec("ALTER TABLE audit_events ADD CONSTRAINT t_no_revoke CHECK (action <> 'sensor_token.revoke') NOT VALID");
+    try {
+      expect((await revoke(c, sensor_id)).statusCode).toBe(500);
+    } finally {
+      await app.db.exec("ALTER TABLE audit_events DROP CONSTRAINT t_no_revoke");
+    }
+    expect((await rowOf(sensor_id))!.revoked_at).toBeNull();
+  });
+});
+
 describe("感測器 app 綁定修改與稽核", () => {
   const patch = (c: string, id: string, payload: unknown) =>
     app.inject({ method: "PATCH", url: `/api/sensors/tokens/${id}/apps`, headers: cookieHeader(c), payload: payload as object });

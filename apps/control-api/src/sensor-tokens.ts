@@ -12,7 +12,7 @@ import type { Role } from "./auth.js";
  * - 查找（findSensorByToken）已移至 @semantic-defense/sensor-auth，供 sensor-ingest 共用。
  * - 明文只在發放回應出現一次；DB 只存 secret 的 SHA-256 hex。
  * - 必填 allowed_cidrs（≥1，contracts 白名單規則）與 allowed_app_ids（≥1，contracts Id）。
- * - 發放與修改 app 綁定寫入 audit_events（不含 token／secret／hash）。
+ * - 發放、修改 app 綁定與撤銷寫入 audit_events（不含 token／secret／hash）；重複撤銷不寫。
  * - 撤銷只標 revoked_at，列不刪，sensor_id 永久保留。
  */
 const ADMIN: Role[] = ["platform_admin"];
@@ -99,12 +99,19 @@ export function registerSensorTokenRoutes(
     async (req, reply) => {
       const id = req.params.sensorId;
       if (!UUID_RE.test(id)) return reply.code(404).send({ error: "查無感測器" });
+      const at = now();
+      // 撤銷＋稽核為同一條語句（單一隱含交易）：稽核寫入失敗則撤銷不生效；已撤銷者不更新、不寫稽核
       const r = await db.query<{ sensor_id: string }>(
-        `UPDATE sensor_tokens SET revoked_at = COALESCE(revoked_at, $2)
-         WHERE sensor_id = $1 RETURNING sensor_id`,
-        [id, now()],
+        `WITH u AS (
+           UPDATE sensor_tokens SET revoked_at = $2 WHERE sensor_id = $1 AND revoked_at IS NULL RETURNING sensor_id
+         )
+         INSERT INTO audit_events (action, actor, sensor_id, at, detail)
+         SELECT 'sensor_token.revoke', $3, sensor_id, $2, '{}'::jsonb FROM u RETURNING sensor_id`,
+        [id, at, req.user!.username],
       );
-      if (!r.rows[0]) return reply.code(404).send({ error: "查無感測器" });
+      if (r.rows[0]) return reply.code(204).send();
+      const exists = await db.query<{ sensor_id: string }>("SELECT sensor_id FROM sensor_tokens WHERE sensor_id = $1", [id]);
+      if (!exists.rows[0]) return reply.code(404).send({ error: "查無感測器" });
       return reply.code(204).send();
     });
 
