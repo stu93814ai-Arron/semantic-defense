@@ -91,4 +91,16 @@ describe("control-api noQuery 遇到引號不中斷（資安退回 R1）", () =>
     expect(fields.filter((f) => typeof f !== "string" || f.includes(SECRET))).toEqual([]);
     expect(recs.map((r) => r.msg)).toEqual(["fail at /p", "while GET /p"]);
   });
+
+  it("path 內有未編碼的引號（/p\"x?token=SECRET）：err.message、msg、stack 都不含 SECRET", async () => {
+    const lines: string[] = [];
+    app = await buildApp({ idleTimeoutMs: 60_000, databaseUrl: requireDatabaseUrl(),
+      logger: { level: "info", stream: { write: (l: string) => { lines.push(l); } } } });
+    const url = `/p"x?token=${SECRET}`;
+    app.log.error(new Error(`fail at ${url}`));
+    app.log.error({ err: new Error(`fail at ${url}`) }, `while GET ${url}`);
+    const recs = lines.map((l) => JSON.parse(l) as { msg?: string; err?: { message?: string; stack?: string } });
+    expect(recs.flatMap((r) => [r.msg, r.err?.message, r.err?.stack]).filter((f) => typeof f !== "string" || f.includes(SECRET))).toEqual([]);
+    expect(recs.map((r) => r.msg)).toEqual(['fail at /p"x', 'while GET /p"x']);
+  });
 });

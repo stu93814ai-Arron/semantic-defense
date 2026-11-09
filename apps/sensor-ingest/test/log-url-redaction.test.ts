@@ -94,4 +94,14 @@ describe("sensor-ingest noQuery 遇到引號不中斷（資安退回 R1）", () 
     expect(out.map((r) => [r.msg, r.err?.message])).toEqual([["fail at /p", "fail at /p"], ["while GET /p", "fail at /p"]]);
     await app.close();
   });
+
+  it("path 內有未編碼的引號（/p\"x?token=SECRET）：err.message、msg、stack 都不含 SECRET", async () => {
+    const recs: { msg?: string; err?: { message?: string; stack?: string } }[] = [];
+    const app = Fastify({ logger: withSafeReqLog({ level: "info", stream: { write: (l: string) => { recs.push(JSON.parse(l) as never); } } }) });
+    app.log.error({ err: new Error(`fail at /p"x?token=${SECRET}`) }, `while GET /p"x?token=${SECRET}`);
+    app.log.error(new Error(`fail at /p"x?token=${SECRET}`));
+    for (const r of recs) for (const f of [r.msg, r.err?.message, r.err?.stack]) expect(f).not.toContain(SECRET);
+    expect(recs.map((r) => r.err?.message)).toEqual(['fail at /p"x', 'fail at /p"x']);
+    await app.close();
+  });
 });

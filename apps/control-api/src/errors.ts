@@ -44,9 +44,9 @@ export const safeReqSerializer = (req: ReqLike) => ({
 
 /**
  * 字串裡的 url 去掉 query（`/p?token=…` → `/p`）；FST_ERR_REP_ALREADY_SENT 等錯誤會把完整 url 寫進 message。
- * 從 `?` 一路切到第一個空白或字串結尾，query 裡的引號不會讓切除提早停下（資安退回 R1：`/p?a"b&token=…`）。
+ * 從 `?` 一路切到第一個空白或字串結尾，path 與 query 裡的引號都不會讓切除停下（資安退回 R1：`/p?a"b&token=…`、`/p"x?token=…`；Node 允許 path 含未編碼的 `"`）。
  */
-const noQuery = (v: unknown): unknown => (typeof v === "string" ? v.replace(/(\/[^\s"?]*)\?\S*/g, "$1") : v);
+const noQuery = (v: unknown): unknown => (typeof v === "string" ? v.replace(/(\/[^\s?]*)\?\S*/g, "$1") : v);
 /** err serializer：欄位同 pino 預設（type＋自有欄位＋message／stack），message／stack 去 query。 */
 export const safeErrSerializer = (e: FastifyError) =>
   ({ type: e.name, ...e, message: noQuery(e.message) as string, stack: noQuery(e.stack) as string });
