@@ -1,42 +1,40 @@
-/** 待審黑名單候選（尚未生效）。鍵為 case_id（對齊 A 組契約欄位）。 */
-export type PendingCandidate = {
-  ip: string;
-  confidence: number;
-  case_id: string;
-  created_at: string;
+import type {
+  AllowlistEntry,
+  BlocklistEntry,
+  PendingCandidate as ContractPendingCandidate,
+} from "@semantic-defense/contracts/browser";
+
+/**
+ * 待審黑名單候選：對齊 contracts PendingCandidate；保留 candidate_id? 相容驗收測。
+ * 決策與清單鍵一律用 case_id。
+ */
+export type PendingCandidate = ContractPendingCandidate & {
   /**
-   * 舊欄位：僅相容驗收測試師既有測例；決策與清單鍵一律用 case_id。
+   * 舊欄位：僅相容驗收測試師既有測例。
    * @deprecated
    */
   candidate_id?: string;
 };
 
-/** 已上榜黑名單（可撤回）。 */
-export type ListedEntry = {
+/**
+ * 已上榜黑名單：欄位對齊 contracts BlocklistEntry。
+ * entry_id 在 demo seed 可為非 UUID 字串，故放寬為 string。
+ */
+export type ListedEntry = Omit<BlocklistEntry, "entry_id"> & {
   entry_id: string;
-  ip: string;
-  source: "manual" | "auto";
-  confidence: number;
-  case_id: string;
-  created_at: string;
-  expires_at: string;
-  approved_by: string;
-  approved_at: string;
-  revoked_at: string | null;
 };
 
-export type AllowlistItem = {
+/**
+ * 白名單項目：欄位對齊 contracts AllowlistEntry；entry_id／created_by 在 demo 放寬。
+ */
+export type AllowlistItem = Omit<AllowlistEntry, "entry_id" | "created_by"> & {
   entry_id: string;
-  cidr: string;
-  reason: string;
   created_by: string;
-  created_at: string;
-  expires_at: string | null;
 };
 
 export type SourceFilter = "all" | "auto" | "manual";
 
-/** 退回理由三類（V2-DECISIONS O7／§2）。 */
+/** 退回理由三類（V2-DECISIONS O7／§2）；非自由文字，不走 Reason schema。 */
 export const REJECT_REASONS = [
   "正常業務",
   "範圍過寬",
