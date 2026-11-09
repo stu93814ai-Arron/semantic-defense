@@ -2,7 +2,7 @@ import { FLOW_WINDOW_MS, judgeFlows, type FlowMetadataEvent, type FlowThresholds
 import { RETENTION_MS, flowEventsReady, type FlowEventRow } from "@semantic-defense/flow-store/read";
 import type { Db, Queryable } from "./db.js";
 import { loadThresholds, type WarnLog } from "./thresholds.js";
-import { accumulateCase, raiseCaseMax, upsertCaseHit } from "./cases.js";
+import { accumulateCase, expireOpenCases, raiseCaseMax, upsertCaseHit } from "./cases.js";
 import { allowlisted, hostCidr } from "./auto-blacklist.js";
 import { writeAudit } from "./audit.js";
 
@@ -18,6 +18,7 @@ import { writeAudit } from "./audit.js";
  *   命中第一次寫入時才累加待審（hit_count +1、max 取大），所以重掃不會重複累加；
  *   重掃（命中已存在）只以 GREATEST 拉高 open 待審的 max（raiseCaseMax）。
  * - 門檻走 loadThresholds（fail-closed）並帶 tick 的 logger：列值不合上下限時 log.warn。
+ * - 每次開始先把所有已到期的 open case 收成 expired（resolved_at = expires_at），不必等同 IP 再命中。
  * - 清除：case_hits 最後更新滿 7 天；已結案 case 的 resolved_at 滿 7 天（計畫 Q18）。
  * 命中存好後（計畫 §1）：白名單內 → 不開案、不寫稽核（Q13）；已上榜 → 只寫 hit_while_listed（Q16）；否則開案／累加。
  * E3.A 自動上榜（commit 9–11）不在本檔這一步。
@@ -98,6 +99,7 @@ export async function runJudgeTick(db: Db, now: number, log?: WarnLog): Promise<
     const lock = await q.query<{ ok: boolean }>("SELECT pg_try_advisory_xact_lock($1) AS ok", [JUDGE_LOCK]);
     if (lock.rows[0]?.ok !== true) return NOOP;
     const th = await loadThresholds(q, log);
+    await expireOpenCases(q, now);
     const cur = (await q.query<{ received_upto: string }>("SELECT received_upto FROM judge_cursor WHERE id")).rows[0];
     const { keys, upto } = await scanGroups(q, Number(cur?.received_upto ?? 0), now);
     let hits = 0;

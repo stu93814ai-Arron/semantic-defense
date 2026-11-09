@@ -23,6 +23,11 @@ function canonicalIp(raw: string): string {
   return ip;
 }
 
+/** 全面收掉已到期的 open 待審：state='expired'、resolved_at = expires_at（判定 tick 每次開始時呼叫；之後滿 7 天由 tick 清除）。 */
+export async function expireOpenCases(q: Queryable, now: number): Promise<void> {
+  await q.query("UPDATE blacklist_cases SET state = 'expired', resolved_at = expires_at WHERE state = 'open' AND expires_at <= $1", [now]);
+}
+
 export async function accumulateCase(q: Queryable, h: CaseHitInput, now: number): Promise<CaseRow> {
   const ip = canonicalIp(h.ip);
   await q.query(

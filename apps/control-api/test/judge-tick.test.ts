@@ -109,7 +109,7 @@ describe("判定 tick", () => {
       [randomUUID(), ip, state, created, created + DAY, state === "open" ? null : created + DAY]);
     await kase("203.0.113.3/32", "expired", T0 - 8 * DAY);
     await kase("203.0.113.4/32", "rejected", T0 - 8 * DAY + 1);
-    await kase("203.0.113.5/32", "open", T0 - 8 * DAY);
+    await kase("203.0.113.5/32", "open", T0 - DAY / 2); // 未到期的 open（過期的 open 會先被收成 expired，見修正 2）
     await runJudgeTick(app.db, T0);
     expect((await hits()).map((h) => h.src_ip)).toEqual(["203.0.113.2/32"]);
     expect((await app.db.query<{ ip: string }>("SELECT ip FROM blacklist_cases ORDER BY ip")).rows.map((r) => r.ip))
@@ -130,6 +130,35 @@ describe("judge_cursor 依資料時間前進（A 組領航員修正 1）", () =>
     await runJudgeTick(app.db, T0 + 10_000);
     expect((await cases()).map((c) => c.ip)).toEqual(["203.0.113.10/32"]);
     expect(await cursor()).toEqual([{ received_upto: String(T0 - 5 * MIN + 10_000) }]);
+  });
+});
+
+describe("過期 open case 每次 tick 全面收掉（A 組領航員修正 2）", () => {
+  type Row = { ip: string; state: string; resolved_at: string | null; expires_at: string };
+  const all = async () => (await app.db.query<Row>(
+    "SELECT ip, state, resolved_at, expires_at FROM blacklist_cases ORDER BY ip")).rows;
+  const open = (ip: string, created: number) => app.db.query(
+    `INSERT INTO blacklist_cases (case_id, ip, state, max_confidence, hit_count, created_at, expires_at, last_hit_at)
+     VALUES ($1, $2, 'open', 0.6, 1, $3, $4, $3)`, [randomUUID(), ip, created, created + DAY]);
+
+  it("過期且沒再命中的 case → expired、resolved_at＝expires_at；未到期的維持 open", async () => {
+    await boot();
+    await open("203.0.113.1/32", T0 - DAY - 1);
+    await open("203.0.113.2/32", T0 - DAY);
+    await open("203.0.113.3/32", T0 - DAY + 1);
+    await runJudgeTick(app.db, T0);
+    expect((await all()).map((c) => [c.ip, c.state, c.resolved_at])).toEqual([
+      ["203.0.113.1/32", "expired", String(T0 - 1)], ["203.0.113.2/32", "expired", String(T0)],
+      ["203.0.113.3/32", "open", null]]);
+  });
+
+  it("收掉後滿 7 天（resolved_at＋7d）被清除；未滿的保留", async () => {
+    await boot();
+    await open("203.0.113.1/32", T0 - DAY);
+    await open("203.0.113.2/32", T0 - DAY + 1);
+    await runJudgeTick(app.db, T0);
+    await runJudgeTick(app.db, T0 + 7 * DAY);
+    expect((await all()).map((c) => [c.ip, c.state])).toEqual([["203.0.113.2/32", "expired"]]);
   });
 });
 
