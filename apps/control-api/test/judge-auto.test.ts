@@ -304,3 +304,36 @@ describe("E3.A 熔斷：AUTO_LOCK 序列化與 auto_breaker 單列", () => {
     await expect(app.db.query("INSERT INTO auto_breaker (id) VALUES (TRUE)")).rejects.toMatchObject({ code: "23505" });
   });
 });
+
+describe("自動上榜路徑只吞 data exception：其他錯誤讓整個 tick rollback、cursor 不動（A 裁定）", () => {
+  const cursor = async () => (await app.db.query<{ received_upto: string }>("SELECT received_upto FROM judge_cursor")).rows;
+  /** 測試專用 trigger：寫 blocklist_entries（autoListInTx 的 insert）時丟指定 SQLSTATE。 */
+  const trap = (code: string) => app.db.exec(`
+    CREATE OR REPLACE FUNCTION test_trap_bl() RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN RAISE EXCEPTION 'trap' USING ERRCODE = '${code}'; END $$;
+    CREATE TRIGGER test_trap_bl BEFORE INSERT ON blocklist_entries FOR EACH ROW EXECUTE FUNCTION test_trap_bl();`);
+  const untrap = () => app.db.exec("DROP TRIGGER test_trap_bl ON blocklist_entries; DROP FUNCTION test_trap_bl()");
+  const rolledBack = async () => {
+    expect(await cursor()).toEqual([]);
+    expect([await listed(), await kases(), await audits("blacklist.auto_list")]).toEqual([[], [], []]);
+    expect((await app.db.query("SELECT 1 FROM case_hits")).rows).toEqual([]);
+  };
+
+  it.each(["55P03", "40P01", "P0001"])("insert 時丟 %s → tick reject、命中／案件／cursor 全部 rollback；移除後下一個 tick 上榜", async (code) => {
+    await boot();
+    await three(["app-1", "app-2", "app-1"]);
+    await trap(code);
+    await expect(tick()).rejects.toMatchObject({ code });
+    await rolledBack();
+    await untrap();
+    await tick(T0 + 1000);
+    expect((await listed()).map((e) => e.ip)).toEqual([CIDR]);
+  });
+
+  it("沒有 SQLSTATE 的錯誤（上榜前丟 Error）→ tick reject、全部 rollback", async () => {
+    await boot();
+    await three(["app-1", "app-2", "app-1"]);
+    await expect(tick(T0, { beforeAutoList: () => Promise.reject(new Error("boom")) })).rejects.toThrow("boom");
+    await rolledBack();
+  });
+});
