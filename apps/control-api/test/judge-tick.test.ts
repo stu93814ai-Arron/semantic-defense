@@ -291,3 +291,19 @@ describe("白名單 IP 不開案；已上榜 IP 只寫 hit_while_listed（commit
     expect(await audits()).toEqual([]);
   });
 });
+
+describe("保留位址的 src_ip（資安退回 B1）", () => {
+  const RESERVED = ["127.0.0.1", "0.0.0.0", "224.0.0.1", "169.254.1.1", "fe80::1", "::1", "255.255.255.255"];
+
+  it("同一批有保留位址與正常 IP → 保留位址整組跳過（不拋錯、不 rollback），正常 IP 仍成案、cursor 前進；log 只記數量不記 IP", async () => {
+    await boot();
+    for (const ip of RESERVED) await scan(ip, T0 - 2 * MIN, T0 - MIN);
+    await scan("203.0.113.9", T0 - 2 * MIN, T0 - 30_000);
+    await expect(runJudgeTick(app.db, T0, log)).resolves.toMatchObject({ ran: true, hits: 1 });
+    expect((await cases()).map((c) => c.ip)).toEqual(["203.0.113.9/32"]);
+    expect((await hits()).map((h) => h.src_ip)).toEqual(["203.0.113.9/32"]);
+    expect(await cursor()).toEqual([{ received_upto: String(T0 - 30_000) }]);
+    expect(lines.map((l) => JSON.parse(l) as object)).toEqual([{ skipped: RESERVED.length, msg: "judge tick skipped non-host src_ip groups" }]);
+    for (const ip of RESERVED) expect(lines.join("\n")).not.toContain(ip);
+  });
+});

@@ -78,23 +78,28 @@ async function onActiveBlocklist(q: Queryable, k: GroupKey, confidence: number, 
   return true;
 }
 
-/** 重讀整組並判定；confidence ≥ case → 存命中（第一次寫入時累加待審），回 true。 */
-async function judgeGroup(q: Queryable, k: GroupKey, { th, isAllowlisted, now }: TickCtx): Promise<boolean> {
+/**
+ * 重讀整組並判定；confidence ≥ case → 存命中（第一次寫入時累加待審），回 "hit"。
+ * src_ip 不是可上榜的主機位址（hostCidr 拒收：127/8、0.0.0.0、多播、link-local、::1、廣播…）→ 整組跳過回 "skipped"，
+ * 否則 upsertCaseHit 拋錯會讓整個 tick rollback、cursor 永遠卡住（資安退回 B1）。
+ */
+async function judgeGroup(q: Queryable, k: GroupKey, { th, isAllowlisted, now }: TickCtx): Promise<"hit" | "miss" | "skipped"> {
+  if (hostCidr(k.src_ip) === null) return "skipped";
   const rows = (await q.query<FlowEventRow>(
     `SELECT * FROM flow_events WHERE sensor_id = $1 AND app_id = $2 AND src_ip = $3
        AND ts::timestamptz >= to_timestamp($4 / 1000.0) AND ts::timestamptz < to_timestamp($5 / 1000.0)`,
     [k.sensor_id, k.app_id, k.src_ip, k.win, k.win + FLOW_WINDOW_MS])).rows;
   const all = judgeFlows(rows.map(toFlow), th)[0];
-  if (!all?.open_case) return false;
+  if (!all?.open_case) return "miss";
   const ontime = rows.filter((r) => Number(r.received_at) - Date.parse(r.ts) <= LATE_MS).map(toFlow);
   const ontimeConfidence = ontime.length > 0 ? judgeFlows(ontime, th)[0]!.confidence : null;
   const { created } = await upsertCaseHit(q, { src_ip: k.src_ip, sensor_id: k.sensor_id, app_id: k.app_id,
     window_start: k.win, confidence: all.confidence, ontime_confidence: ontimeConfidence }, now);
-  if (isAllowlisted(k.src_ip)) return true;
-  if (await onActiveBlocklist(q, k, all.confidence, created, now)) return true;
+  if (isAllowlisted(k.src_ip)) return "hit";
+  if (await onActiveBlocklist(q, k, all.confidence, created, now)) return "hit";
   if (created) await accumulateCase(q, { ip: k.src_ip, confidence: all.confidence, late: ontime.length < rows.length }, now);
   else await raiseCaseMax(q, k.src_ip, all.confidence, now);
-  return true;
+  return "hit";
 }
 
 export async function runJudgeTick(db: Db, now: number, log?: WarnLog): Promise<TickResult> {
@@ -106,9 +111,11 @@ export async function runJudgeTick(db: Db, now: number, log?: WarnLog): Promise<
     await expireOpenCases(q, now);
     const cur = (await q.query<{ received_upto: string }>("SELECT received_upto FROM judge_cursor WHERE id")).rows[0];
     const { keys, upto } = await scanGroups(q, Number(cur?.received_upto ?? 0), now);
-    let hits = 0;
     const ctx: TickCtx = { th, isAllowlisted: await loadAllowlist(q, now), now };
-    for (const k of keys) if (await judgeGroup(q, k, ctx)) hits += 1;
+    const n = { hit: 0, miss: 0, skipped: 0 };
+    for (const k of keys) n[await judgeGroup(q, k, ctx)] += 1;
+    // 只記數量，不記 IP
+    if (n.skipped > 0) log?.warn({ skipped: n.skipped }, "judge tick skipped non-host src_ip groups");
     await q.query("DELETE FROM case_hits WHERE updated_at <= $1", [now - RETENTION_MS]);
     await q.query("DELETE FROM blacklist_cases WHERE state <> 'open' AND resolved_at <= $1", [now - RETENTION_MS]);
     if (upto !== null) {
@@ -116,6 +123,6 @@ export async function runJudgeTick(db: Db, now: number, log?: WarnLog): Promise<
         `INSERT INTO judge_cursor (id, received_upto) VALUES (TRUE, $1)
          ON CONFLICT (id) DO UPDATE SET received_upto = GREATEST(judge_cursor.received_upto, EXCLUDED.received_upto)`, [upto]);
     }
-    return { ran: true, groups: keys.length, hits };
+    return { ran: true, groups: keys.length, hits: n.hit };
   });
 }
