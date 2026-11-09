@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   ADMIN_API_PATHS, AllowlistCreateSchema, AllowlistListSchema, AllowlistUpdateSchema, BlocklistListSchema,
-  DEFAULT_THRESHOLDS, PendingCandidateListSchema, PendingCandidateSchema, ThresholdsSchema,
+  DEFAULT_THRESHOLDS, PendingCandidateListSchema, PendingCandidateSchema, THRESHOLD_BOUNDS, ThresholdsSchema,
+  ThresholdsShapeSchema, thresholdsViolation,
 } from "../src/admin-api.js";
 import * as main from "../src/index.js";
 
@@ -36,16 +37,37 @@ describe("門檻 {case, auto}", () => {
     expect(Object.isFrozen(DEFAULT_THRESHOLDS)).toBe(true);
   });
 
-  it.each([
-    { case: 0.5, auto: 0.9 }, { case: 0, auto: 0 }, { case: 1, auto: 1 }, { case: 0.7, auto: 0.7 }, { case: 0, auto: 1 },
-  ])("接受 %j", (x) => { expect(ok(ThresholdsSchema, x)).toBe(true); });
+  it("下限常數：case 0.30–1、auto 0.70–1", () => {
+    expect(THRESHOLD_BOUNDS).toEqual({ case: { min: 0.3, max: 1 }, auto: { min: 0.7, max: 1 } });
+    expect(Object.isFrozen(THRESHOLD_BOUNDS)).toBe(true);
+  });
 
   it.each([
-    [{ case: 0.95, auto: 0.9 }, "case>auto"], [{ case: -0.01, auto: 0.9 }, "<0"], [{ case: 0.5, auto: 1.01 }, ">1"],
+    { case: 0.5, auto: 0.9 }, { case: 0.3, auto: 0.7 }, { case: 0.3, auto: 1 }, { case: 0.99, auto: 1 }, { case: 0.69, auto: 0.7 },
+  ])("接受 %j", (x) => {
+    expect(ok(ThresholdsSchema, x)).toBe(true);
+    expect(thresholdsViolation(x)).toBeNull();
+  });
+
+  it.each([
+    [{ case: 0.29, auto: 0.9 }, "case_below_min"], [{ case: 0.5, auto: 0.69 }, "auto_below_min"],
+    [{ case: 0.5, auto: 1.01 }, "auto_above_max"], [{ case: 1.2, auto: 1 }, "case_above_max"],
+    [{ case: 0.8, auto: 0.8 }, "case_not_below_auto"], [{ case: 0.95, auto: 0.9 }, "case_not_below_auto"],
+    [{ case: -0.01, auto: 0.9 }, "case_below_min"],
+  ] as const)("數值合法但違反上下限／case<auto：%j → %s（ThresholdsSchema 拒、形狀 schema 過）", (x, why) => {
+    expect(ok(ThresholdsSchema, x)).toBe(false);
+    expect(ok(ThresholdsShapeSchema, x)).toBe(true);
+    expect(thresholdsViolation(x)).toBe(why);
+  });
+
+  it.each([
     [{ case: Number.NaN, auto: 0.9 }, "NaN"], [{ case: 0.5, auto: Number.POSITIVE_INFINITY }, "Infinity"],
     [{ case: "0.5", auto: 0.9 }, "字串"], [{ case: 0.5 }, "缺 auto"], [{ auto: 0.9 }, "缺 case"],
     [{ case: 0.5, auto: 0.9, x: 1 }, "多餘欄位"], [null, "null"], [[0.5, 0.9], "陣列"],
-  ] as [unknown, string][])("拒絕 %j（%s）", (x) => { expect(ok(ThresholdsSchema, x)).toBe(false); });
+  ] as [unknown, string][])("結構錯誤 %j（%s）：兩個 schema 都拒", (x) => {
+    expect(ok(ThresholdsSchema, x)).toBe(false);
+    expect(ok(ThresholdsShapeSchema, x)).toBe(false);
+  });
 });
 
 describe("黑名單待審候選（以 case_id 為鍵）", () => {

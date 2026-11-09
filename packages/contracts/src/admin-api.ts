@@ -21,10 +21,34 @@ export const ADMIN_API_PATHS = Object.freeze({
 
 const Unit = z.number().finite().min(0).max(1);
 
-/** 成案／自動上榜門檻；須 0 ≤ case ≤ auto ≤ 1。GET 回應與 PUT 請求同形。 */
-export const ThresholdsSchema = z
-  .strictObject({ case: Unit, auto: Unit })
-  .refine((t) => t.case <= t.auto, { message: "case_le_auto", path: ["case"] });
+/** 門檻上下限（總召裁示）：case 0.30–1、auto 0.70–1，且 case < auto（嚴格）。 */
+export const THRESHOLD_BOUNDS = Object.freeze({
+  case: Object.freeze({ min: 0.3, max: 1 }),
+  auto: Object.freeze({ min: 0.7, max: 1 }),
+});
+
+/** 只驗結構（strictObject、兩個有限數）；不驗上下限。control-api 用它區分「結構錯誤」與「數值被拒」。 */
+export const ThresholdsShapeSchema = z.strictObject({ case: z.number().finite(), auto: z.number().finite() });
+
+export type ThresholdsViolation =
+  | "case_below_min" | "case_above_max" | "auto_below_min" | "auto_above_max" | "case_not_below_auto";
+
+/** 結構合法的門檻違反哪條數值規則；全符合 → null。 */
+export function thresholdsViolation(t: { case: number; auto: number }): ThresholdsViolation | null {
+  const B = THRESHOLD_BOUNDS;
+  if (t.case < B.case.min) return "case_below_min";
+  if (t.case > B.case.max) return "case_above_max";
+  if (t.auto < B.auto.min) return "auto_below_min";
+  if (t.auto > B.auto.max) return "auto_above_max";
+  if (!(t.case < t.auto)) return "case_not_below_auto";
+  return null;
+}
+
+/** 成案／自動上榜門檻；結構同 ThresholdsShapeSchema，另須符合 THRESHOLD_BOUNDS 與 case < auto。GET 回應與 PUT 請求同形。 */
+export const ThresholdsSchema = ThresholdsShapeSchema.superRefine((t, ctx) => {
+  const v = thresholdsViolation(t);
+  if (v) ctx.addIssue({ code: "custom", message: v, path: [v.startsWith("auto") ? "auto" : "case"] });
+});
 export type Thresholds = z.infer<typeof ThresholdsSchema>;
 
 /** 預設門檻（MONITOR §7：0.50 成案、0.90 自動）＝ flow-verdict 常數。 */

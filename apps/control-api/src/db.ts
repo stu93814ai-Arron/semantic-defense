@@ -50,7 +50,7 @@ const SCHEMA_STATEMENTS = [
   id BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (id),
   case_threshold DOUBLE PRECISION NOT NULL,
   auto_threshold DOUBLE PRECISION NOT NULL,
-  CHECK (0 <= case_threshold AND case_threshold <= auto_threshold AND auto_threshold <= 1)
+  CHECK (0.30 <= case_threshold AND case_threshold < auto_threshold AND 0.70 <= auto_threshold AND auto_threshold <= 1)
 )`,
   `CREATE TABLE IF NOT EXISTS allowlist_entries (
   entry_id UUID PRIMARY KEY,
