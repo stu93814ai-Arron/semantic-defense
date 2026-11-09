@@ -23,6 +23,10 @@ const CONTROL_OR_BIDI = /[\u0000-\u001F\u007F-\u009F\u061C\u200B-\u200F\u2028\u2
 /** 未配對 surrogate → false（ES2024 String.prototype.isWellFormed；tsconfig lib 為 ES2022，故以型別轉接）。 */
 const isWellFormed = (s: string): boolean => (s as unknown as { isWellFormed(): boolean }).isWellFormed();
 
-/** 人寫的理由文字（白名單 reason 等）：1–200 字，拒控制／bidi／不可見字元與未配對 surrogate；HTML 不擋，由輸出端跳脫。 */
+/**
+ * 人寫的理由文字（白名單 reason 等）：1–200 字，拒控制／bidi／不可見字元與未配對 surrogate；HTML 不擋，由輸出端跳脫。
+ * 刻意：reason 擋 ZWJ（U+200D），所以 ZWJ 組合 emoji（如家庭圖示）會被拒；單一 emoji 仍可。
+ * isWellFormed 屬 ES2024：console 端需 Chrome 111+、Safari 16.4+、Firefox 119+。
+ */
 export const Reason = z.string().min(1).max(200)
   .refine((s) => isWellFormed(s) && !CONTROL_OR_BIDI.test(s), { message: "control_or_bidi_char" });
