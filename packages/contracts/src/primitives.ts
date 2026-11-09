@@ -23,13 +23,15 @@ const CONTROL_OR_BIDI = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u115F\u3164]/u;
 /** tag 區以 code point 比對（regex 寫 \u{E0000}-\u{E007F} 會被 security/detect-unsafe-regex 誤報）。 */
 const hasTagChar = (s: string): boolean => [...s].some((c) => c.codePointAt(0)! >= 0xe0000 && c.codePointAt(0)! <= 0xe007f);
 
-/** 未配對 surrogate → false（ES2024 String.prototype.isWellFormed；tsconfig lib 為 ES2022，故以型別轉接）。 */
-const isWellFormed = (s: string): boolean => (s as unknown as { isWellFormed(): boolean }).isWellFormed();
+/**
+ * 未配對 surrogate（資安殘留 3；取代 ES2024 的 isWellFormed）：高位後面不是低位，或低位前面不是高位。
+ * 刻意不加 u flag：要以 UTF-16 code unit 比對 surrogate 本身；加了 u 會改成以 code point 比對。
+ */
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
 /**
  * 人寫的理由文字（白名單 reason 等）：1–200 字，拒控制／bidi／不可見字元與未配對 surrogate；HTML 不擋，由輸出端跳脫。
  * 刻意：reason 擋 ZWJ（U+200D），所以 ZWJ 組合 emoji（如家庭圖示）會被拒；單一 emoji 仍可。
- * isWellFormed 屬 ES2024：console 端需 Chrome 111+、Safari 16.4+、Firefox 119+。
  */
 export const Reason = z.string().min(1).max(200)
-  .refine((s) => isWellFormed(s) && !CONTROL_OR_BIDI.test(s) && !hasTagChar(s), { message: "control_or_bidi_char" });
+  .refine((s) => !LONE_SURROGATE.test(s) && !CONTROL_OR_BIDI.test(s) && !hasTagChar(s), { message: "control_or_bidi_char" });

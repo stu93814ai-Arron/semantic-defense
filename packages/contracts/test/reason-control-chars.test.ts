@@ -9,7 +9,7 @@ const BAD = [
   "\u061c", "\u2028", "\u2029", "\ufeff", "\u200b", "\u200c", "\u200d", "\u2060", "\u2061", "\u2062", "\u2063", "\u2064",
   // 資安殘留 2：Unicode 類別 Cc／Cf／Zl／Zp（軟連字號、蒙古文母音分隔、交錯註解、tag 字元）＋ Lo 的填充字元 U+115F、U+3164
   "\u00ad", "\u180e", "\ufff9", "\ufffa", "\ufffb", "\u{e0000}", "\u{e0001}", "\u{e0020}", "\u{e007f}", "\u115f", "\u3164",
-  // 未配對 surrogate（isWellFormed() 為 false）
+  // 未配對 surrogate
   "\ud800", "\udbff", "\udc00", "\udfff",
 ];
 const hex = (s: string) => `U+${s.codePointAt(0)!.toString(16).padStart(4, "0").toUpperCase()}`;
@@ -43,5 +43,18 @@ describe.each(schemas)("%s.reason", (_n, schema, base) => {
   it("surrogate 順序顛倒（低位在前）→ 拒收；正常配對（emoji）→ 接受", () => {
     expect(schema.safeParse({ ...base, reason: "a\udc00\ud800b" }).success).toBe(false);
     expect(schema.safeParse({ ...base, reason: "a\ud83d\udd12b" }).success).toBe(true);
+  });
+  it("不依賴 String.prototype.isWellFormed（ES2024；舊瀏覽器沒有）：單獨高位、單獨低位拒收，配對 emoji 接受", () => {
+    const proto = String.prototype as unknown as Record<string, unknown>;
+    const saved = proto.isWellFormed;
+    delete proto.isWellFormed;
+    try {
+      for (const r of ["x\ud83dy", "\ud83d", "\udd12x", "\ud83d\ud83d\udd12", "\ud83d\udd12\udd12"]) {
+        expect(schema.safeParse({ ...base, reason: r }).success, JSON.stringify(r)).toBe(false);
+      }
+      for (const r of ["a\ud83d\udd12b", "🔒🔒", "😀 ok"]) expect(schema.safeParse({ ...base, reason: r }).success, r).toBe(true);
+    } finally {
+      proto.isWellFormed = saved;
+    }
   });
 });
