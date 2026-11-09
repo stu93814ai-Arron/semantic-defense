@@ -52,15 +52,17 @@ export function approvePending(
     };
   }
   const ttl = ctx.ttlHours ?? 24;
-  const expiresAt = hoursLater(candidate.created_at, ttl);
-  // 附錄：expires_at = created_at + 24h；若 now 已過期窗，不得寫入（避免落到 contracts approved_window）
-  if (Date.parse(expiresAt) <= Date.parse(ctx.now)) {
+  // 待審到期仍以 created_at + 24h；已過則不得核准（already_expired）
+  const pendingExpiresAt = hoursLater(candidate.created_at, ttl);
+  if (Date.parse(pendingExpiresAt) <= Date.parse(ctx.now)) {
     return {
       ok: false,
       code: "already_expired",
       message: "此項目已到期，無法核准",
     };
   }
+  // V2-DECISIONS §2b：上榜封鎖窗 = approved_at（listed_at）+ 24h
+  const expiresAt = hoursLater(ctx.now, ttl);
   const entry: ListedEntry = {
     entry_id: candidate.case_id,
     ip: candidate.ip,

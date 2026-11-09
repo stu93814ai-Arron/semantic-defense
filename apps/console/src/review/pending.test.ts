@@ -120,17 +120,18 @@ describe("待審核准與白名單 IPv6", () => {
   });
 });
 
-describe("待審核准預設到期（created_at + 24h）", () => {
-  it("expires_at 以候選 created_at 加 24h，不用核准當下 now", () => {
+describe("待審核准預設到期（V2-DECISIONS §2b：listed expires = approved_at+24h）", () => {
+  it("expires_at 以核准當下 approved_at（now）加 24h，不以 created_at", () => {
     const r = approvePending(base, ctx({ now: "2026-11-05T01:00:00Z" }));
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.value.created_at).toBe("2026-11-05T00:00:00Z");
     expect(r.value.approved_at).toBe("2026-11-05T01:00:00Z");
-    expect(r.value.expires_at).toBe("2026-11-06T00:00:00Z");
+    // §2b：上榜封鎖窗 = listed_at／approved_at + 24h
+    expect(r.value.expires_at).toBe("2026-11-06T01:00:00Z");
   });
 
-  it("created_at+24h 已過則回 already_expired，不上榜", () => {
+  it("待審仍以 created_at+24h 判斷；已過則回 already_expired，不上榜", () => {
     const r = approvePending(base, ctx({ now: "2026-11-06T01:00:00Z" }));
     expect(r.ok).toBe(false);
     if (r.ok) return;
