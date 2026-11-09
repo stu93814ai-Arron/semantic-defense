@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import type { Db } from "./db.js";
+import type { Db, Queryable } from "./db.js";
 import type { Role } from "./auth.js";
 
 /**
@@ -9,7 +9,8 @@ import type { Role } from "./auth.js";
  */
 export type AuditEvent = { action: string; actor: string; sensor_id: string | null; at: number; detail?: Record<string, unknown> };
 
-export async function writeAudit(db: Db, e: AuditEvent): Promise<void> {
+/** 可傳 Db 或 tx 內的 Queryable；需與資料寫入同交易時請在 db.tx 內呼叫。 */
+export async function writeAudit(db: Queryable, e: AuditEvent): Promise<void> {
   await db.query(
     "INSERT INTO audit_events (action, actor, sensor_id, at, detail) VALUES ($1,$2,$3,$4,$5)",
     [e.action, e.actor, e.sensor_id, e.at, JSON.stringify(e.detail ?? {})],

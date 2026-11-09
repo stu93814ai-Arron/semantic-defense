@@ -243,6 +243,21 @@ describe("感測器 app 綁定修改與稽核", () => {
     expect(n.rows[0]!.n).toBe("0");
   });
 
+  it("update_apps 稽核寫入失敗 → 500，allowed_app_ids 不變（UPDATE 與稽核同一 tx）", async () => {
+    await boot();
+    const c = await admin();
+    const { sensor_id } = (await issue(c, OK)).json() as { sensor_id: string };
+    await app.db.exec("ALTER TABLE audit_events ADD CONSTRAINT t_no_update_apps CHECK (action <> 'sensor_token.update_apps') NOT VALID");
+    try {
+      expect((await patch(c, sensor_id, { allowed_app_ids: ["app-beta"] })).statusCode).toBe(500);
+    } finally {
+      await app.db.exec("ALTER TABLE audit_events DROP CONSTRAINT t_no_update_apps");
+    }
+    const row = (await app.db.query<{ allowed_app_ids: string[] }>(
+      "SELECT allowed_app_ids FROM sensor_tokens WHERE sensor_id = $1", [sensor_id])).rows[0]!;
+    expect(row.allowed_app_ids).toEqual(["app-alpha"]);
+  });
+
   it("發放與修改寫入稽核；GET /api/audit 可見且不含 token／secret／hash", async () => {
     await boot();
     const c = await admin();
