@@ -16,7 +16,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./ip-cidr.js": "./src/ip-cidr.ts",
-    "./ip-cidr": "./src/ip-cidr.ts"
+    "./ip-cidr": "./src/ip-cidr.ts",
+    "./browser": "./src/browser.ts"
   },
   "types": "./src/index.ts"
 }

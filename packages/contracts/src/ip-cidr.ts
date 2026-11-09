@@ -1,4 +1,5 @@
-import { isIP } from "node:net";
+// 不引用 node 內建（瀏覽器入口 ./browser 會帶入本檔）；ipVersion 行為對齊 node:net isIP。
+import { ipVersion } from "./ip-literal.js";
 
 export type ParsedCidr = {
   version: 4 | 6;
@@ -164,7 +165,7 @@ function parseCidrMode(raw: string, wide: boolean): ParsedCidr | null {
   const slash = raw.indexOf("/");
   const address = slash === -1 ? raw : raw.slice(0, slash);
   const prefixTok = slash === -1 ? null : raw.slice(slash + 1);
-  const version = isIP(address) as 0 | 4 | 6;
+  const version = ipVersion(address);
   if (version === 0) return null;
   const prefix = parsePrefix(prefixTok, version, wide);
   if (prefix === null) return null;
@@ -204,7 +205,7 @@ export function isHostPrefix(raw: string): boolean {
  */
 export function assertFlowSingleIp(raw: string): boolean {
   if (typeof raw !== "string" || raw.includes("/") || raw.includes("%") || raw.includes(" ")) return false;
-  const version = isIP(raw);
+  const version = ipVersion(raw);
   if (version === 4) return true;
   if (version !== 6) return false;
   const parts = expandIpv6(raw);
