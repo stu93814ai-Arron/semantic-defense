@@ -9,20 +9,25 @@ import type {
   SourceFilter,
 } from "./types";
 
+function recentIso(offsetMs: number): string {
+  return new Date(Date.now() + offsetMs).toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+
+/** 候選 created_at 須接近現在，核准後 created_at+24h 才仍在 active。 */
 const seedPending = (): PendingCandidate[] => [
   {
     candidate_id: "cand-1",
     ip: "203.0.113.10",
     confidence: 0.42,
     case_id: "11111111-1111-4111-8111-111111111111",
-    created_at: "2026-11-05T00:00:00Z",
+    created_at: recentIso(-3_600_000),
   },
   {
     candidate_id: "cand-2",
     ip: "203.0.113.20",
     confidence: 0.55,
     case_id: "55555555-5555-4555-8555-555555555555",
-    created_at: "2026-11-05T00:10:00Z",
+    created_at: recentIso(-2_400_000),
   },
 ];
 
