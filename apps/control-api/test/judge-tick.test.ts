@@ -4,7 +4,7 @@ import { insertFlowEvents, insertLegacyFlowEvents } from "@semantic-defense/flow
 import type { ControlApi } from "./helpers/app.js";
 import { DAY, MIN, T0, auditIndexDefAfterReinit, bootJudgeApp, flowEvent as flow } from "./helpers/judge.js";
 import { JUDGE_LOCK, runJudgeTick } from "../src/judge.js";
-import { writeAutoBlocklistEntry } from "../src/auto-blacklist.js";
+import { writeAutoBlocklistEntry } from "./helpers/auto-list.js";
 
 /** 成案流程 commit 7：判定 tick（計畫 §1／§2）。flow_events 以 ./testing 入口建表、塞資料（ADR 0001 補充）。 */
 let app: ControlApi;

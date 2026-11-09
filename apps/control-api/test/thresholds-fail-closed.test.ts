@@ -5,7 +5,7 @@ import { buildApp, seedPhase2Fixtures, type ControlApi } from "./helpers/app.js"
 import { cookieHeader, login } from "./helpers/session.js";
 import { requireDatabaseUrl } from "./helpers/pg.js";
 import { loadThresholds } from "../src/thresholds.js";
-import { writeAutoBlocklistEntry } from "../src/auto-blacklist.js";
+import { writeAutoBlocklistEntry } from "./helpers/auto-list.js";
 
 /** 資安 R3：舊表（舊 CHECK）留下不合新上下限的值 → fail-closed 退回預設 0.50／0.90 並 log.warn；不寫回 DB、不做 migration。 */
 let app: ControlApi;

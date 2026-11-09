@@ -4,7 +4,7 @@ import { ADMIN_API_PATHS } from "@semantic-defense/contracts";
 import { buildApp, seedPhase2Fixtures, type ControlApi } from "./helpers/app.js";
 import { cookieHeader, login } from "./helpers/session.js";
 import { requireDatabaseUrl } from "./helpers/pg.js";
-import { writeAutoBlocklistEntry } from "../src/auto-blacklist.js";
+import { writeAutoBlocklistEntry } from "./helpers/auto-list.js";
 import { insertActiveBlocklistEntry } from "../src/blocklist-store.js";
 
 /** 成案流程 Q8／Q9：同 IP 只能有一筆生效黑名單（ended_at＋partial UNIQUE(ip) WHERE ended_at IS NULL＋同 tx sweep＋ON CONFLICT DO NOTHING）。 */

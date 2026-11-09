@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { BlocklistEntrySchema } from "@semantic-defense/contracts";
 import { buildApp, seedPhase2Fixtures, type ControlApi } from "./helpers/app.js";
 import { requireDatabaseUrl } from "./helpers/pg.js";
-import { writeAutoBlocklistEntry } from "../src/auto-blacklist.js";
+import { writeAutoBlocklistEntry } from "./helpers/auto-list.js";
 
 /** ④ source=auto 寫入邊界（內部函式，不開 HTTP）：先查白名單、只收 /32／/128、須達自動門檻；與稽核同一 tx。 */
 let app: ControlApi;

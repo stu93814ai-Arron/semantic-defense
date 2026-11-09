@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { BlockList, isIP } from "node:net";
 import { BlocklistEntrySchema, parseCidr, type BlocklistEntry } from "@semantic-defense/contracts";
-import type { Db, Queryable } from "./db.js";
+import type { Queryable } from "./db.js";
 import { writeAudit } from "./audit.js";
 import { loadThresholds, type WarnLog } from "./thresholds.js";
 import { insertActiveBlocklistEntry } from "./blocklist-store.js";
@@ -61,7 +61,7 @@ export function hostCidr(raw: string): string | null {
 export const AUTO_COOLDOWN_MS = 2 * 60 * 60 * 1000;
 /**
  * gates：E3.A 觸發才有的閘門（冷卻＋熔斷共用一個選項；A 裁定 11-09 第 4 點）。
- * 判定 tick 開（帶 breakerPerHour）、writeAutoBlocklistEntry 關，§7 原行為不變。
+ * 判定 tick 開（帶 breakerPerHour）；測試用的 §7 包裝（test/helpers/auto-list.ts）關，§7 原行為不變。
  */
 export type AutoListOpts = { log?: WarnLog; gates?: false | { breakerPerHour: number } };
 
@@ -117,12 +117,4 @@ export async function autoListInTx(q: Queryable, input: AutoListInput, now: numb
   await writeAudit(q, { action: "blacklist.auto_list", actor: "system:auto", sensor_id: null, at: now,
     detail: { entry_id: entry.entry_id, ip: entry.ip, confidence: entry.confidence, case_id: entry.case_id, expires_at: entry.expires_at } });
   return { status: "listed", entry };
-}
-
-/** 外層包裝：自己開 tx，行為與拆分前相同。 */
-export async function writeAutoBlocklistEntry(
-  db: Db, input: AutoListInput, now: number, log?: WarnLog,
-): Promise<AutoListResult> {
-  if (hostCidr(input.ip) === null) return { status: "invalid_ip" };
-  return db.tx((q) => autoListInTx(q, input, now, { log }));
 }
