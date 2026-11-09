@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { assertAllowlistCidr } from "./ip-cidr.js";
-import { Id, Rfc3339 } from "./primitives.js";
+import { Id, Reason, Rfc3339 } from "./primitives.js";
 
 function expiresAfterCreated(createdAt: string, expiresAt: string | null): boolean {
   return expiresAt === null || Date.parse(expiresAt) > Date.parse(createdAt);
@@ -11,7 +11,7 @@ export const AllowlistEntrySchema = z
   .strictObject({
     entry_id: z.uuid(),
     cidr: z.string().refine(assertAllowlistCidr, { message: "allowlist_cidr" }),
-    reason: z.string().min(1).max(200),
+    reason: Reason,
     created_by: Id,
     created_at: Rfc3339,
     expires_at: z.union([Rfc3339, z.null()]),

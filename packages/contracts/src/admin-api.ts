@@ -3,7 +3,7 @@ import { AllowlistEntrySchema } from "./allowlist-entry.js";
 import { BlocklistEntrySchema } from "./blocklist-entry.js";
 import { AUTO_THRESHOLD, CASE_THRESHOLD } from "./flow-verdict.js";
 import { assertAllowlistCidr, assertIpOrCidr, isHostPrefix } from "./ip-cidr.js";
-import { Rfc3339 } from "./primitives.js";
+import { Reason, Rfc3339 } from "./primitives.js";
 
 /**
  * 管理面 HTTP 契約（control-api ↔ console）：路徑常數與請求／回應本文。
@@ -43,7 +43,6 @@ export const PendingCandidateListSchema = z.strictObject({ items: z.array(Pendin
 /** 已上榜黑名單列表（GET blacklist）；撤回（POST blacklistRevoke）無本文，回應為更新後的黑名單項目。 */
 export const BlocklistListSchema = z.strictObject({ items: z.array(BlocklistEntrySchema) });
 
-const Reason = z.string().min(1).max(200);
 const ExpiresAt = z.union([Rfc3339, z.null()]);
 
 /** 白名單新增：entry_id、created_by、created_at 由伺服端填；回應為白名單項目。 */

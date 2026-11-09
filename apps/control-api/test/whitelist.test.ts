@@ -102,4 +102,20 @@ describe("白名單 CRUD（platform_admin）", () => {
     const items = ((await req(c, "GET", LIST)).json() as { items: { entry_id: string; reason: string }[] }).items;
     expect(items.map((x) => [x.entry_id, x.reason])).toEqual([[entry_id, C.reason]]);
   });
+
 });
+
+describe("白名單 reason 控制字元", () => {
+  it("reason 含 \\u0000 或 bidi 控制字元 → 400（不是 500）；不寫入、不寫稽核", async () => {
+    await boot();
+    const c = await admin();
+    for (const reason of ["a\u0000b", "a\u202eb", "a\nb"]) {
+      expect((await req(c, "POST", LIST, { ...C, reason })).statusCode, JSON.stringify(reason)).toBe(400);
+    }
+    const { entry_id } = (await req(c, "POST", LIST, C)).json() as { entry_id: string };
+    expect((await req(c, "PATCH", one(entry_id), { reason: "x\u0000", expires_at: null })).statusCode).toBe(400);
+    expect(((await req(c, "GET", LIST)).json() as { items: { reason: string }[] }).items.map((x) => x.reason)).toEqual([C.reason]);
+    expect((await audits()).map((a) => a.action)).toEqual(["whitelist.create"]);
+  });
+});
+
