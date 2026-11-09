@@ -41,12 +41,32 @@ describe("contracts ./browser 入口（瀏覽器安全）", () => {
     expect(external.filter((s) => s.startsWith("node:") || BUILTIN.has(s.split("/")[0]!))).toEqual([]);
   });
 
-  it("轉出的 API 與主入口是同一個實作", () => {
-    expect(Object.keys(browser).sort()).toEqual(["assertAllowlistCidr", "assertIpOrCidr", "isHostPrefix", "parseCidr"]);
-    expect(browser.assertAllowlistCidr).toBe(main.assertAllowlistCidr);
-    expect(browser.assertIpOrCidr).toBe(main.assertIpOrCidr);
-    expect(browser.isHostPrefix).toBe(main.isHostPrefix);
-    expect(browser.parseCidr).toBe(main.parseCidr);
+  const EXPORTS = [
+    "ADMIN_API_PATHS", "AllowlistCreateSchema", "AllowlistEntrySchema", "AllowlistListSchema", "AllowlistUpdateSchema",
+    "BlocklistEntrySchema", "BlocklistListSchema", "PendingCandidateListSchema", "PendingCandidateSchema",
+    "THRESHOLD_BOUNDS", "ThresholdsSchema", "assertAllowlistCidr", "assertIpOrCidr", "isHostPrefix", "parseCidr",
+    "thresholdsViolation",
+  ] as const;
+
+  it("轉出的 API 只有 console 用到的這些", () => {
+    expect(Object.keys(browser).sort()).toEqual([...EXPORTS].sort());
+  });
+
+  it.each(EXPORTS)("%s 與主入口是同一個實作（toBe）", (name) => {
+    const b = new Map(Object.entries(browser)).get(name);
+    expect(b).toBeDefined();
+    expect(b).toBe(new Map(Object.entries(main)).get(name));
+  });
+
+  it("模組圖的外部依賴只有 zod", () => {
+    const { external } = moduleGraph(resolve(SRC, "../", pkg.exports["./browser"]!));
+    expect(external.sort()).toEqual(["zod"]);
+  });
+
+  it("browser 入口的門檻 schema 為最終版（0.30／0.70 下限、case<auto）", () => {
+    expect(browser.ThresholdsSchema.safeParse({ case: 0.3, auto: 0.7 }).success).toBe(true);
+    expect(browser.ThresholdsSchema.safeParse({ case: 0.29, auto: 0.9 }).success).toBe(false);
+    expect(browser.ThresholdsSchema.safeParse({ case: 0.8, auto: 0.8 }).success).toBe(false);
   });
 
   it.each([
