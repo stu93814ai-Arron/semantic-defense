@@ -5,7 +5,7 @@ import { parseFlowMetadataEvent } from "@semantic-defense/contracts";
 import { findSensorByToken, ipAllowed, type SensorDb } from "@semantic-defense/sensor-auth";
 import { createAuthFailLimiter } from "./rate-limit.js";
 import { installErrorHandler, withSafeReqLog } from "./errors.js";
-import { ensureFlowSchema, insertFlow, purgeExpired, recordRejection } from "./store.js";
+import { ensureFlowSchema, insertFlow, purgeExpired, recordRejection } from "@semantic-defense/flow-store/write";
 
 /**
  * sensor-ingest（流量平面）③b：認證面。
@@ -15,7 +15,7 @@ import { ensureFlowSchema, insertFlow, purgeExpired, recordRejection } from "./s
  * - 未授權 IP 速率限制：先驗 Bearer；有效 token 不查也不計限流。缺／錯 token 才依來源 IP 查限流並計失敗，約 30／60s → 429（不讀 XFF；403／成功不計；注入時鐘）。
  * - 無 session、無管理／登入路由；未宣告路徑一律 404（認證掛在路由 onRequest：先於 body 解析，未認證請求不解析 body；不影響 404）。
  * - ③c：POST /v1/flows body＝單一 FlowMetadataEvent（contracts strict 驗證），sensor_id 取自 token → 201；
- *   自報 sensor_id／非法 → 400；app_id 不在 token 的 allowed_app_ids → 403（只記 sensor_id＋時間）；同 sensor 重複 flow_id → 409。寫入前清除 ≥7 天列（見 store.ts）。
+ *   自報 sensor_id／非法 → 400；app_id 不在 token 的 allowed_app_ids → 403（只記 sensor_id＋時間）；同 sensor 重複 flow_id → 409。寫入前清除 ≥7 天列（見 packages/flow-store）。
  */
 export type BuildIngestOptions = {
   db: SensorDb;
