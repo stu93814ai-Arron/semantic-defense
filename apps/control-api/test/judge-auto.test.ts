@@ -508,6 +508,19 @@ describe("autoListEnabled（總開關，預設關）：關時 tick 完全不做�
     expect(await opened()).toEqual([{ opened_at: String(T0 - 70 * MIN) }]);
   });
 
+  it("關閉時凍結熔斷：已可恢復也不寫 auto_breaker_close、狀態不變；重新開啟後第一個 tick 照常補判恢復", async () => {
+    await boot();
+    await autos(50);
+    expect((await attempt("64.0.113.51")).status).toBe("breaker");
+    const frozen = await opened();
+    expect(frozen).not.toEqual([{ opened_at: null }]);
+    await tick(T0 + 31 * MIN, { autoListEnabled: false }); // 視窗已過、可恢復，但總開關關
+    expect([await audits("blacklist.auto_breaker_close"), await opened()]).toEqual([[], frozen]);
+    await tick(T0 + 32 * MIN); // 重新開啟（ON）
+    expect(await audits("blacklist.auto_breaker_close")).toEqual([{ actor: "system:auto", sensor_id: null, detail: { count: 0, limit: 50 } }]);
+    expect(await opened()).toEqual([{ opened_at: null }]);
+  });
+
   it("buildApp 排程（預設關）：E3.A 成立 → 案件留待審、不上榜", async () => {
     await boot(undefined, { judgeIntervalMs: 20 });
     await app.db.query("DELETE FROM judge_cursor"); // 前一個測試的 cursor 會跳過本測試較早收到的列
