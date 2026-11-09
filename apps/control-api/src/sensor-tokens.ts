@@ -13,7 +13,7 @@ import type { Role } from "./auth.js";
  * - 明文只在發放回應出現一次；DB 只存 secret 的 SHA-256 hex。
  * - 必填 allowed_cidrs（≥1，contracts 白名單規則）與 allowed_app_ids（≥1，contracts Id）。
  * - 發放、修改 app 綁定與撤銷寫入 audit_events（不含 token／secret／hash）；重複撤銷不寫。
- * - 撤銷只標 revoked_at，列不刪，sensor_id 永久保留。
+ * - 撤銷只標 revoked_at，列不刪，sensor_id 永久保留；已撤銷者不可再改 app 綁定（PATCH → 404）。
  */
 const ADMIN: Role[] = ["platform_admin"];
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -123,7 +123,7 @@ export function registerSensorTokenRoutes(
       const apps = parsePatchApps(req.body);
       if (!apps) return reply.code(400).send({ error: "請求格式錯誤" });
       const r = await db.query<{ sensor_id: string }>(
-        "UPDATE sensor_tokens SET allowed_app_ids = $2 WHERE sensor_id = $1 RETURNING sensor_id", [id, apps],
+        "UPDATE sensor_tokens SET allowed_app_ids = $2 WHERE sensor_id = $1 AND revoked_at IS NULL RETURNING sensor_id", [id, apps],
       );
       if (!r.rows[0]) return reply.code(404).send({ error: "查無感測器" });
       await writeAudit(db, { action: "sensor_token.update_apps", actor: req.user!.username, sensor_id: id, at: now(),

@@ -227,6 +227,22 @@ describe("感測器 app 綁定修改與稽核", () => {
     expect((await patch(c, "not-a-uuid", { allowed_app_ids: ["a"] })).statusCode).toBe(404);
   });
 
+  it("已撤銷的 sensor PATCH apps → 404（同未知 sensor）；allowed_app_ids 不變；不寫 update_apps 稽核", async () => {
+    await boot();
+    const c = await admin();
+    const { sensor_id } = (await issue(c, OK)).json() as { sensor_id: string };
+    expect((await app.inject({ method: "POST", url: `/api/sensors/tokens/${sensor_id}/revoke`, headers: cookieHeader(c) })).statusCode).toBe(204);
+    const r = await patch(c, sensor_id, { allowed_app_ids: ["app-beta"] });
+    const unknown = await patch(c, "00000000-0000-4000-8000-000000000000", { allowed_app_ids: ["app-beta"] });
+    expect(r.statusCode).toBe(404);
+    expect(r.body).toBe(unknown.body);
+    const row = (await app.db.query<{ allowed_app_ids: string[] }>(
+      "SELECT allowed_app_ids FROM sensor_tokens WHERE sensor_id = $1", [sensor_id])).rows[0]!;
+    expect(row.allowed_app_ids).toEqual(["app-alpha"]);
+    const n = await app.db.query<{ n: string }>("SELECT count(*) AS n FROM audit_events WHERE action = 'sensor_token.update_apps'");
+    expect(n.rows[0]!.n).toBe("0");
+  });
+
   it("發放與修改寫入稽核；GET /api/audit 可見且不含 token／secret／hash", async () => {
     await boot();
     const c = await admin();
