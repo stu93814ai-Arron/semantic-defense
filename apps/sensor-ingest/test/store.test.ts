@@ -12,7 +12,7 @@ const IN = "10.1.2.3";
 const T0 = 1_800_000_000_000;
 const auth = (t: string) => ({ authorization: `Bearer ${t}` });
 const flow = (extra: Record<string, unknown> = {}) => ({
-  flow_id: randomUUID(), app_id: "app-1", ts: "2026-11-05T12:00:00Z", src_ip: "203.0.113.5", dst_ip: "10.0.0.1",
+  flow_id: randomUUID(), app_id: "app-1", ts: "2027-01-15T07:00:00Z", src_ip: "203.0.113.5", dst_ip: "10.0.0.1",
   src_port: 51234, dst_port: 443, protocol: "tcp", bytes_in: 10, bytes_out: 20, packets: 3, duration_ms: 5, ...extra,
 });
 type Row = { flow_id: string; sensor_id: string; received_at: string; app_id: string };
@@ -88,7 +88,7 @@ describe("③c 7 天清除（年齡 ≥ 7d 刪；flow_rejections 與 store 直�
     const { app, post } = await setup(() => now);
     expect((await post(flow())).statusCode).toBe(201);
     now = T0 + RETENTION_MS;
-    const f = flow();
+    const f = flow({ ts: new Date(now).toISOString() });
     expect((await post(f)).statusCode).toBe(201);
     expect((await rows()).rows.map((x) => x.flow_id)).toEqual([f.flow_id]);
     await app.close();

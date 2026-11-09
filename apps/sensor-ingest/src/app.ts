@@ -5,7 +5,7 @@ import { parseFlowMetadataEvent } from "@semantic-defense/contracts";
 import { findSensorByToken, ipAllowed, type SensorDb } from "@semantic-defense/sensor-auth";
 import { createAuthFailLimiter } from "./rate-limit.js";
 import { installErrorHandler, withSafeReqLog } from "./errors.js";
-import { ensureFlowSchema, insertFlow, purgeExpired, recordRejection } from "@semantic-defense/flow-store/write";
+import { RETENTION_MS, ensureFlowSchema, insertFlow, purgeExpired, recordRejection } from "@semantic-defense/flow-store/write";
 
 /**
  * sensor-ingest（流量平面）③b：認證面。
@@ -95,10 +95,11 @@ export async function buildIngest(opts: BuildIngestOptions): Promise<FastifyInst
     const parsed = parseFlowMetadataEvent(req.body);
     if (!parsed.ok) return reply.code(400).send({ error: "請求格式錯誤", issues: parsed.errors });
     const now = clock();
-    // 超前 >5 分鐘拒收（格式驗證之後、app_id 綁定 403 之前；不寫 flow_rejections）。遲到照存，由判定端推導。
-    if (Date.parse(parsed.value.ts) - now > MAX_FUTURE_SKEW_MS) {
-      return reply.code(400).send({ error: "ts 超前接收時間" });
-    }
+    // 超前 >5 分鐘、或早於保留期限（now − RETENTION_MS）拒收（格式驗證之後、app_id 綁定 403 之前；不寫 flow_rejections）。
+    // 兩邊都是「差值 > 上限才拒」，剛好等於上限照收。期限內的遲到照存，由判定端推導（資安退回 B2：0000 年等極舊 ts）。
+    const ts = Date.parse(parsed.value.ts);
+    if (ts - now > MAX_FUTURE_SKEW_MS) return reply.code(400).send({ error: "ts 超前接收時間" });
+    if (now - ts > RETENTION_MS) return reply.code(400).send({ error: "ts 早於保留期限" });
     if (!req.allowedAppIds!.includes(parsed.value.app_id)) {
       await recordRejection(opts.db, req.sensorId!, now);
       return reply.code(403).send({ error: "app_id 未綁定此感測器" });

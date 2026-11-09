@@ -11,7 +11,7 @@ beforeEach(async () => { await db.reset(); });
 
 const T0 = 1_800_000_000_000;
 const flow = () => ({
-  flow_id: randomUUID(), app_id: "app-1", ts: "2026-11-05T12:00:00Z", src_ip: "203.0.113.5", dst_ip: "10.0.0.1",
+  flow_id: randomUUID(), app_id: "app-1", ts: "2027-01-15T07:00:00Z", src_ip: "203.0.113.5", dst_ip: "10.0.0.1",
   src_port: 51234, dst_port: 443, protocol: "tcp", bytes_in: 10, bytes_out: 20, packets: 3, duration_ms: 5,
 });
 
