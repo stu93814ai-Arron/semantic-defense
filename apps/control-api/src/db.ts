@@ -46,6 +46,12 @@ const SCHEMA_STATEMENTS = [
   allowed_cidrs TEXT[] NOT NULL CHECK (cardinality(allowed_cidrs) >= 1),
   allowed_app_ids TEXT[] NOT NULL CHECK (cardinality(allowed_app_ids) >= 1)
 )`,
+  `CREATE TABLE IF NOT EXISTS thresholds (
+  id BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (id),
+  case_threshold DOUBLE PRECISION NOT NULL,
+  auto_threshold DOUBLE PRECISION NOT NULL,
+  CHECK (0 <= case_threshold AND case_threshold <= auto_threshold AND auto_threshold <= 1)
+)`,
   `CREATE TABLE IF NOT EXISTS audit_events (
   id BIGSERIAL PRIMARY KEY,
   action TEXT NOT NULL,

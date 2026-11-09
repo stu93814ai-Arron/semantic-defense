@@ -123,3 +123,24 @@ describe("scoreFeatures 邊界 0.50／0.90", () => {
     expect(at(0, 0).reasons).toEqual([]);
   });
 });
+
+describe("可注入門檻（thresholds；省略＝現行常數）", () => {
+  it("未傳 thresholds：與傳入預設常數完全相同", () => {
+    const flows = [...scan(20), flow({ src_ip: "192.0.2.11" })];
+    expect(judgeFlows(flows)).toEqual(judgeFlows(flows, { case: CASE_THRESHOLD, auto: AUTO_THRESHOLD }));
+    const f = { n: 20, u: 30, s: 0, h: false };
+    expect(scoreFeatures(f)).toEqual(scoreFeatures(f, { case: CASE_THRESHOLD, auto: AUTO_THRESHOLD }));
+  });
+
+  it("open_case 依注入的 case 門檻判定（confidence 不變）", () => {
+    const f = { n: 20, u: 30, s: 0, h: false }; // 0.15 + 0.35 = 0.50
+    expect(scoreFeatures(f).open_case).toBe(true);
+    const hi = scoreFeatures(f, { case: 0.6, auto: 0.9 });
+    expect(hi).toEqual({ ...scoreFeatures(f), open_case: false });
+    expect(scoreFeatures({ n: 4, u: 4, s: 0, h: false }, { case: 0.05, auto: 0.9 }).open_case).toBe(true);
+    const [v] = judgeFlows(scan(30), { case: 1, auto: 1 });
+    expect(v!.confidence).toBe(1);
+    expect(v!.open_case).toBe(true);
+    expect(judgeFlows(scan(3), { case: 1, auto: 1 })[0]!.open_case).toBe(false);
+  });
+});

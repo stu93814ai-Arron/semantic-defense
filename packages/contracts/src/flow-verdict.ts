@@ -14,6 +14,10 @@ export const CASE_THRESHOLD = 0.5;
 export const AUTO_THRESHOLD = 0.9;
 if (!(CASE_THRESHOLD <= AUTO_THRESHOLD)) throw new Error("CASE_THRESHOLD must be <= AUTO_THRESHOLD");
 
+/** 可注入門檻（成案 case、自動 auto）；省略＝上列常數。讀自 control-api 的設定時須與管理面讀回值一致。 */
+export type FlowThresholds = { readonly case: number; readonly auto: number };
+const DEFAULT_FLOW_THRESHOLDS: FlowThresholds = Object.freeze({ case: CASE_THRESHOLD, auto: AUTO_THRESHOLD });
+
 export type FlowReason = "n" | "u" | "s" | "h";
 export type FlowFeatures = { n: number; u: number; s: number; h: boolean };
 export type FlowScore = { confidence: number; open_case: boolean; reasons: FlowReason[] };
@@ -39,7 +43,7 @@ const median = (xs: number[]): number => {
 };
 
 /** 依特徵計分；confidence 四捨五入到 1e-9 以避免浮點誤差影響門檻比較。 */
-export function scoreFeatures({ n, u, s, h }: FlowFeatures): FlowScore {
+export function scoreFeatures({ n, u, s, h }: FlowFeatures, thresholds: FlowThresholds = DEFAULT_FLOW_THRESHOLDS): FlowScore {
   const countSH = n >= MIN_N_FOR_SH;
   const parts: Record<FlowReason, number> = {
     n: WEIGHTS.n * Math.min(n, N_CAP) / N_CAP,
@@ -52,11 +56,13 @@ export function scoreFeatures({ n, u, s, h }: FlowFeatures): FlowScore {
   const reasons = (Object.entries(parts) as [FlowReason, number][])
     .filter(([, v]) => v > 0)
     .map(([k]) => k);
-  return { confidence, open_case: confidence >= CASE_THRESHOLD, reasons };
+  return { confidence, open_case: confidence >= thresholds.case, reasons };
 }
 
 /** 將 flows 依 (app_id, src_ip, 5 分鐘固定窗) 分組，每組輸出一筆判定；輸出依鍵排序。 */
-export function judgeFlows(flows: readonly FlowMetadataEvent[]): FlowVerdict[] {
+export function judgeFlows(
+  flows: readonly FlowMetadataEvent[], thresholds: FlowThresholds = DEFAULT_FLOW_THRESHOLDS,
+): FlowVerdict[] {
   const groups = new Map<string, FlowMetadataEvent[]>();
   for (const f of flows) {
     const win = Math.floor(Date.parse(f.ts) / FLOW_WINDOW_MS);
@@ -75,7 +81,7 @@ export function judgeFlows(flows: readonly FlowMetadataEvent[]): FlowVerdict[] {
     const h = n >= MIN_N_FOR_SH && u >= LOW_PACKET_MIN_U && median(g.map((f) => f.packets)) <= LOW_PACKET_MEDIAN;
     return {
       app_id, src_ip, window_start: new Date(win * FLOW_WINDOW_MS).toISOString(),
-      n, u, s, h, ...scoreFeatures({ n, u, s, h }),
+      n, u, s, h, ...scoreFeatures({ n, u, s, h }, thresholds),
     };
   });
 }
