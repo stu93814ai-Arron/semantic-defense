@@ -23,6 +23,9 @@ const DDL = [
   PRIMARY KEY (sensor_id, flow_id)
 )`,
   "CREATE INDEX IF NOT EXISTS flow_events_received_at ON flow_events (received_at)",
+  // 判定 tick 依 (sensor, app, src_ip, 5 分鐘窗) 重讀整組（control-api judge.ts）：前三欄等值走索引，ts 再過濾。
+  // IF NOT EXISTS：舊表也會補建；sensor-ingest 啟動時的 ensureFlowSchema 建立（control-api 不建表、不建索引）。
+  "CREATE INDEX IF NOT EXISTS flow_events_group ON flow_events (sensor_id, app_id, src_ip, ts)",
   // app_id 未綁定的拒絕紀錄：只記 id（代理 PK）＋sensor_id＋時間，不記 payload；與 flow_events 同 7 天清除。
   // 註：IF NOT EXISTS 不會改既有舊表（無 id）的結構；本階段不做 migration。
   "CREATE TABLE IF NOT EXISTS flow_rejections (id BIGSERIAL PRIMARY KEY, sensor_id TEXT NOT NULL, at BIGINT NOT NULL)",
