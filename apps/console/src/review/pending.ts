@@ -42,6 +42,15 @@ export function approvePending(
     };
   }
   const ttl = ctx.ttlHours ?? 24;
+  const expiresAt = hoursLater(candidate.created_at, ttl);
+  // 附錄：expires_at = created_at + 24h；若 now 已過期窗，不得寫入（避免落到 contracts approved_window）
+  if (Date.parse(expiresAt) <= Date.parse(ctx.now)) {
+    return {
+      ok: false,
+      code: "already_expired",
+      message: "此項目已到期，無法核准",
+    };
+  }
   const entry: ListedEntry = {
     entry_id: candidate.candidate_id,
     ip: candidate.ip,
@@ -49,7 +58,7 @@ export function approvePending(
     confidence: candidate.confidence,
     case_id: candidate.case_id,
     created_at: candidate.created_at,
-    expires_at: hoursLater(candidate.created_at, ttl),
+    expires_at: expiresAt,
     approved_by: ctx.actorId,
     approved_at: ctx.now,
     revoked_at: null,

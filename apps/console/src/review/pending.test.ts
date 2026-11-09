@@ -117,4 +117,13 @@ describe("待審核准預設到期（created_at + 24h）", () => {
     expect(r.value.approved_at).toBe("2026-11-05T01:00:00Z");
     expect(r.value.expires_at).toBe("2026-11-06T00:00:00Z");
   });
+
+  it("created_at+24h 已過則回 already_expired，不上榜", () => {
+    const r = approvePending(base, ctx({ now: "2026-11-06T01:00:00Z" }));
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.code).toBe("already_expired");
+    expect(r.message).toMatch(/到期/);
+    expect(r.code).not.toBe("approved_window");
+  });
 });
