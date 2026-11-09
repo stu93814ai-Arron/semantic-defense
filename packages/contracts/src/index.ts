@@ -174,6 +174,7 @@ export function toCaseSummary(
 }
 
 export * from "./flow-verdict.js";
+export * from "./admin-api.js";
 
 export {
   MonitorCaseSummarySchema,
