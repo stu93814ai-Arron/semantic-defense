@@ -1,6 +1,6 @@
 import type { Queryable } from "./db.js";
 import { writeAudit } from "./audit.js";
-import { autoListInTx, type AutoListOpts } from "./auto-blacklist.js";
+import { autoListInTx, type AutoListOpts, type AutoListResult } from "./auto-blacklist.js";
 
 /**
  * 成案流程 commit 9：E3.A 自動上榜條件（計畫 §1 步驟 4、§6.1；A 裁定 11-09）。
@@ -25,9 +25,28 @@ export const e3aHolds = (c: HighCount): boolean => c.hits >= 3 && (c.apps >= 2 |
 
 export type Suppressed = { reason: "allowlist" | "cooldown" | "breaker"; ip: string; case_id: string | null; revoked_at?: string };
 
-/** E3.A 成立但被擋下：blacklist.auto_suppressed（actor system:auto、sensor_id null；A 裁定 11-09 Q4）。 */
-export async function writeSuppressed(q: Queryable, detail: Suppressed, now: number): Promise<void> {
+/** auto_suppressed 去重視窗：同一 (ip, reason) 在這段時間內（伺服器時間）最多一筆（A 覆核，比照 R5 hit_while_listed）。 */
+export const AUTO_SUPPRESSED_EVERY_MS = 60 * 60_000;
+
+/**
+ * E3.A 成立但被擋下：blacklist.auto_suppressed（actor system:auto、sensor_id null；A 裁定 11-09 Q4）。
+ * 寫前在同一 tx 查 audit_events 過去 1 小時有沒有同 (ip, reason)（partial index audit_auto_suppressed_ip_reason）；
+ * 有 → 不寫、回 false（呼叫端計數，tick 結束記一行只帶數量的 log）。寫了回 true。
+ */
+export async function writeSuppressed(q: Queryable, detail: Suppressed, now: number): Promise<boolean> {
+  const dup = await q.query(
+    `SELECT 1 FROM audit_events WHERE action = 'blacklist.auto_suppressed'
+       AND detail->>'ip' = $1 AND detail->>'reason' = $2 AND at > $3 LIMIT 1`, [detail.ip, detail.reason, now - AUTO_SUPPRESSED_EVERY_MS]);
+  if (dup.rows.length > 0) return false;
   await writeAudit(q, { action: "blacklist.auto_suppressed", actor: "system:auto", sensor_id: null, at: now, detail });
+  return true;
+}
+
+const suppressedOf = (r: AutoListResult, ip: string, case_id: string): Suppressed | null => {
+  if (r.status === "allowlisted") return { reason: "allowlist", ip, case_id };
+  if (r.status === "breaker") return { reason: "breaker", ip, case_id };
+  if (r.status === "cooldown") return { reason: "cooldown", ip, case_id, revoked_at: new Date(r.revoked_at).toISOString() };
+  return null;
 }
 
 /**
@@ -35,20 +54,18 @@ export async function writeSuppressed(q: Queryable, detail: Suppressed, now: num
  * gates 開（冷卻／熔斷）。listed → case 改 auto_listed（resolved_by system:auto）；
  * allowlisted／cooldown／breaker → auto_suppressed{allowlist | cooldown(+revoked_at) | breaker}，case 維持 open；
  * below_auto_threshold／already_listed → 留在待審、不寫稽核。confidence 用 case 的 max_confidence（Q3）。
+ * 回 true＝這次的 auto_suppressed 因 1 小時去重沒寫（tick 計數用）。
  */
-export async function autoListCase(q: Queryable, ip: string, now: number, opts: AutoListOpts): Promise<void> {
+export async function autoListCase(q: Queryable, ip: string, now: number, opts: AutoListOpts): Promise<boolean> {
   const c = (await q.query<{ case_id: string; max_confidence: number }>(
     "SELECT case_id, max_confidence FROM blacklist_cases WHERE ip = $1 AND state = 'open' AND expires_at > $2", [ip, now])).rows[0];
-  if (!c) return;
+  if (!c) return false;
   const r = await autoListInTx(q, { ip, confidence: c.max_confidence, case_id: c.case_id }, now, opts);
   if (r.status === "listed") {
     await q.query("UPDATE blacklist_cases SET state = 'auto_listed', resolved_by = 'system:auto', resolved_at = $2 WHERE case_id = $1",
       [c.case_id, now]);
-  } else if (r.status === "allowlisted") {
-    await writeSuppressed(q, { reason: "allowlist", ip, case_id: c.case_id }, now);
-  } else if (r.status === "breaker") {
-    await writeSuppressed(q, { reason: "breaker", ip, case_id: c.case_id }, now);
-  } else if (r.status === "cooldown") {
-    await writeSuppressed(q, { reason: "cooldown", ip, case_id: c.case_id, revoked_at: new Date(r.revoked_at).toISOString() }, now);
+    return false;
   }
+  const s = suppressedOf(r, ip, c.case_id);
+  return s !== null && !(await writeSuppressed(q, s, now));
 }

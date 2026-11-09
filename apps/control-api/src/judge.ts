@@ -51,7 +51,7 @@ export type TickHooks = { beforeAutoList?: () => Promise<void> };
 export type TickOpts = TickHooks & { autoBreakerPerHour?: number };
 /** 一個 tick 內共用：門檻、白名單（每個 tick 只讀一次；只決定要不要開案）、時間、log、掛勾、本 tick 計數（去重的 hit_while_listed、failed 的 SQLSTATE）。 */
 type TickCtx = { th: FlowThresholds; isAllowlisted: (ip: string) => boolean; now: number; log?: WarnLog; hooks: TickHooks; breakerPerHour: number;
-  stats: { suppressed: number; codes: Map<string, number>; nullTs: number } };
+  stats: { suppressed: number; deduped: number; codes: Map<string, number>; nullTs: number } };
 
 /** upto：這批實際看到的最大 received_at（沒有新列 → null，cursor 不動）。不用 control-api 的 now，ingest 時鐘較慢時才不會漏列。 */
 async function scanGroups(q: Queryable, cursor: number, now: number): Promise<{ keys: GroupKey[]; upto: number | null; nullTs: number }> {
@@ -126,7 +126,7 @@ async function routeHit(q: Queryable, k: GroupKey, ctx: TickCtx, h: StoredHit): 
   const ip = hostCidr(k.src_ip)!;
   const e3a = async () => h.newHigh && e3aHolds(await countHighSeverity(q, ip, th.auto, now));
   if (isAllowlisted(k.src_ip)) {
-    if (await e3a()) await writeSuppressed(q, { reason: "allowlist", ip, case_id: null }, now);
+    if ((await e3a()) && !(await writeSuppressed(q, { reason: "allowlist", ip, case_id: null }, now))) ctx.stats.deduped += 1;
     return;
   }
   if (await onActiveBlocklist(q, k, h.confidence, h.created, ctx)) return;
@@ -134,7 +134,7 @@ async function routeHit(q: Queryable, k: GroupKey, ctx: TickCtx, h: StoredHit): 
   else await raiseCaseMax(q, k.src_ip, h.confidence, now);
   if (await e3a()) {
     await hooks.beforeAutoList?.();
-    await autoListCase(q, ip, now, { log, gates: { breakerPerHour } });
+    if (await autoListCase(q, ip, now, { log, gates: { breakerPerHour } })) ctx.stats.deduped += 1;
   }
 }
 
@@ -195,13 +195,18 @@ async function judgeGroupIsolated(q: Queryable, k: GroupKey, ctx: TickCtx): Prom
 
 /**
  * 每個 tick 各一行，只記數量／SQLSTATE、不記 IP／ts／錯誤訊息：ts_ms NULL 不分組的列（ts slice，Q6 只記 {null_ts}）、
- * 跳過的非主機位址組（B1）、失敗回滾的組（B2／B3）、被去重的 hit_while_listed（R5）。
+ * 跳過的非主機位址組（B1）、失敗回滾的組（B2／B3）、被去重的 hit_while_listed（R5）與 auto_suppressed（A 覆核）。
  */
 function logTickCounts(log: WarnLog | undefined, n: { skipped: number; failed: number }, stats: TickCtx["stats"]): void {
-  if (stats.nullTs > 0) log?.warn({ null_ts: stats.nullTs }, "judge tick skipped rows without ts_ms");
-  if (n.skipped > 0) log?.warn({ skipped: n.skipped }, "judge tick skipped non-host src_ip groups");
-  if (n.failed > 0) log?.warn({ failed: n.failed, codes: Object.fromEntries(stats.codes) }, "judge tick rolled back failed groups");
-  if (stats.suppressed > 0) log?.warn({ suppressed: stats.suppressed }, "judge tick suppressed hit_while_listed audits (1 per entry per hour)");
+  if (!log) return;
+  const lines: [number, object, string][] = [
+    [stats.nullTs, { null_ts: stats.nullTs }, "judge tick skipped rows without ts_ms"],
+    [n.skipped, { skipped: n.skipped }, "judge tick skipped non-host src_ip groups"],
+    [n.failed, { failed: n.failed, codes: Object.fromEntries(stats.codes) }, "judge tick rolled back failed groups"],
+    [stats.suppressed, { suppressed: stats.suppressed }, "judge tick suppressed hit_while_listed audits (1 per entry per hour)"],
+    [stats.deduped, { deduped: stats.deduped }, "judge tick deduped auto_suppressed audits (1 per ip+reason per hour)"],
+  ];
+  for (const [count, obj, msg] of lines) if (count > 0) log.warn(obj, msg);
 }
 
 export async function runJudgeTick(db: Db, now: number, log?: WarnLog, opts: TickOpts = {}): Promise<TickResult> {
@@ -215,7 +220,7 @@ export async function runJudgeTick(db: Db, now: number, log?: WarnLog, opts: Tic
     await recoverBreakerIfOpen(q, breakerPerHour, now, log);
     const cur = (await q.query<{ received_upto: string }>("SELECT received_upto FROM judge_cursor WHERE id")).rows[0];
     const { keys, upto, nullTs } = await scanGroups(q, Number(cur?.received_upto ?? 0), now);
-    const ctx: TickCtx = { th, isAllowlisted: await loadAllowlist(q, now), now, log, hooks: opts, breakerPerHour, stats: { suppressed: 0, codes: new Map(), nullTs } };
+    const ctx: TickCtx = { th, isAllowlisted: await loadAllowlist(q, now), now, log, hooks: opts, breakerPerHour, stats: { suppressed: 0, deduped: 0, codes: new Map(), nullTs } };
     const n = { hit: 0, miss: 0, skipped: 0, failed: 0 };
     for (const k of keys) n[await judgeGroupIsolated(q, k, ctx)] += 1;
     logTickCounts(log, n, ctx.stats);

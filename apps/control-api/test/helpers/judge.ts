@@ -23,3 +23,12 @@ export const flowEvent = (src_ip: string, ts: number, dst_port: number, susp: bo
   src_port: 50000, dst_port, protocol: "tcp", bytes_in: 10, bytes_out: susp ? 0 : 500,
   packets: susp ? 1 : 20, duration_ms: susp ? 10 : 2000,
 });
+
+/** partial index 測試共用：再 init 一次（IF NOT EXISTS 冪等），回 audit_events 上該 index 的定義（沒有 → undefined）。 */
+export async function auditIndexDefAfterReinit(app: ControlApi, name: string): Promise<string | undefined> {
+  const again = await buildApp({ databaseUrl: requireDatabaseUrl(), logger: false, judgeIntervalMs: 0 });
+  await again.close();
+  const r = await app.db.query<{ indexdef: string }>(
+    "SELECT indexdef FROM pg_indexes WHERE tablename = 'audit_events' AND indexname = $1", [name]);
+  return r.rows[0]?.indexdef;
+}

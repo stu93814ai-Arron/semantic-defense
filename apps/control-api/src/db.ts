@@ -123,6 +123,9 @@ const SCHEMA_STATEMENTS = [
   // 資安退回 R5：hit_while_listed 每個 entry_id 每小時最多一筆，寫前查過去 1 小時（judge.ts auditedWithinHour）用的 partial index。
   `CREATE INDEX IF NOT EXISTS audit_hit_while_listed_entry ON audit_events (action, (detail->>'entry_id'), at)
    WHERE action = 'blacklist.hit_while_listed'`,
+  // A 覆核：auto_suppressed 每個 (ip, reason) 每小時最多一筆，寫前查過去 1 小時（auto-trigger.ts writeSuppressed）用的 partial index。
+  `CREATE INDEX IF NOT EXISTS audit_auto_suppressed_ip_reason ON audit_events (action, (detail->>'ip'), (detail->>'reason'), at)
+   WHERE action = 'blacklist.auto_suppressed'`,
 ];
 
 /** 固定鍵：跨連線序列化 schema 遷移。 */

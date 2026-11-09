@@ -1,9 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import { insertFlowEvents, insertLegacyFlowEvents } from "@semantic-defense/flow-store/testing";
-import { buildApp, type ControlApi } from "./helpers/app.js";
-import { requireDatabaseUrl } from "./helpers/pg.js";
-import { DAY, MIN, T0, bootJudgeApp, flowEvent as flow } from "./helpers/judge.js";
+import type { ControlApi } from "./helpers/app.js";
+import { DAY, MIN, T0, auditIndexDefAfterReinit, bootJudgeApp, flowEvent as flow } from "./helpers/judge.js";
 import { JUDGE_LOCK, runJudgeTick } from "../src/judge.js";
 import { writeAutoBlocklistEntry } from "../src/auto-blacklist.js";
 
@@ -329,12 +328,7 @@ describe("case_hits 7 天清除依 first_seen_at（資安退回 R3）", () => {
 describe("hit_while_listed 去重查詢的 partial index（資安退回 R5）", () => {
   it("audit_hit_while_listed_entry 已建立（action、detail->>'entry_id'、at；WHERE action）；重複初始化不報錯", async () => {
     await boot();
-    const again = await buildApp({ databaseUrl: requireDatabaseUrl(), logger: false, judgeIntervalMs: 0 });
-    await again.close();
-    const r = await app.db.query<{ indexdef: string }>(
-      "SELECT indexdef FROM pg_indexes WHERE tablename = 'audit_events' AND indexname = 'audit_hit_while_listed_entry'");
-    expect(r.rows).toHaveLength(1);
-    expect(r.rows[0]!.indexdef).toMatch(/\(action, \(\(detail ->> 'entry_id'::text\)\), at\) WHERE \(action = 'blacklist\.hit_while_listed'::text\)/);
+    expect(await auditIndexDefAfterReinit(app, "audit_hit_while_listed_entry")).toMatch(/\(action, \(\(detail ->> 'entry_id'::text\)\), at\) WHERE \(action = 'blacklist\.hit_while_listed'::text\)/);
   });
 });
 

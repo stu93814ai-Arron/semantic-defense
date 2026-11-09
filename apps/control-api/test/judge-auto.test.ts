@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import { insertFlowEvents } from "@semantic-defense/flow-store/testing";
 import { buildApp, type ControlApi } from "./helpers/app.js";
-import { DAY, MIN, T0, bootJudgeApp, flowEvent } from "./helpers/judge.js";
+import { DAY, MIN, T0, auditIndexDefAfterReinit, bootJudgeApp, flowEvent } from "./helpers/judge.js";
 import { runJudgeTick, type TickOpts } from "../src/judge.js";
 import { autoListInTx, writeAutoBlocklistEntry } from "../src/auto-blacklist.js";
 import { requireDatabaseUrl } from "./helpers/pg.js";
@@ -369,5 +369,44 @@ describe("白名單 SHARE 鎖與鎖順序（A 覆核）", () => {
     await running;
     expect([pid !== null, heldAuto]).toEqual([true, false]);
     expect((await listed()).map((e) => e.ip)).toContain(CIDR);
+  });
+});
+
+describe("auto_suppressed 去重：同一 (ip, reason) 每小時最多一筆，多出來的每個 tick 一行 log 記數量（A 覆核）", () => {
+  let lines: string[] = [];
+  const log = { warn: (obj: object, msg: string) => { lines.push(JSON.stringify({ ...obj, msg })); } };
+  const suppressed = async () => (await audits("blacklist.auto_suppressed")).map((a) => a.detail.reason);
+  const more = (at: number) => hit({ at, app: "app-2", port0: 7000 });
+
+  it("白名單無案：1 小時內第二次 E3.A 成立不再寫、log {deduped:1} 不帶 IP；滿 1 小時後再寫", async () => {
+    await boot();
+    lines = [];
+    await app.db.query("INSERT INTO allowlist_entries VALUES ($1, '203.0.113.0/24', 'office', 'admin1', $2, NULL)", [randomUUID(), T0 - DAY]);
+    await three(["app-1", "app-2", "app-1"]);
+    await runJudgeTick(app.db, T0, log);
+    await more(T0);
+    await runJudgeTick(app.db, T0 + 6 * MIN, log);
+    expect(await suppressed()).toEqual(["allowlist"]);
+    expect(lines.map((l) => JSON.parse(l) as object)).toEqual([
+      { deduped: 1, msg: "judge tick deduped auto_suppressed audits (1 per ip+reason per hour)" }]);
+    expect(lines.join("\n")).not.toContain("203.0.113");
+    for (const off of [40, 50, 60]) await hit({ at: T0 + off * MIN, app: off === 50 ? "app-2" : "app-1" });
+    await runJudgeTick(app.db, T0 + 66 * MIN, log);
+    expect(await suppressed()).toEqual(["allowlist", "allowlist"]);
+  });
+
+  it("有案（熔斷）：1 小時內第二次被熔斷擋下不再寫 auto_suppressed{breaker}", async () => {
+    await boot();
+    await autos(50);
+    await three(["app-1", "app-2", "app-1"]);
+    await tick();
+    await more(T0);
+    await tick(T0 + 6 * MIN);
+    expect(await suppressed()).toEqual(["breaker"]);
+  });
+
+  it("partial index audit_auto_suppressed_ip_reason 已建立；重複初始化不報錯", async () => {
+    await boot();
+    expect(await auditIndexDefAfterReinit(app, "audit_auto_suppressed_ip_reason")).toMatch(/\(action, \(\(detail ->> 'ip'::text\)\), \(\(detail ->> 'reason'::text\)\), at\) WHERE \(action = 'blacklist\.auto_suppressed'::text\)/);
   });
 });
