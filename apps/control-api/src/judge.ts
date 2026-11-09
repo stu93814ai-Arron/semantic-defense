@@ -10,7 +10,8 @@ import { writeAudit } from "./audit.js";
  * 成案流程 commit 7：判定 tick（計畫 §1／§2）。讀 flow_events → 依 (sensor, app, src_ip, 5 分鐘窗) 分組重算 → 命中 → 待審。
  * - 整個 tick 在同一個 Db.tx；pg_try_advisory_xact_lock(JUDGE_LOCK) 拿不到 → 別的實例在跑，直接 no-op。
  * - flow_events 不存在（sensor-ingest 尚未建表）→ no-op；管理面不建表。
- * - 掃描：新列 received_at ∈ (cursor, now]，每批上限 JUDGE_BATCH（滿批時 cursor 只推到該批最後一列）；
+ * - 掃描：新列 received_at ∈ (cursor, now]，每批上限 JUDGE_BATCH；cursor 只推到這批實際看到的最大 received_at
+ *   （received_at 是 sensor-ingest 的時鐘，不能跳到 control-api 的 now）；沒有新列就不動。
  *   另掃 (cursor − 60s, cursor] 的重疊，涵蓋接收時間較早但較晚 commit 的列。
  * - 每組從 flow_events 重讀整組再算：confidence 用全部 flow；ontime_confidence 只用準時 flow（全部遲到 → NULL）。
  *   遲到＝received_at − ts > 5 分鐘。confidence ≥ case 才存命中（case_hits 絕對值 upsert，重掃冪等）；
@@ -31,7 +32,8 @@ const NOOP: TickResult = { ran: false, groups: 0, hits: 0 };
 type GroupKey = { sensor_id: string; app_id: string; src_ip: string; win: number };
 type ScanRow = Pick<FlowEventRow, "sensor_id" | "app_id" | "src_ip" | "ts" | "received_at">;
 
-async function scanGroups(q: Queryable, cursor: number, now: number): Promise<{ keys: GroupKey[]; upto: number }> {
+/** upto：這批實際看到的最大 received_at（沒有新列 → null，cursor 不動）。不用 control-api 的 now，ingest 時鐘較慢時才不會漏列。 */
+async function scanGroups(q: Queryable, cursor: number, now: number): Promise<{ keys: GroupKey[]; upto: number | null }> {
   const fresh = (await q.query<ScanRow>(
     `SELECT sensor_id, app_id, src_ip, ts, received_at FROM flow_events
      WHERE received_at > $1 AND received_at <= $2 ORDER BY received_at LIMIT ${JUDGE_BATCH}`, [cursor, now])).rows;
@@ -43,7 +45,8 @@ async function scanGroups(q: Queryable, cursor: number, now: number): Promise<{ 
     const win = Math.floor(Date.parse(r.ts) / FLOW_WINDOW_MS) * FLOW_WINDOW_MS;
     keys.set(JSON.stringify([r.sensor_id, r.app_id, r.src_ip, win]), { sensor_id: r.sensor_id, app_id: r.app_id, src_ip: r.src_ip, win });
   }
-  return { keys: [...keys.values()], upto: fresh.length === JUDGE_BATCH ? Number(fresh.at(-1)!.received_at) : now };
+  const last = fresh.at(-1);
+  return { keys: [...keys.values()], upto: last ? Number(last.received_at) : null };
 }
 
 const toFlow = (r: FlowEventRow): FlowMetadataEvent => ({
@@ -101,9 +104,11 @@ export async function runJudgeTick(db: Db, now: number, log?: WarnLog): Promise<
     for (const k of keys) if (await judgeGroup(q, k, th, now)) hits += 1;
     await q.query("DELETE FROM case_hits WHERE updated_at <= $1", [now - RETENTION_MS]);
     await q.query("DELETE FROM blacklist_cases WHERE state <> 'open' AND resolved_at <= $1", [now - RETENTION_MS]);
-    await q.query(
-      `INSERT INTO judge_cursor (id, received_upto) VALUES (TRUE, $1)
-       ON CONFLICT (id) DO UPDATE SET received_upto = GREATEST(judge_cursor.received_upto, EXCLUDED.received_upto)`, [upto]);
+    if (upto !== null) {
+      await q.query(
+        `INSERT INTO judge_cursor (id, received_upto) VALUES (TRUE, $1)
+         ON CONFLICT (id) DO UPDATE SET received_upto = GREATEST(judge_cursor.received_upto, EXCLUDED.received_upto)`, [upto]);
+    }
     return { ran: true, groups: keys.length, hits };
   });
 }

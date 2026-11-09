@@ -41,7 +41,7 @@ const hits = async () => (await app.db.query<{ src_ip: string; sensor_id: string
 const cursor = async () => (await app.db.query<{ received_upto: string }>("SELECT received_upto FROM judge_cursor")).rows;
 
 describe("判定 tick", () => {
-  it("可疑 IP 成案、正常流量不成案；依 sensor 分開成命中；cursor 前進到 now", async () => {
+  it("可疑 IP 成案、正常流量不成案；依 sensor 分開成命中；cursor 前進到看到的最大 received_at", async () => {
     await boot();
     await scan("203.0.113.5", T0 - 2 * MIN, T0 - 2 * MIN);
     await scan("203.0.113.5", T0 - 2 * MIN, T0 - MIN, 30, "s-2");
@@ -50,7 +50,7 @@ describe("判定 tick", () => {
     expect(await cases()).toEqual([{ ip: "203.0.113.5/32", hit_count: 2, has_late: false, max_confidence: 1 }]);
     expect((await hits()).map((h) => [h.src_ip, h.sensor_id, Number(h.window_start), h.ontime_confidence])).toEqual([
       ["203.0.113.5/32", "s-1", T0 - 5 * MIN, 1], ["203.0.113.5/32", "s-2", T0 - 5 * MIN, 1]]);
-    expect(await cursor()).toEqual([{ received_upto: String(T0) }]);
+    expect(await cursor()).toEqual([{ received_upto: String(T0 - MIN) }]);
   });
 
   it("同一批資料重跑 tick（含 60 秒重疊）→ hit_count、命中數不變（冪等）", async () => {
@@ -117,6 +117,22 @@ describe("判定 tick", () => {
   });
 });
 
+describe("judge_cursor 依資料時間前進（A 組領航員修正 1）", () => {
+  it("cursor 只依資料時間前進：沒有新列不動；ingest 時鐘慢 5 分鐘、較晚 commit 的列仍掃得到", async () => {
+    await boot();
+    await runJudgeTick(app.db, T0);
+    expect(await cursor()).toEqual([]);
+    await normal("198.51.100.9", T0 - 6 * MIN);
+    await runJudgeTick(app.db, T0);
+    expect(await cursor()).toEqual([{ received_upto: String(T0 - 6 * MIN) }]);
+    // ingest 時鐘慢 5 分鐘：control-api 的 T0+10s 時，ingest 蓋的 received_at 只有 T0-5m+10s
+    await scan("203.0.113.10", T0 - 6 * MIN, T0 - 5 * MIN + 10_000);
+    await runJudgeTick(app.db, T0 + 10_000);
+    expect((await cases()).map((c) => c.ip)).toEqual(["203.0.113.10/32"]);
+    expect(await cursor()).toEqual([{ received_upto: String(T0 - 5 * MIN + 10_000) }]);
+  });
+});
+
 describe("門檻 fail-closed 在判定路徑寫 log.warn（資安 R3 補缺）", () => {
   async function legacyThresholds(): Promise<void> {
     await app.db.exec("DROP TABLE thresholds");
@@ -149,7 +165,7 @@ describe("buildApp 排程", () => {
     await boot({ judgeIntervalMs: 20 });
     await scan("203.0.113.5", T0 - 2 * MIN, T0 - 30_000);
     await expect.poll(async () => (await cases()).map((c) => c.ip), { timeout: 5_000 }).toEqual(["203.0.113.5/32"]);
-    expect(await cursor()).toEqual([{ received_upto: String(T0) }]);
+    expect(await cursor()).toEqual([{ received_upto: String(T0 - 30_000) }]);
   });
 });
 
