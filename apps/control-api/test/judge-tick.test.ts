@@ -361,7 +361,36 @@ describe("每組一個 SAVEPOINT：Postgres 不收的 ts 不再讓整個 tick ro
     await expect(runJudgeTick(app.db, T0, log)).resolves.toMatchObject({ ran: true, hits: 1 });
     expect((await cases()).map((c) => c.ip)).toEqual(["203.0.113.11/32"]);
     expect(await cursor()).toEqual([{ received_upto: String(T0 - 30_000) }]);
-    expect(lines.map((l) => JSON.parse(l) as object)).toEqual([{ failed: 3, msg: "judge tick rolled back failed groups" }]);
+    expect(lines.map((l) => JSON.parse(l) as object)).toEqual([
+      { failed: 3, codes: { "22008": 1, "22009": 2 }, msg: "judge tick rolled back failed groups" }]);
     for (const s of [...BAD_TS, "198.51.100", "0000-01-01"]) expect(lines.join("\n")).not.toContain(s);
+  });
+});
+
+describe("只吞 SQLSTATE 22（data exception）；其他錯誤讓整個 tick rollback、cursor 不動（資安退回 B3）", () => {
+  const IP = "203.0.113.12";
+  /** 測試專用 trigger：寫這個 IP 的 case_hits 時丟指定 SQLSTATE（模擬 deadlock／lock_not_available）。 */
+  const trap = (code: string) => app.db.exec(`
+    CREATE OR REPLACE FUNCTION test_trap() RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN RAISE EXCEPTION 'trap' USING ERRCODE = '${code}'; END $$;
+    CREATE TRIGGER test_trap BEFORE INSERT ON case_hits FOR EACH ROW WHEN (NEW.src_ip = '${IP}/32') EXECUTE FUNCTION test_trap();`);
+  const untrap = () => app.db.exec("DROP TRIGGER test_trap ON case_hits; DROP FUNCTION test_trap()");
+
+  it.each(["40P01", "55P03"])("trigger 丟 %s → tick reject、cursor 不變、不寫 failed log；移除後下一個 tick 成案", async (code) => {
+    await boot();
+    await runJudgeTick(app.db, T0);
+    await normal("198.51.100.9", T0 - 3 * MIN);
+    await runJudgeTick(app.db, T0);
+    const before = await cursor();
+    await scan(IP, T0 - 2 * MIN, T0 - 30_000);
+    await trap(code);
+    const err = await runJudgeTick(app.db, T0 + 1000, log).catch((e: unknown) => e);
+    expect(await cursor()).toEqual(before);
+    expect(err).toMatchObject({ code });
+    expect(lines).toEqual([]);
+    await untrap();
+    await runJudgeTick(app.db, T0 + 2000, log);
+    expect((await cases()).map((c) => c.ip)).toEqual([`${IP}/32`]);
+    expect(await cursor()).toEqual([{ received_upto: String(T0 - 30_000) }]);
   });
 });
