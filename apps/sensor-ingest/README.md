@@ -11,7 +11,7 @@
 
 ## 路由
 - `GET /v1/health`：認證後探針，回 `{ ok, sensor_id }`。
-- `POST /v1/flows`：body＝單一 FlowMetadataEvent（contracts strict）。自報 `sensor_id`／多欄／缺欄 → **400**；`app_id` 不在 token 的 `allowed_app_ids` → **403**（只記 `flow_rejections(sensor_id, at)`，不記 payload、不入庫）；同 sensor 重複 `flow_id` → **409**（PK `(sensor_id, flow_id)`）；成功 → **201**。
+- `POST /v1/flows`：body＝單一 FlowMetadataEvent（contracts strict）。自報 `sensor_id`／多欄／缺欄 → **400**；`ts` 超前收到時間 >5 分鐘 → **400** `{error:"ts 超前接收時間"}`（剛好 5 分鐘仍收；先於 app_id 綁定檢查，不寫 `flow_rejections`；遲到照存）；`app_id` 不在 token 的 `allowed_app_ids` → **403**（只記 `flow_rejections(sensor_id, at)`，不記 payload、不入庫）；同 sensor 重複 `flow_id` → **409**（PK `(sensor_id, flow_id)`）；成功 → **201**。
   寫入表 `flow_events`：契約欄位＋`sensor_id`（取自 token）＋`received_at`（注入時鐘 now）。token 撤銷不刪舊列。
 
 ## 保留期

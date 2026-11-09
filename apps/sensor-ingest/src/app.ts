@@ -15,7 +15,7 @@ import { ensureFlowSchema, insertFlow, purgeExpired, recordRejection } from "@se
  * - 未授權 IP 速率限制：先驗 Bearer；有效 token 不查也不計限流。缺／錯 token 才依來源 IP 查限流並計失敗，約 30／60s → 429（不讀 XFF；403／成功不計；注入時鐘）。
  * - 無 session、無管理／登入路由；未宣告路徑一律 404（認證掛在路由 onRequest：先於 body 解析，未認證請求不解析 body；不影響 404）。
  * - ③c：POST /v1/flows body＝單一 FlowMetadataEvent（contracts strict 驗證），sensor_id 取自 token → 201；
- *   自報 sensor_id／非法 → 400；app_id 不在 token 的 allowed_app_ids → 403（只記 sensor_id＋時間）；同 sensor 重複 flow_id → 409。寫入前清除 ≥7 天列（見 packages/flow-store）。
+ *   自報 sensor_id／非法／ts 超前 >5 分鐘 → 400；app_id 不在 token 的 allowed_app_ids → 403（只記 sensor_id＋時間）；同 sensor 重複 flow_id → 409。寫入前清除 ≥7 天列（見 packages/flow-store）。
  */
 export type BuildIngestOptions = {
   db: SensorDb;
@@ -32,6 +32,9 @@ export type BuildIngestOptions = {
 declare module "fastify" {
   interface FastifyRequest { sensorId?: string; allowedAppIds?: string[] }
 }
+
+/** ts 超前收到時間（伺服器 now）的容忍上限：剛好 5 分鐘仍收，超過 → 400。 */
+export const MAX_FUTURE_SKEW_MS = 5 * 60 * 1000;
 
 /** DoS 面：body 上限 256KB，超過 → 413。 */
 export const BODY_LIMIT = 256 * 1024;
@@ -92,6 +95,10 @@ export async function buildIngest(opts: BuildIngestOptions): Promise<FastifyInst
     const parsed = parseFlowMetadataEvent(req.body);
     if (!parsed.ok) return reply.code(400).send({ error: "請求格式錯誤", issues: parsed.errors });
     const now = clock();
+    // 超前 >5 分鐘拒收（格式驗證之後、app_id 綁定 403 之前；不寫 flow_rejections）。遲到照存，由判定端推導。
+    if (Date.parse(parsed.value.ts) - now > MAX_FUTURE_SKEW_MS) {
+      return reply.code(400).send({ error: "ts 超前接收時間" });
+    }
     if (!req.allowedAppIds!.includes(parsed.value.app_id)) {
       await recordRejection(opts.db, req.sensorId!, now);
       return reply.code(403).send({ error: "app_id 未綁定此感測器" });
