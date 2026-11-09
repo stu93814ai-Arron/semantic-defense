@@ -7,7 +7,7 @@ import { runJudgeTick, type TickOpts } from "../src/judge.js";
 import { autoListInTx } from "../src/auto-blacklist.js";
 import { writeAutoBlocklistEntry } from "./helpers/auto-list.js";
 import { requireDatabaseUrl } from "./helpers/pg.js";
-import { holdAllowlistInsert, holdsAdvisory, waitShareWaiter } from "./helpers/locks.js";
+import { LOCK_TEST_TIMEOUT_MS, LOCK_TIMEOUT_MS, holdAllowlistInsert, holdsAdvisory, lockGuardedUrl, waitShareWaiter } from "./helpers/locks.js";
 import { AUTO_LOCK } from "../src/auto-breaker.js";
 
 /**
@@ -223,6 +223,8 @@ const autos = (n: number, at = T0 - 30 * MIN) => app.db.query(
    FROM generate_series(1, $1::int) AS i`, [n, at]);
 const attempt = (ip: string, at = T0) => app.db.tx((q) =>
   autoListInTx(q, { ip, confidence: 1, case_id: randomUUID() }, at, { gates: { breakerPerHour: 50 } }));
+/** 鎖等待測試：app 的每條連線帶 lock_timeout 護欄。 */
+const guarded = () => ({ databaseUrl: lockGuardedUrl() });
 const opened = async () => (await app.db.query<{ opened_at: string | null }>("SELECT opened_at FROM auto_breaker")).rows;
 
 describe("E3.A 熔斷（1 小時內 source=auto ≥ N 筆 → 退回人工審核）", () => {
@@ -276,7 +278,7 @@ describe("E3.A 熔斷（1 小時內 source=auto ≥ N 筆 → 退回人工審核
 
 describe("E3.A 熔斷：AUTO_LOCK 序列化與 auto_breaker 單列", () => {
   it("已有 49 筆、兩個並行嘗試 → AUTO_LOCK 序列化，只有一筆上榜", async () => {
-    await boot();
+    await boot(undefined, guarded());
     await autos(49);
     let firstDone!: () => void;
     const gate = new Promise<void>((r) => { firstDone = r; });
@@ -291,7 +293,7 @@ describe("E3.A 熔斷：AUTO_LOCK 序列化與 auto_breaker 單列", () => {
     await gate;
     const b = attempt("64.0.113.61");
     expect([(await a).status, (await b).status]).toEqual(["listed", "breaker"]);
-  });
+  }, LOCK_TEST_TIMEOUT_MS);
 
   it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])("autoBreakerPerHour=%s（非正整數）→ buildApp 啟動即拋錯", async (n) => {
     await expect(buildApp({ databaseUrl: requireDatabaseUrl(), logger: false, judgeIntervalMs: 0, autoBreakerPerHour: n }))
@@ -343,7 +345,7 @@ describe("自動上榜路徑只吞 data exception：其他錯誤讓整個 tick r
 
 describe("白名單 SHARE 鎖與鎖順序（A 覆核）", () => {
   it("SHARE 鎖：上榜前另一連線有未 commit 的白名單新增 → tick 等它 commit、重查 → auto_suppressed{allowlist}、不上榜", async () => {
-    await boot();
+    await boot(undefined, guarded());
     await three(["app-1", "app-2", "app-1"]);
     let waiter: number | null = null;
     let bg: Promise<void> = Promise.resolve();
@@ -355,10 +357,10 @@ describe("白名單 SHARE 鎖與鎖順序（A 覆核）", () => {
     expect(waiter).not.toBeNull();
     expect(await listed()).toEqual([]);
     expect((await audits("blacklist.auto_suppressed")).map((a) => a.detail.reason)).toEqual(["allowlist"]);
-  });
+  }, LOCK_TEST_TIMEOUT_MS);
 
   it("鎖順序 SHARE → AUTO_LOCK：熔斷開著時 tick 的恢復判定也先等 SHARE，等的當下不持有 AUTO_LOCK", async () => {
-    await boot();
+    await boot(undefined, guarded());
     await autos(50, T0 - 90 * MIN);
     await app.db.query("UPDATE auto_breaker SET opened_at = $1 WHERE id", [T0 - 70 * MIN]);
     await three(["app-1", "app-2", "app-1"]);
@@ -370,7 +372,7 @@ describe("白名單 SHARE 鎖與鎖順序（A 覆核）", () => {
     await running;
     expect([pid !== null, heldAuto]).toEqual([true, false]);
     expect((await listed()).map((e) => e.ip)).toContain(CIDR);
-  });
+  }, LOCK_TEST_TIMEOUT_MS);
 });
 
 describe("R19：被熔斷擋下的高嚴重命中，熔斷恢復後重掃不得補上榜；新的高嚴重命中才上榜（isNewHigh）", () => {
@@ -470,5 +472,15 @@ describe("B5：非公網位址不自動上榜（auto_suppressed{non_public}，�
     expect(c).toMatchObject({ ip: "10.0.0.53/32", state: "open" });
     expect((await audits("blacklist.auto_suppressed")).map((a) => a.detail)).toEqual([
       { reason: "non_public", ip: "10.0.0.53/32", case_id: c!.case_id }]);
+  });
+});
+
+describe("鎖等待測試護欄（資安 low）：等鎖的連線設 lock_timeout，測試另設 vitest timeout", () => {
+  it("lockGuardedUrl 連上的 app：lock_timeout = LOCK_TIMEOUT_MS；測試 timeout 大於兩倍 lock_timeout", async () => {
+    await boot(undefined, guarded());
+    const show = async (q: { query: <T>(s: string) => Promise<{ rows: T[] }> }) =>
+      (await q.query<{ lock_timeout: string }>("SHOW lock_timeout")).rows[0]!.lock_timeout;
+    expect(await show(app.db)).toBe(`${LOCK_TIMEOUT_MS / 1000}s`);
+    expect(LOCK_TEST_TIMEOUT_MS).toBeGreaterThan(LOCK_TIMEOUT_MS * 2);
   });
 });
