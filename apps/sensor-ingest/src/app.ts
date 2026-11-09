@@ -1,7 +1,10 @@
-import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
+import Fastify, {
+  type FastifyInstance, type FastifyReply, type FastifyRequest, type FastifyServerOptions,
+} from "fastify";
 import { parseFlowMetadataEvent } from "@semantic-defense/contracts";
 import { findSensorByToken, ipAllowed, type SensorDb } from "@semantic-defense/sensor-auth";
 import { createAuthFailLimiter } from "./rate-limit.js";
+import { installErrorHandler } from "./errors.js";
 import { ensureFlowSchema, insertFlow, purgeExpired, recordRejection } from "./store.js";
 
 /**
@@ -22,6 +25,8 @@ export type BuildIngestOptions = {
   now?: () => number;
   /** 未授權失敗計數 Map 上限（預設 AUTH_FAIL_MAX_KEYS；測試可注入小值）。 */
   authFailMaxKeys?: number;
+  /** Fastify logger 設定（可注入 stream）；省略＝Fastify 預設 logger（true）。預設 req 序列化不含 headers／body。 */
+  logger?: FastifyServerOptions["logger"];
 };
 
 declare module "fastify" {
@@ -66,9 +71,11 @@ const hasSelfReportedSensorId = (body: unknown): boolean =>
   body !== null && typeof body === "object" && Object.prototype.hasOwnProperty.call(body, "sensor_id");
 
 export async function buildIngest(opts: BuildIngestOptions): Promise<FastifyInstance> {
+  const logger = opts.logger ?? true;
   const app = (opts.https
-    ? Fastify({ https: opts.https, trustProxy: false, bodyLimit: BODY_LIMIT })
-    : Fastify({ trustProxy: false, bodyLimit: BODY_LIMIT })) as unknown as FastifyInstance;
+    ? Fastify({ https: opts.https, trustProxy: false, bodyLimit: BODY_LIMIT, logger })
+    : Fastify({ trustProxy: false, bodyLimit: BODY_LIMIT, logger })) as unknown as FastifyInstance;
+  installErrorHandler(app);
   const clock = opts.now ?? Date.now;
   await ensureFlowSchema(opts.db);
   const limiter = createAuthFailLimiter({ maxKeys: opts.authFailMaxKeys });
