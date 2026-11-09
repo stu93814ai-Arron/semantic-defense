@@ -77,6 +77,25 @@ describe("ts_ms 遷移（舊表補欄＋回填）", () => {
   });
 });
 
+describe("舊索引 flow_events_group (…, ts) 移除（Q3：grep 確認沒有查詢依 ts 文字過濾／排序）", () => {
+  const indexes = async () => (await db.query<{ indexname: string }>(
+    "SELECT indexname FROM pg_indexes WHERE schemaname = current_schema() AND tablename = 'flow_events' ORDER BY indexname")).rows
+    .map((r) => r.indexname);
+  const FINAL = ["flow_events_group_ms", "flow_events_pkey", "flow_events_received_at"];
+
+  it("新表沒有舊索引；舊表（帶舊索引）啟動後被移除；重跑冪等", async () => {
+    await ensureFlowSchema(db);
+    expect(await indexes()).toEqual(FINAL);
+    await toLegacy();
+    // 測試不寫 DDL（boundary.test）：把現有索引改名成舊名，模擬舊版留下的 flow_events_group（DROP 依名稱）
+    await h.exec("ALTER INDEX flow_events_received_at RENAME TO flow_events_group");
+    expect(await indexes()).toContain("flow_events_group");
+    await ensureFlowSchema(db);
+    await ensureFlowSchema(db);
+    expect(await indexes()).toEqual(FINAL);
+  });
+});
+
 describe("flow_ts_ms(TEXT)：與 JS Date.parse 一致（Q1）", () => {
   const SAME = [
     "2026-11-05T12:00:00Z", "2026-11-05T12:00:00.123Z", "2026-11-05T20:00:00+08:00", "2026-11-05T12:00:00+15:59",

@@ -45,8 +45,8 @@ END
 $fn$;
 UPDATE flow_events SET ts_ms = flow_ts_ms(ts) WHERE ts_ms IS NULL;
 CREATE INDEX IF NOT EXISTS flow_events_received_at ON flow_events (received_at);
--- 舊索引（依 ts 文字）：commit 4 依 Q3 grep 結果決定是否移除
-CREATE INDEX IF NOT EXISTS flow_events_group ON flow_events (sensor_id, app_id, src_ip, ts);
+-- 舊索引 (sensor_id, app_id, src_ip, ts)：判定改讀 ts_ms 後沒有查詢依 ts 文字過濾／排序（Q3 grep），移除
+DROP INDEX IF EXISTS flow_events_group;
 CREATE INDEX IF NOT EXISTS flow_events_group_ms ON flow_events (sensor_id, app_id, src_ip, ts_ms);
 -- app_id 未綁定的拒絕紀錄：只記 id（代理 PK）＋sensor_id＋時間，不記 payload；與 flow_events 同 7 天清除。
 -- 註：IF NOT EXISTS 不會改既有舊表（無 id）的結構。
