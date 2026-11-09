@@ -5,7 +5,12 @@ export type Db = {
   query<T>(sql: string, params?: unknown[]): Promise<{ rows: T[] }>;
   exec(sql: string): Promise<unknown>;
   close(): Promise<void>;
+  /** 交易：同一 client 上 BEGIN → fn → COMMIT；fn 拋錯則 ROLLBACK 後原樣拋出；最後一律 release。 */
+  tx<T>(fn: (q: Queryable) => Promise<T>): Promise<T>;
 };
+
+/** 只能查詢的介面（Db 本身或交易中的 client）；稽核等寫入函式吃這個，才能放進 tx。 */
+export type Queryable = Pick<Db, "query">;
 
 /** 第 2 階段 schema 語句（逐條執行，搭配 advisory lock 避免並行建表競態）。 */
 const SCHEMA_STATEMENTS = [
@@ -75,6 +80,23 @@ function asDb(pool: pg.Pool): Db {
     },
     close: async () => {
       await pool.end();
+    },
+    tx: async <T>(fn: (q: Queryable) => Promise<T>): Promise<T> => {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const q: Queryable = {
+          query: async <R>(sql: string, params?: unknown[]) => ({ rows: (await client.query(sql, params)).rows as R[] }),
+        };
+        const out = await fn(q);
+        await client.query("COMMIT");
+        return out;
+      } catch (err) {
+        await client.query("ROLLBACK").catch(() => {});
+        throw err;
+      } finally {
+        client.release();
+      }
     },
   };
 }
