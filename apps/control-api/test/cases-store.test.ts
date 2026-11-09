@@ -91,11 +91,11 @@ describe("命中明細（case_hits）", () => {
   const hits = async () => (await app.db.query<HitRow>(
     "SELECT src_ip, confidence, ontime_confidence, first_seen_at, updated_at FROM case_hits ORDER BY src_ip")).rows;
 
-  it("以 (ip, sensor, app, 窗) upsert：第一次 created=true；重掃 created=false、值為絕對值、first_seen_at 不變", async () => {
+  it("以 (ip, sensor, app, 窗) upsert：第一次 created=true；重掃 created=false、回前值、值為絕對值、first_seen_at 不變", async () => {
     await boot();
-    expect(await app.db.tx((q) => upsertCaseHit(q, hit(), T0))).toEqual({ created: true });
+    expect(await app.db.tx((q) => upsertCaseHit(q, hit(), T0))).toEqual({ created: true, prevOntime: null });
     expect(await app.db.tx((q) => upsertCaseHit(q, hit({ confidence: 0.7, ontime_confidence: null }), T0 + MIN)))
-      .toEqual({ created: false });
+      .toEqual({ created: false, prevOntime: 0.6 });
     expect(await hits()).toEqual([{ src_ip: "203.0.113.7/32", confidence: 0.7, ontime_confidence: null,
       first_seen_at: String(T0), updated_at: String(T0 + MIN) }]);
   });
@@ -103,7 +103,7 @@ describe("命中明細（case_hits）", () => {
   it("不同 sensor／app／窗各算一筆", async () => {
     await boot();
     for (const h of [hit(), hit({ sensor_id: "s-2" }), hit({ app_id: "app-beta" }), hit({ window_start: T0 + 5 * MIN })]) {
-      expect(await app.db.tx((q) => upsertCaseHit(q, h, T0))).toEqual({ created: true });
+      expect(await app.db.tx((q) => upsertCaseHit(q, h, T0))).toEqual({ created: true, prevOntime: null });
     }
     expect(await hits()).toHaveLength(4);
   });

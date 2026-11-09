@@ -53,16 +53,19 @@ export type CaseHit = {
   confidence: number; ontime_confidence: number | null;
 };
 
-export async function upsertCaseHit(q: Queryable, h: CaseHit, now: number): Promise<{ created: boolean }> {
-  const r = await q.query<{ created: boolean }>(
-    `INSERT INTO case_hits (src_ip, sensor_id, app_id, window_start, confidence, ontime_confidence, first_seen_at, updated_at)
+/** prevOntime：這次寫入前的 ontime_confidence（第一次寫入 → null），供判斷「新的」高嚴重命中。 */
+export async function upsertCaseHit(q: Queryable, h: CaseHit, now: number): Promise<{ created: boolean; prevOntime: number | null }> {
+  const r = await q.query<{ created: boolean; prev_ontime: number | null }>(
+    `WITH prev AS (SELECT ontime_confidence FROM case_hits
+       WHERE src_ip = $1 AND sensor_id = $2 AND app_id = $3 AND window_start = $4)
+     INSERT INTO case_hits (src_ip, sensor_id, app_id, window_start, confidence, ontime_confidence, first_seen_at, updated_at)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
      ON CONFLICT (src_ip, sensor_id, app_id, window_start) DO UPDATE SET
        confidence = EXCLUDED.confidence, ontime_confidence = EXCLUDED.ontime_confidence, updated_at = EXCLUDED.updated_at
-     RETURNING (xmax = 0) AS created`,
+     RETURNING (xmax = 0) AS created, (SELECT ontime_confidence FROM prev) AS prev_ontime`,
     [canonicalIp(h.src_ip), h.sensor_id, h.app_id, h.window_start, h.confidence, h.ontime_confidence, now],
   );
-  return { created: r.rows[0]!.created };
+  return { created: r.rows[0]!.created, prevOntime: r.rows[0]!.prev_ontime };
 }
 
 /**

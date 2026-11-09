@@ -52,29 +52,40 @@ export function hostCidr(raw: string): string | null {
   return `${p.address}/${p.prefix}`;
 }
 
-/** log：門檻 fail-closed 時的 warn 去處（呼叫端傳 tick／app 的 logger）。 */
+export type AutoListOpts = { log?: WarnLog };
+
+/**
+ * tx 內版本（計畫 §7；判定 tick 在自己的 tx 裡呼叫）。白名單在這裡以 SHARE 鎖重新檢查：
+ * tick 早先讀的白名單只用來決定要不要開案，不能當上榜依據（A 裁定 11-09）。
+ * opts.log：門檻 fail-closed 時的 warn 去處（呼叫端傳 tick／app 的 logger）。
+ */
+export async function autoListInTx(q: Queryable, input: AutoListInput, now: number, opts: AutoListOpts = {}): Promise<AutoListResult> {
+  const ip = hostCidr(input.ip);
+  if (ip === null) return { status: "invalid_ip" };
+  // 順序（A 裁定 11-09 第 2 點）：白名單（SHARE 鎖）→ below_auto → 冷卻 → AUTO_LOCK → 熔斷 → 寫入（冷卻、熔斷見 commit 10、11）
+  await q.query("LOCK TABLE allowlist_entries IN SHARE MODE");
+  if (await allowlisted(q, ip, now)) return { status: "allowlisted" };
+  const { auto } = await loadThresholds(q, opts.log);
+  if (!(input.confidence >= auto)) return { status: "below_auto_threshold" };
+  const draft = BlocklistEntrySchema.parse({
+    entry_id: randomUUID(), ip, source: "auto", confidence: input.confidence, case_id: input.case_id,
+    created_at: new Date(now).toISOString(), expires_at: new Date(now + AUTO_LIST_TTL_MS).toISOString(),
+    approved_by: "system:auto", approved_at: new Date(now).toISOString(), revoked_at: null,
+  });
+  const entry = await insertActiveBlocklistEntry(q, {
+    entry_id: draft.entry_id, ip: draft.ip, source: "auto", confidence: draft.confidence, case_id: draft.case_id,
+    created_at: now, expires_at: now + AUTO_LIST_TTL_MS, approved_by: "system:auto", approved_at: now,
+  }, now);
+  if (!entry) return { status: "already_listed" };
+  await writeAudit(q, { action: "blacklist.auto_list", actor: "system:auto", sensor_id: null, at: now,
+    detail: { entry_id: entry.entry_id, ip: entry.ip, confidence: entry.confidence, case_id: entry.case_id, expires_at: entry.expires_at } });
+  return { status: "listed", entry };
+}
+
+/** 外層包裝：自己開 tx，行為與拆分前相同。 */
 export async function writeAutoBlocklistEntry(
   db: Db, input: AutoListInput, now: number, log?: WarnLog,
 ): Promise<AutoListResult> {
-  const ip = hostCidr(input.ip);
-  if (ip === null) return { status: "invalid_ip" };
-  return db.tx(async (q): Promise<AutoListResult> => {
-    await q.query("LOCK TABLE allowlist_entries IN SHARE MODE");
-    const { auto } = await loadThresholds(q, log);
-    if (!(input.confidence >= auto)) return { status: "below_auto_threshold" };
-    if (await allowlisted(q, ip, now)) return { status: "allowlisted" };
-    const draft = BlocklistEntrySchema.parse({
-      entry_id: randomUUID(), ip, source: "auto", confidence: input.confidence, case_id: input.case_id,
-      created_at: new Date(now).toISOString(), expires_at: new Date(now + AUTO_LIST_TTL_MS).toISOString(),
-      approved_by: "system:auto", approved_at: new Date(now).toISOString(), revoked_at: null,
-    });
-    const entry = await insertActiveBlocklistEntry(q, {
-      entry_id: draft.entry_id, ip: draft.ip, source: "auto", confidence: draft.confidence, case_id: draft.case_id,
-      created_at: now, expires_at: now + AUTO_LIST_TTL_MS, approved_by: "system:auto", approved_at: now,
-    }, now);
-    if (!entry) return { status: "already_listed" };
-    await writeAudit(q, { action: "blacklist.auto_list", actor: "system:auto", sensor_id: null, at: now,
-      detail: { entry_id: entry.entry_id, ip: entry.ip, confidence: entry.confidence, case_id: entry.case_id, expires_at: entry.expires_at } });
-    return { status: "listed", entry };
-  });
+  if (hostCidr(input.ip) === null) return { status: "invalid_ip" };
+  return db.tx((q) => autoListInTx(q, input, now, { log }));
 }

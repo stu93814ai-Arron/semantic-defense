@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
-import type { FlowMetadataEvent } from "@semantic-defense/contracts";
-import { createFlowTables, insertFlowEvents, insertLegacyFlowEvents } from "@semantic-defense/flow-store/testing";
-import { buildApp, seedPhase2Fixtures, type ControlApi } from "./helpers/app.js";
+import { insertFlowEvents, insertLegacyFlowEvents } from "@semantic-defense/flow-store/testing";
+import { buildApp, type ControlApi } from "./helpers/app.js";
 import { requireDatabaseUrl } from "./helpers/pg.js";
+import { DAY, MIN, T0, bootJudgeApp, flowEvent as flow } from "./helpers/judge.js";
 import { JUDGE_LOCK, runJudgeTick } from "../src/judge.js";
 import { writeAutoBlocklistEntry } from "../src/auto-blacklist.js";
 
@@ -12,24 +12,12 @@ let app: ControlApi;
 let lines: string[] = [];
 afterEach(async () => { if (app) await app.close(); });
 
-const T0 = Date.parse("2026-11-09T00:00:00Z");
-const MIN = 60_000;
-const DAY = 24 * 60 * MIN;
 const log = { warn: (obj: object, msg: string) => { lines.push(JSON.stringify({ ...obj, msg })); } };
 async function boot(opts: { judgeIntervalMs?: number } = {}): Promise<ControlApi> {
   lines = [];
-  app = await buildApp({ idleTimeoutMs: 60_000, databaseUrl: requireDatabaseUrl(), now: () => T0, ...opts });
-  await seedPhase2Fixtures(app);
-  await app.db.exec("DROP TABLE IF EXISTS flow_events, flow_rejections");
-  await createFlowTables(app.db);
+  app = await bootJudgeApp(opts);
   return app;
 }
-/** 可疑：同一來源打 30 個 port、短連線無回應、低封包 → confidence 1.0；正常：3 筆同 port → 低分。 */
-const flow = (src_ip: string, ts: number, dst_port: number, susp: boolean): FlowMetadataEvent => ({
-  flow_id: randomUUID(), app_id: "app-1", ts: new Date(ts).toISOString(), src_ip, dst_ip: "10.0.0.1",
-  src_port: 50000, dst_port, protocol: "tcp", bytes_in: 10, bytes_out: susp ? 0 : 500,
-  packets: susp ? 1 : 20, duration_ms: susp ? 10 : 2000,
-});
 const scan = (ip: string, ts: number, receivedAt: number, n = 30, sensorId = "s-1") => insertFlowEvents(app.db,
   Array.from({ length: n }, (_, i) => ({ flow: flow(ip, ts, 1000 + i, true), sensorId, receivedAt })));
 const normal = (ip: string, ts: number) => insertFlowEvents(app.db,
