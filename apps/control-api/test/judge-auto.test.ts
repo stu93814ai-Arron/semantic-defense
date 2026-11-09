@@ -410,3 +410,17 @@ describe("auto_suppressed 去重：同一 (ip, reason) 每小時最多一筆，�
     expect(await auditIndexDefAfterReinit(app, "audit_auto_suppressed_ip_reason")).toMatch(/\(action, \(\(detail ->> 'ip'::text\)\), \(\(detail ->> 'reason'::text\)\), at\) WHERE \(action = 'blacklist\.auto_suppressed'::text\)/);
   });
 });
+
+describe("熔斷滑動視窗邊界（created_at > now − 1h）", () => {
+  it("50 筆 auto 恰好建立於 1 小時前 → 不計入，第 51 次嘗試照常上榜", async () => {
+    await boot();
+    await autos(50, T0 - 60 * MIN);
+    expect((await attempt("203.0.113.70")).status).toBe("listed");
+  });
+
+  it("50 筆 auto 建立於 1 小時前 + 1ms → 計入，第 51 次嘗試被熔斷", async () => {
+    await boot();
+    await autos(50, T0 - 60 * MIN + 1);
+    expect((await attempt("203.0.113.71")).status).toBe("breaker");
+  });
+});
