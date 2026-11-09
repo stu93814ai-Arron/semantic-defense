@@ -27,7 +27,7 @@ export async function countHighSeverity(q: Queryable, ip: string, auto: number, 
 
 export const e3aHolds = (c: HighCount): boolean => c.hits >= 3 && (c.apps >= 2 || c.sensors >= 2);
 
-export type Suppressed = { reason: "allowlist" | "cooldown" | "breaker"; ip: string; case_id: string | null; revoked_at?: string };
+export type Suppressed = { reason: "allowlist" | "cooldown" | "breaker" | "non_public"; ip: string; case_id: string | null; revoked_at?: string };
 
 /** auto_suppressed 去重視窗：同一 (ip, reason) 在這段時間內（伺服器時間）最多一筆（A 覆核，比照 R5 hit_while_listed）。 */
 export const AUTO_SUPPRESSED_EVERY_MS = 60 * 60_000;
@@ -49,6 +49,7 @@ export async function writeSuppressed(q: Queryable, detail: Suppressed, now: num
 const suppressedOf = (r: AutoListResult, ip: string, case_id: string): Suppressed | null => {
   if (r.status === "allowlisted") return { reason: "allowlist", ip, case_id };
   if (r.status === "breaker") return { reason: "breaker", ip, case_id };
+  if (r.status === "not_public") return { reason: "non_public", ip, case_id };
   if (r.status === "cooldown") return { reason: "cooldown", ip, case_id, revoked_at: new Date(r.revoked_at).toISOString() };
   return null;
 }
@@ -56,7 +57,7 @@ const suppressedOf = (r: AutoListResult, ip: string, case_id: string): Suppresse
 /**
  * 有案路徑：E3.A 成立 → 以該 IP 的 open case 呼叫 autoListInTx（白名單在其中以 SHARE 鎖重查）。
  * gates 開（冷卻／熔斷）。listed → case 改 auto_listed（resolved_by system:auto）；
- * allowlisted／cooldown／breaker → auto_suppressed{allowlist | cooldown(+revoked_at) | breaker}，case 維持 open；
+ * not_public／allowlisted／cooldown／breaker → auto_suppressed{non_public | allowlist | cooldown(+revoked_at) | breaker}，case 維持 open；
  * below_auto_threshold／already_listed → 留在待審、不寫稽核。confidence 用 case 的 max_confidence（Q3）。
  * 回 true＝這次的 auto_suppressed 因 1 小時去重沒寫（tick 計數用）。
  */

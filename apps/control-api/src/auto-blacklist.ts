@@ -6,6 +6,7 @@ import { writeAudit } from "./audit.js";
 import { loadThresholds, type WarnLog } from "./thresholds.js";
 import { insertActiveBlocklistEntry } from "./blocklist-store.js";
 import { breakerTripped, lockAllowlistShare, lockAuto } from "./auto-breaker.js";
+import { isGlobalUnicast } from "./net-scope.js";
 
 /**
  * ④ source=auto 寫入邊界（內部函式，不開 HTTP）。觸發條件（命中次數）在 auto-trigger.ts；冷卻只在 opts.gates 開時檢查。
@@ -27,7 +28,8 @@ export type AutoListResult =
   | { status: "allowlisted" }
   | { status: "already_listed" }
   | { status: "cooldown"; revoked_at: number }
-  | { status: "breaker" };
+  | { status: "breaker" }
+  | { status: "not_public" };
 
 const addrOf = (s: string) => s.split("/")[0]!;
 const family = (addr: string) => (isIP(addr) === 6 ? "ipv6" : "ipv4");
@@ -75,14 +77,22 @@ async function lastRevokedWithin(q: Queryable, ip: string, now: number): Promise
  * 會拿 AUTO_LOCK 的路徑（autoListInTx、tick 的 recoverBreakerIfOpen）都照這個順序；新增呼叫端也必須先 SHARE，避免和白名單寫入形成死結。
  * 兩把鎖都持有到 tx 結束（判定 tick 即 tick commit）。
  */
+/** 拿任何鎖之前的位址檢查：非法 → invalid_ip；B5 非公網（常數排除清單）→ not_public。 */
+function scopeOf(raw: string): { ip: string } | { reject: AutoListResult } {
+  const ip = hostCidr(raw);
+  if (ip === null) return { reject: { status: "invalid_ip" } };
+  return isGlobalUnicast(ip) ? { ip } : { reject: { status: "not_public" } };
+}
+
 /**
  * tx 內版本（計畫 §7；判定 tick 在自己的 tx 裡呼叫）。白名單在這裡以 SHARE 鎖重新檢查：
  * tick 早先讀的白名單只用來決定要不要開案，不能當上榜依據（A 裁定 11-09）。
  * opts.log：門檻 fail-closed 時的 warn 去處（呼叫端傳 tick／app 的 logger）。
  */
 export async function autoListInTx(q: Queryable, input: AutoListInput, now: number, opts: AutoListOpts = {}): Promise<AutoListResult> {
-  const ip = hostCidr(input.ip);
-  if (ip === null) return { status: "invalid_ip" };
+  const scoped = scopeOf(input.ip);
+  if ("reject" in scoped) return scoped.reject;
+  const { ip } = scoped;
   // 順序（A 裁定 11-09 第 2 點）：白名單（SHARE 鎖）→ below_auto → 冷卻 → AUTO_LOCK → 熔斷 → 寫入（冷卻、熔斷見 commit 10、11）
   await lockAllowlistShare(q);
   if (await allowlisted(q, ip, now)) return { status: "allowlisted" };

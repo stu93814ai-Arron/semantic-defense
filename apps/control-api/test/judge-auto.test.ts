@@ -424,3 +424,31 @@ describe("熔斷滑動視窗邊界（created_at > now − 1h）", () => {
     expect((await attempt("64.0.113.71")).status).toBe("breaker");
   });
 });
+
+describe("B5：非公網位址不自動上榜（auto_suppressed{non_public}，同 (ip, reason) 每小時去重；案件留在待審）", () => {
+  const NON_PUBLIC = ["10.0.0.53", "172.16.0.1", "192.168.1.1", "100.64.0.1", "240.0.0.1", "2001:db8::53", "fc00::1"];
+
+  it.each(NON_PUBLIC)("autoListInTx(%s) → not_public，不寫入", async (ip) => {
+    await boot();
+    expect((await attempt(ip)).status).toBe("not_public");
+    expect(await listed()).toEqual([]);
+  });
+
+  it("公網 IP 照常上榜", async () => {
+    await boot();
+    expect((await attempt("64.0.113.80")).status).toBe("listed");
+  });
+
+  it("tick：非公網 IP E3.A 成立 → 不上榜、案件仍 open、auto_suppressed{non_public} 一筆；1 小時內再成立不重寫", async () => {
+    await boot();
+    for (const [off, a] of [[25, "app-1"], [15, "app-2"], [5, "app-1"]] as const) await hit({ at: T0 - off * MIN, app: a, ip: "10.0.0.53" });
+    await tick();
+    await hit({ at: T0, app: "app-2", ip: "10.0.0.53", port0: 7000 });
+    await tick(T0 + 6 * MIN);
+    expect(await listed()).toEqual([]);
+    const [c] = await kases();
+    expect(c).toMatchObject({ ip: "10.0.0.53/32", state: "open" });
+    expect((await audits("blacklist.auto_suppressed")).map((a) => a.detail)).toEqual([
+      { reason: "non_public", ip: "10.0.0.53/32", case_id: c!.case_id }]);
+  });
+});
