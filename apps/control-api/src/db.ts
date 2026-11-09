@@ -107,24 +107,43 @@ function asDb(pool: pg.Pool): Db {
     close: async () => {
       await pool.end();
     },
-    tx: async <T>(fn: (q: Queryable) => Promise<T>): Promise<T> => {
-      const client = await pool.connect();
-      try {
-        await client.query("BEGIN");
-        const q: Queryable = {
-          query: async <R>(sql: string, params?: unknown[]) => ({ rows: (await client.query(sql, params)).rows as R[] }),
-        };
-        const out = await fn(q);
-        await client.query("COMMIT");
-        return out;
-      } catch (err) {
-        await client.query("ROLLBACK").catch(() => {});
-        throw err;
-      } finally {
-        client.release();
-      }
-    },
+    tx: <T>(fn: (q: Queryable) => Promise<T>) => runTx(pool, fn),
   };
+}
+
+/** runTx 只需要的 pool／client 介面（測試可注入假物件）。 */
+export type TxClient = {
+  query(sql: string, params?: unknown[]): Promise<{ rows: unknown[] }>;
+  release(err?: Error | boolean): void;
+};
+export type TxPool = { connect(): Promise<TxClient> };
+
+/**
+ * Db.tx 實作：同一 client 上 BEGIN → fn → COMMIT；fn 拋錯則 ROLLBACK 後原樣拋出。
+ * ROLLBACK 也失敗時以 release(err) 丟棄該連線，避免把卡在中斷交易的連線還回 pool；其餘情況 release()。
+ */
+export async function runTx<T>(pool: TxPool, fn: (q: Queryable) => Promise<T>): Promise<T> {
+  const client = await pool.connect();
+  let discard: Error | undefined;
+  try {
+    await client.query("BEGIN");
+    const q: Queryable = {
+      query: async <R>(sql: string, params?: unknown[]) => ({ rows: (await client.query(sql, params)).rows as R[] }),
+    };
+    const out = await fn(q);
+    await client.query("COMMIT");
+    return out;
+  } catch (err) {
+    try {
+      await client.query("ROLLBACK");
+    } catch (rollbackErr) {
+      discard = rollbackErr instanceof Error ? rollbackErr : new Error(String(rollbackErr));
+    }
+    throw err;
+  } finally {
+    if (discard) client.release(discard);
+    else client.release();
+  }
 }
 
 async function migrate(client: pg.PoolClient): Promise<void> {
