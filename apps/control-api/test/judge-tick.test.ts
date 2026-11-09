@@ -395,6 +395,7 @@ describe("只吞 SQLSTATE 22（data exception）；其他錯誤讓整個 tick ro
   const IP = "203.0.113.12";
   /** 測試專用 trigger：寫這個 IP 的 case_hits 時丟指定 SQLSTATE（模擬 deadlock／lock_not_available）。 */
   const trap = (code: string) => app.db.exec(`
+    DROP TRIGGER IF EXISTS test_trap ON case_hits;
     CREATE OR REPLACE FUNCTION test_trap() RETURNS trigger LANGUAGE plpgsql AS $$
     BEGIN RAISE EXCEPTION 'trap' USING ERRCODE = '${code}'; END $$;
     CREATE TRIGGER test_trap BEFORE INSERT ON case_hits FOR EACH ROW WHEN (NEW.src_ip = '${IP}/32') EXECUTE FUNCTION test_trap();`);
@@ -402,6 +403,7 @@ describe("只吞 SQLSTATE 22（data exception）；其他錯誤讓整個 tick ro
 
   it("trigger 丟 22008（data exception）→ 只回滾該組、記 {failed:1, codes}，cursor 照常前進（SAVEPOINT 保留，Q5）", async () => {
     await boot();
+    await normal("198.51.100.9", T0 - 3 * MIN); // R14b：同批要有一個沒失敗的組，否則「全部組失敗」整個 tick 失敗
     await scan(IP, T0 - 2 * MIN, T0 - 30_000);
     await trap("22008");
     await expect(runJudgeTick(app.db, T0, log)).resolves.toMatchObject({ ran: true, hits: 0 });
@@ -425,6 +427,68 @@ describe("只吞 SQLSTATE 22（data exception）；其他錯誤讓整個 tick ro
     await untrap();
     await runJudgeTick(app.db, T0 + 2000, log);
     expect((await cases()).map((c) => c.ip)).toEqual([`${IP}/32`]);
+    expect(await cursor()).toEqual([{ received_upto: String(T0 - 30_000) }]);
+  });
+});
+
+describe("只吞 22007／22008／22009；全部組都失敗 → tick 失敗（資安 R14）", () => {
+  const IP = "203.0.113.13";
+  const trap = (code: string) => app.db.exec(`
+    DROP TRIGGER IF EXISTS test_trap ON case_hits;
+    CREATE OR REPLACE FUNCTION test_trap() RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN RAISE EXCEPTION 'trap' USING ERRCODE = '${code}'; END $$;
+    CREATE TRIGGER test_trap BEFORE INSERT ON case_hits FOR EACH ROW WHEN (NEW.src_ip = '${IP}/32') EXECUTE FUNCTION test_trap();`);
+  const seed = async () => {
+    await boot();
+    await normal("198.51.100.9", T0 - 3 * MIN);
+    await runJudgeTick(app.db, T0);
+    const before = await cursor();
+    await scan(IP, T0 - 2 * MIN, T0 - 30_000);
+    await normal("198.51.100.10", T0 - MIN);
+    return before;
+  };
+
+  it.each(["22P02", "22012", "22023"])("22 類但非日期時間（%s）→ 往外丟、tick rollback、cursor 不變、不寫 failed log", async (code) => {
+    const before = await seed();
+    await trap(code);
+    const err = await runJudgeTick(app.db, T0 + 1000, log).catch((e: unknown) => e);
+    expect(err).toMatchObject({ code });
+    expect(await cursor()).toEqual(before);
+    expect(lines).toEqual([]);
+  });
+
+  it("22007 仍只回滾該組：其他組照常、cursor 前進、log {failed:1, codes:{22007:1}}", async () => {
+    await seed();
+    await trap("22007");
+    await expect(runJudgeTick(app.db, T0 + 1000, log)).resolves.toMatchObject({ ran: true });
+    expect(await cursor()).toEqual([{ received_upto: String(T0 - 30_000) }]);
+    expect(lines.map((l) => JSON.parse(l) as object)).toEqual([
+      { failed: 1, codes: { "22007": 1 }, msg: "judge tick rolled back failed groups" }]);
+  });
+
+  it("1 組跳過（保留位址）＋其餘全部 failed（trigger 22008）→ 仍算全失敗：tick reject、cursor 不變（只計實際處理的組）", async () => {
+    await boot();
+    await trap("22008");
+    await scan(IP, T0 - 8 * MIN, T0 - MIN);
+    await scan(IP, T0 - 2 * MIN, T0 - 30_000);
+    await scan("127.0.0.1", T0 - 2 * MIN, T0 - 20_000);
+    const err = await runJudgeTick(app.db, T0 + 1000, log).catch((e: unknown) => e);
+    expect(String((err as Error).message)).toMatch(/every group failed/);
+    expect(await cursor()).toEqual([]);
+  });
+
+  it("這批每一組都 failed（trigger 22009）→ tick reject、cursor 不變；移除 trigger 後 → tick 成功、cursor 前進", async () => {
+    await boot();
+    await trap("22009");
+    await scan(IP, T0 - 8 * MIN, T0 - MIN);
+    await scan(IP, T0 - 2 * MIN, T0 - 30_000);
+    const err = await runJudgeTick(app.db, T0 + 1000, log).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(String((err as Error).message)).toMatch(/every group failed/);
+    expect(String((err as Error).message)).not.toContain("203.0.113");
+    expect(await cursor()).toEqual([]);
+    await app.db.exec("DROP TRIGGER test_trap ON case_hits");
+    await expect(runJudgeTick(app.db, T0 + 2000, log)).resolves.toMatchObject({ ran: true, hits: 2 });
     expect(await cursor()).toEqual([{ received_upto: String(T0 - 30_000) }]);
   });
 });

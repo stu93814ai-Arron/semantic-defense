@@ -125,7 +125,13 @@ async function judgeGroup(q: Queryable, k: GroupKey, ctx: TickCtx): Promise<"hit
   return "hit";
 }
 
-/** 組內錯誤的 SQLSTATE；只有 class 22（data exception）可吞。ts slice 後判定不再對 ts 做 ::timestamptz，這層 SAVEPOINT 保留作縱深防禦（Q5）。 */
+/**
+ * 組內錯誤的 SQLSTATE。只吞感測器 ts 造成的日期時間資料錯誤（資安 R14a）：
+ * 22007 invalid_datetime_format、22008 datetime_field_overflow、22009 invalid_time_zone_displacement_value。
+ * 其他 22 類（22P02、22012…）多半是程式或 schema 問題，不能靜默吞掉。
+ * ts slice 後判定不再對 ts 做 ::timestamptz（只讀 ts_ms），這層 SAVEPOINT 保留作縱深防禦（Q5）。
+ */
+const SWALLOWED = new Set(["22007", "22008", "22009"]);
 const sqlState = (e: unknown): string | undefined => {
   const code = (e as { code?: unknown } | null)?.code;
   return typeof code === "string" ? code : undefined;
@@ -133,8 +139,8 @@ const sqlState = (e: unknown): string | undefined => {
 
 /**
  * 每組一個 SAVEPOINT（資安退回 B2）：感測器送來 Postgres 不收的 ts（0000 年、offset ±23:59…）在 ts slice 前會讓 ts::timestamptz 拋錯（現已改讀 ts_ms）；
- * 只有 SQLSTATE 22xxx 才 ROLLBACK TO SAVEPOINT 這一組、記入 failed（以 SQLSTATE 計數），其他組照常、cursor 照常前進。
- * 其他錯誤（40P01 deadlock、55P03 lock_not_available、沒有 code 的…）一律往外丟：整個 tick rollback、cursor 不動，
+ * 只有 SWALLOWED 內的 SQLSTATE 才 ROLLBACK TO SAVEPOINT 這一組、記入 failed（以 SQLSTATE 計數），其他組照常、cursor 照常前進。
+ * 其他錯誤（其他 22 類、40P01 deadlock、55P03 lock_not_available、沒有 code 的…）一律往外丟：整個 tick rollback、cursor 不動，
  * 下一個 tick 重判，否則該 IP 會被 cursor 跳過、永遠不再判定（資安退回 B3）。
  */
 async function judgeGroupIsolated(q: Queryable, k: GroupKey, ctx: TickCtx): Promise<"hit" | "miss" | "skipped" | "failed"> {
@@ -145,7 +151,7 @@ async function judgeGroupIsolated(q: Queryable, k: GroupKey, ctx: TickCtx): Prom
     return r;
   } catch (e) {
     const code = sqlState(e);
-    if (!code?.startsWith("22")) throw e;
+    if (code === undefined || !SWALLOWED.has(code)) throw e;
     await q.query("ROLLBACK TO SAVEPOINT judge_group");
     ctx.stats.codes.set(code, (ctx.stats.codes.get(code) ?? 0) + 1);
     return "failed";
@@ -176,6 +182,8 @@ export async function runJudgeTick(db: Db, now: number, log?: WarnLog): Promise<
     const n = { hit: 0, miss: 0, skipped: 0, failed: 0 };
     for (const k of keys) n[await judgeGroupIsolated(q, k, ctx)] += 1;
     logTickCounts(log, n, ctx.stats);
+    // 實際處理的組（扣掉 skipped）全部失敗 → 不前進 cursor（資安 R14b）：整個 tick 失敗 rollback，錯誤訊息只帶數量
+    if (n.failed > 0 && n.failed === keys.length - n.skipped) throw new Error(`judge tick: every group failed (${n.failed})`);
     // 依 first_seen_at（第一次寫入、伺服器時間）清：重掃會一直刷新 updated_at，用它清會永遠清不掉（資安退回 R3）
     await q.query("DELETE FROM case_hits WHERE first_seen_at <= $1", [now - RETENTION_MS]);
     await q.query("DELETE FROM blacklist_cases WHERE state <> 'open' AND resolved_at <= $1", [now - RETENTION_MS]);
