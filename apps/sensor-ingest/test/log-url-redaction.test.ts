@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import Fastify from "fastify";
 import { buildIngest, openTestDb, seedToken } from "./helpers.js";
+import { installErrorHandler, withSafeReqLog } from "../src/errors.js";
 
 /** 資安 R1：req.url 的 query（如 ?token=sdst_…）不得進 log；request log 與 5xx log 都只記 path。僅用假 token 字串。 */
 let db: Awaited<ReturnType<typeof openTestDb>>;
@@ -42,6 +44,26 @@ describe("sensor-ingest log 不記 query", () => {
     expect(lines.some((l) => (JSON.parse(l) as { level: number }).level >= 50)).toBe(true);
     expect(lines.join("\n")).not.toContain(SECRET);
     expect(urls(lines).every((u) => u === "/v1/flows")).toBe(true);
+    await app.close();
+  });
+});
+
+describe("sensor-ingest err serializer 去掉 query（資安殘留：reply-already-sent 的 err.message 帶完整 url）", () => {
+  it("重複回應：?token=… 不進 log（含 err.message／stack 與 msg）", async () => {
+    const lines: string[] = [];
+    const app = Fastify({ logger: withSafeReqLog({ level: "info", stream: { write: (l: string) => { lines.push(l); } } }) });
+    installErrorHandler(app);
+    app.get("/v1/__qs_twice", async (_req, reply) => {
+      await reply.send({ ok: 1 });
+      return { ok: 2 };
+    });
+    const r = await app.inject({ method: "GET", url: `/v1/__qs_twice${QS}` });
+    expect(r.statusCode).toBe(200);
+    const errs = lines.filter((l) => l.includes("FST_ERR_REP_ALREADY_SENT"));
+    expect(errs.length).toBeGreaterThanOrEqual(1);
+    expect(errs.join("\n")).toContain("/v1/__qs_twice");
+    expect(lines.join("\n")).not.toContain(SECRET);
+    expect(lines.join("\n")).not.toContain("token=");
     await app.close();
   });
 });

@@ -40,3 +40,24 @@ describe("control-api log 不記 query", () => {
     expect(urls(lines).every((u) => u === "/api/__qs_boom")).toBe(true);
   });
 });
+
+describe("control-api err serializer 去掉 query（資安殘留：reply-already-sent 的 err.message 帶完整 url）", () => {
+  it("重複回應：?token=… 不進 log（含 err.message／stack）", async () => {
+    const lines: string[] = [];
+    app = await buildApp({
+      idleTimeoutMs: 60_000, databaseUrl: requireDatabaseUrl(),
+      logger: { level: "info", stream: { write: (l: string) => { lines.push(l); } } },
+      beforeReady: (a) => { a.get("/api/__qs_twice", { config: { roles: "public" } }, async (_req, reply) => {
+        await reply.send({ ok: 1 });
+        return { ok: 2 };
+      }); },
+    });
+    const r = await app.inject({ method: "GET", url: `/api/__qs_twice${QS}` });
+    expect(r.statusCode).toBe(200);
+    const errs = lines.filter((l) => l.includes("FST_ERR_REP_ALREADY_SENT"));
+    expect(errs.length).toBeGreaterThanOrEqual(1);
+    expect(errs.join("\n")).toContain("/api/__qs_twice");
+    expect(lines.join("\n")).not.toContain(SECRET);
+    expect(lines.join("\n")).not.toContain("token=");
+  });
+});

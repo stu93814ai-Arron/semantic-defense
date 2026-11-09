@@ -42,11 +42,25 @@ export const safeReqSerializer = (req: ReqLike) => ({
   method: req.method, url: pathOnly(req.url), host: req.host, remoteAddress: req.ip, remotePort: req.socket?.remotePort,
 });
 
-/** 套上 safeReqSerializer 的 logger 設定；false 維持關閉，true／省略＝預設 logger。 */
+/** 字串裡的 url 去掉 query（`/p?token=…` → `/p`）；FST_ERR_REP_ALREADY_SENT 等錯誤會把完整 url 寫進 message。 */
+const noQuery = (v: unknown): unknown => (typeof v === "string" ? v.replace(/(\/[^\s"?]*)\?[^\s"]*/g, "$1") : v);
+/** err serializer：欄位同 pino 預設（type＋自有欄位＋message／stack），message／stack 去 query。 */
+export const safeErrSerializer = (e: FastifyError) =>
+  ({ type: e.name, ...e, message: noQuery(e.message) as string, stack: noQuery(e.stack) as string });
+type LogHooks = { logMethod(this: unknown, args: unknown[], method: (...a: unknown[]) => void): void };
+/** pino 在沒給 msg 時直接拿原始 err.message 當 msg（不經 serializer）：補上去 query 的 msg，字串參數也去 query。 */
+const logMethod: LogHooks["logMethod"] = function (args, method) {
+  const err = (args[0] as { err?: { message?: unknown } } | null)?.err;
+  const out = args.length === 1 && err ? [args[0], noQuery(err.message)] : args.map(noQuery);
+  method.apply(this, out);
+};
+
+/** 套上 safe serializer（req url 只留 path、err 去 query）的 logger 設定；false 維持關閉，true／省略＝預設 logger。 */
 export function withSafeReqLog(logger: FastifyServerOptions["logger"] | undefined): FastifyServerOptions["logger"] {
   if (logger === false) return false;
   const base = logger === true || logger === undefined ? {} : logger;
-  return { ...base, serializers: { ...base.serializers, req: safeReqSerializer } };
+  return { ...base, hooks: { ...base.hooks, logMethod },
+    serializers: { ...base.serializers, req: safeReqSerializer, err: safeErrSerializer } };
 }
 
 export function installErrorHandler(app: FastifyInstance): void {
