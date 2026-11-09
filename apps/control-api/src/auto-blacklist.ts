@@ -3,7 +3,7 @@ import { BlockList, isIP } from "node:net";
 import { BlocklistEntrySchema, parseCidr, type BlocklistEntry } from "@semantic-defense/contracts";
 import type { Db, Queryable } from "./db.js";
 import { writeAudit } from "./audit.js";
-import { loadThresholds } from "./thresholds.js";
+import { loadThresholds, type WarnLog } from "./thresholds.js";
 import { insertActiveBlocklistEntry } from "./blocklist-store.js";
 
 /**
@@ -50,12 +50,15 @@ export function hostCidr(raw: string): string | null {
   return `${p.address}/${p.prefix}`;
 }
 
-export async function writeAutoBlocklistEntry(db: Db, input: AutoListInput, now: number): Promise<AutoListResult> {
+/** log：門檻 fail-closed 時的 warn 去處（呼叫端傳 tick／app 的 logger）。 */
+export async function writeAutoBlocklistEntry(
+  db: Db, input: AutoListInput, now: number, log?: WarnLog,
+): Promise<AutoListResult> {
   const ip = hostCidr(input.ip);
   if (ip === null) return { status: "invalid_ip" };
   return db.tx(async (q): Promise<AutoListResult> => {
     await q.query("LOCK TABLE allowlist_entries IN SHARE MODE");
-    const { auto } = await loadThresholds(q);
+    const { auto } = await loadThresholds(q, log);
     if (!(input.confidence >= auto)) return { status: "below_auto_threshold" };
     if (await allowlisted(q, ip, now)) return { status: "allowlisted" };
     const draft = BlocklistEntrySchema.parse({

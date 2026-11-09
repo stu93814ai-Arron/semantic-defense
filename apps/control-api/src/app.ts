@@ -13,7 +13,8 @@ import { registerAuditRoute } from "./audit.js";
 import { registerThresholdRoutes } from "./thresholds.js";
 import { registerWhitelistRoutes } from "./whitelist.js";
 import { registerBlacklistRoutes } from "./blacklist.js";
-import { badJsonError, installErrorHandler, withSafeReqLog } from "./errors.js";
+import { badJsonError, installErrorHandler, safeErr, withSafeReqLog } from "./errors.js";
+import { runJudgeTick } from "./judge.js";
 
 export type BuildAppOptions = {
   idleTimeoutMs?: number;
@@ -28,6 +29,8 @@ export type BuildAppOptions = {
   management?: { host: string; port: number };
   /** Fastify logger 設定（可注入 stream 等）；省略＝Fastify 預設 logger（true）。預設 req 序列化不含 headers／body。 */
   logger?: FastifyServerOptions["logger"];
+  /** 判定 tick 間隔（ms）；預設 5000，0＝關閉（測試直接呼叫 runJudgeTick）。 */
+  judgeIntervalMs?: number;
   /** 測試用：ready／listen 前掛額外路由（例如無 roles 探針）。 */
   beforeReady?: (app: ControlApi) => void | Promise<void>;
 };
@@ -188,6 +191,18 @@ function installRouteAudit(app: ControlApi): void {
   });
 }
 
+/** 定期跑判定 tick（同一實例不重疊）；回傳的 stop 清 timer 並等進行中的 tick 結束。 */
+function startJudgeTimer(app: ControlApi, db: Db, now: Clock, ms: number): () => Promise<void> {
+  if (ms <= 0) return async () => {};
+  let inflight: Promise<unknown> | undefined;
+  const t = setInterval(() => {
+    inflight ??= runJudgeTick(db, now(), app.log)
+      .catch((err: unknown) => app.log.error({ err: safeErr(err as Parameters<typeof safeErr>[0]) }, "judge tick failed"))
+      .finally(() => { inflight = undefined; });
+  }, ms);
+  return async () => { clearInterval(t); await inflight; };
+}
+
 export async function buildApp(opts: BuildAppOptions = {}): Promise<ControlApi> {
   const idleTimeoutMs = opts.idleTimeoutMs ?? 30 * 60_000;
   const rl = opts.loginRateLimit ?? { maxFailures: 5, windowMs: 60_000 };
@@ -199,7 +214,8 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<ControlApi> 
   allowEmptyJson(app);
   app.decorate("db", db);
   installRouteAudit(app);
-  app.addHook("onClose", async () => { await db.close(); });
+  const stopJudge = startJudgeTimer(app, db, now, opts.judgeIntervalMs ?? 5000);
+  app.addHook("onClose", async () => { await stopJudge(); await db.close(); });
   app.addHook("preHandler", createAuthPreHandler(db, idleTimeoutMs, now));
   registerLogin(app, db, limiter, now);
   registerSessionRoutes(app, db);

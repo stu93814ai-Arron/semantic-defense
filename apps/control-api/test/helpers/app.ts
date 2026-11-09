@@ -27,9 +27,12 @@ export type BuildAppOptions = ImplBuildAppOptions & {
   beforeReady?: (app: ControlApi) => void | Promise<void>;
 };
 
-/** 測試預設 logger:false（CI log 不灌 request log）；要驗 log 的測試自行注入 `logger: { stream }`。 */
+/**
+ * 測試預設 logger:false（CI log 不灌 request log）；要驗 log 的測試自行注入 `logger: { stream }`。
+ * 判定 tick 預設關閉（judgeIntervalMs:0），要驗排程的測試自行開；其餘直接呼叫 runJudgeTick。
+ */
 export async function buildApp(
   opts: BuildAppOptions = {},
 ): Promise<ControlApi> {
-  return buildAppImpl({ logger: false, ...opts } as ImplBuildAppOptions);
+  return buildAppImpl({ logger: false, judgeIntervalMs: 0, ...opts } as ImplBuildAppOptions);
 }

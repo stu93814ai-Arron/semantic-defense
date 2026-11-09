@@ -104,6 +104,8 @@ const SCHEMA_STATEMENTS = [
   PRIMARY KEY (src_ip, sensor_id, app_id, window_start)
 )`,
   "CREATE INDEX IF NOT EXISTS case_hits_ip_window ON case_hits (src_ip, window_start)",
+  // 判定 tick 進度（計畫 §2／§5）：單列，received_upto＝已掃到的 flow_events.received_at（epoch ms）。
+  "CREATE TABLE IF NOT EXISTS judge_cursor (id BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (id), received_upto BIGINT NOT NULL)",
   `CREATE TABLE IF NOT EXISTS audit_events (
   id BIGSERIAL PRIMARY KEY,
   action TEXT NOT NULL,
