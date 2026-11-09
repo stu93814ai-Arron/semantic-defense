@@ -307,3 +307,17 @@ describe("保留位址的 src_ip（資安退回 B1）", () => {
     for (const ip of RESERVED) expect(lines.join("\n")).not.toContain(ip);
   });
 });
+
+describe("case_hits 7 天清除依 first_seen_at（資安退回 R3）", () => {
+  it("命中第一次寫入後被重掃刷新 updated_at，+7 天的空 tick 仍會刪掉", async () => {
+    await boot();
+    await scan("203.0.113.10", T0 - 2 * MIN, T0 - MIN);
+    await runJudgeTick(app.db, T0);
+    await scan("203.0.113.10", T0 - 2 * MIN, T0 + 6 * DAY, 1);
+    await runJudgeTick(app.db, T0 + 6 * DAY);
+    const at = await app.db.query<{ first_seen_at: string; updated_at: string }>("SELECT first_seen_at, updated_at FROM case_hits");
+    expect(at.rows).toEqual([{ first_seen_at: String(T0), updated_at: String(T0 + 6 * DAY) }]);
+    await runJudgeTick(app.db, T0 + 7 * DAY);
+    expect(await hits()).toEqual([]);
+  });
+});

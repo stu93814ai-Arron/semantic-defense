@@ -19,7 +19,7 @@ import { writeAudit } from "./audit.js";
  *   重掃（命中已存在）只以 GREATEST 拉高 open 待審的 max（raiseCaseMax）。
  * - 門檻走 loadThresholds（fail-closed）並帶 tick 的 logger：列值不合上下限時 log.warn。
  * - 每次開始先把所有已到期的 open case 收成 expired（resolved_at = expires_at），不必等同 IP 再命中。
- * - 清除：case_hits 最後更新滿 7 天；已結案 case 的 resolved_at 滿 7 天（計畫 Q18）。
+ * - 清除：case_hits 第一次寫入（first_seen_at）滿 7 天；已結案 case 的 resolved_at 滿 7 天（計畫 Q18）。
  * 命中存好後（計畫 §1）：白名單內 → 不開案、不寫稽核（Q13）；已上榜 → 只寫 hit_while_listed（Q16）；否則開案／累加。
  * E3.A 自動上榜（commit 9–11）不在本檔這一步。
  */
@@ -116,7 +116,8 @@ export async function runJudgeTick(db: Db, now: number, log?: WarnLog): Promise<
     for (const k of keys) n[await judgeGroup(q, k, ctx)] += 1;
     // 只記數量，不記 IP
     if (n.skipped > 0) log?.warn({ skipped: n.skipped }, "judge tick skipped non-host src_ip groups");
-    await q.query("DELETE FROM case_hits WHERE updated_at <= $1", [now - RETENTION_MS]);
+    // 依 first_seen_at（第一次寫入、伺服器時間）清：重掃會一直刷新 updated_at，用它清會永遠清不掉（資安退回 R3）
+    await q.query("DELETE FROM case_hits WHERE first_seen_at <= $1", [now - RETENTION_MS]);
     await q.query("DELETE FROM blacklist_cases WHERE state <> 'open' AND resolved_at <= $1", [now - RETENTION_MS]);
     if (upto !== null) {
       await q.query(
