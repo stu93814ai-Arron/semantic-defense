@@ -31,4 +31,12 @@
 ## 影響
 
 - deps commit 只含 package.json 與 pnpm-lock.yaml；exports 與 src 在下一個 commit。
-- control-api 的測試若需要寫入 `flow_events`，不能走寫入入口，屆時另行處理（第 2 批前提出）。
+- control-api 的測試若需要寫入 `flow_events`，不能走寫入入口；處理方式見下方補充。
+
+## 補充：測試入口 `./testing`（A 組領航員 11-09）
+
+- 新增第三個入口 `@semantic-defense/flow-store/testing`（`src/testing.ts`），只放測試用的建表與塞資料輔助（`createFlowTables`、`insertFlowEvents`）。它呼叫 `write.ts`，自己不寫任何 DDL，所以 DDL 仍只有 `write.ts` 一處。
+- control-api 的測試用 `./testing` 建表、塞資料，仍不得 import `./write`。
+- control-api 與 sensor-ingest 的產品碼（`src`）不得 import `./testing`。
+- 以上由 `boundary.test.ts` 鎖住：exports 恰為三個入口、產品碼不 import `./testing`，並保留 control-api 不 import `./write` 的檢查。
+- 這仍在總召 2026-11-09 17:35 的條件內：產品碼的邊界不變（control-api 產品碼只用 `./read`），DDL 只在一處，部署獨立，也沒有引入外部套件。

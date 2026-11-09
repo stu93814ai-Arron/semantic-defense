@@ -10,6 +10,8 @@ import { describe, expect, it } from "vitest";
  * 3. 唯讀入口不得（直接或間接）引入 write.ts。
  * 4. flow_events／flow_rejections 的 DDL（CREATE TABLE／INDEX）只在 packages/flow-store/src/write.ts 一處。
  * 5. flow-store 不依賴任何 app。
+ * 6. 測試入口 ./testing（A 組領航員 11-09）：只放建表／塞資料的測試輔助，可 import write.ts、本身無 DDL；
+ *    control-api 測試可用，但 control-api／sensor-ingest 的產品碼（src）不得 import。
  */
 const PKG = resolve(__dirname, "..");
 const REPO = resolve(PKG, "../..");
@@ -24,20 +26,35 @@ const isCode = (f: string) => /\.(m|c)?[jt]sx?$/.test(f);
 const SPEC = /(?:import|export)\s[^'"`;]*?from\s*['"`]([^'"`]+)['"`]|import\s*['"`]([^'"`]+)['"`]|(?:require|import)\s*\(\s*['"`]([^'"`]+)['"`]\s*\)/g;
 export const specifiers = (src: string): string[] => [...src.matchAll(SPEC)].map((m) => (m[1] ?? m[2] ?? m[3])!);
 
-/** spec 是否指到寫入入口（套件路徑或相對／絕對路徑進 flow-store/src 但不是 read）。 */
-function hitsWriteEntry(spec: string, fromFile: string): boolean {
-  if (spec.startsWith("@semantic-defense/flow-store")) return spec !== "@semantic-defense/flow-store/read";
-  if (!spec.startsWith(".") && !spec.startsWith("/")) return false;
+/** 相對／絕對路徑解析成 flow-store/src 內的相對路徑；不在 src 內 → null（指到套件根目錄回 ""）。 */
+function srcRel(spec: string, fromFile: string): string | null {
+  if (!spec.startsWith(".") && !spec.startsWith("/")) return null;
   const abs = spec.startsWith("/") ? spec : resolve(dirname(fromFile), spec);
   const rel = relative(join(PKG, "src"), abs);
-  if (rel.startsWith("..")) return relative(PKG, abs) === ""; // 指到套件根目錄也算
-  return !/^read(\.[jt]s)?$/.test(rel);
+  if (rel.startsWith("..")) return relative(PKG, abs) === "" ? "" : null;
+  return rel;
+}
+
+/** spec 是否指到寫入入口（套件路徑或相對／絕對路徑進 flow-store/src 但不是 read／testing）。 */
+function hitsWriteEntry(spec: string, fromFile: string): boolean {
+  if (spec.startsWith("@semantic-defense/flow-store")) {
+    return !["@semantic-defense/flow-store/read", "@semantic-defense/flow-store/testing"].includes(spec);
+  }
+  const rel = srcRel(spec, fromFile);
+  return rel !== null && !/^(?:read|testing)(\.[jt]s)?$/.test(rel);
+}
+
+/** spec 是否指到測試入口 ./testing。 */
+function hitsTestingEntry(spec: string, fromFile: string): boolean {
+  if (spec.startsWith("@semantic-defense/flow-store")) return spec === "@semantic-defense/flow-store/testing";
+  const rel = srcRel(spec, fromFile);
+  return rel !== null && /^testing(\.[jt]s)?$/.test(rel);
 }
 
 describe("flow-store 入口與邊界", () => {
-  it("package.json exports 恰為 ./write 與 ./read，且檔案存在", () => {
+  it("package.json exports 恰為 ./write、./read 與 ./testing，且檔案存在", () => {
     const pj = JSON.parse(readFileSync(join(PKG, "package.json"), "utf8")) as { exports?: Record<string, string> };
-    expect(pj.exports).toEqual({ "./write": "./src/write.ts", "./read": "./src/read.ts" });
+    expect(pj.exports).toEqual({ "./write": "./src/write.ts", "./read": "./src/read.ts", "./testing": "./src/testing.ts" });
     for (const f of Object.values(pj.exports!)) expect(existsSync(join(PKG, f)), f).toBe(true);
   });
 
@@ -99,5 +116,26 @@ describe("flow-store 入口與邊界", () => {
     const src = walk(join(PKG, "src")).filter(isCode);
     expect(src.length).toBeGreaterThan(0);
     expect([...src, join(PKG, "package.json")].filter((f) => APP_REF.test(readFileSync(f, "utf8")))).toEqual([]);
+  });
+});
+
+describe("flow-store 測試入口 ./testing（A 組領航員 11-09）", () => {
+  it("判斷器：./testing 不算寫入入口，另由 hitsTestingEntry 認出（夾具）", () => {
+    const viaSrc = join(REPO, "apps/control-api/src/x.ts");
+    const viaTest = join(REPO, "apps/control-api/test/x.test.ts");
+    expect(hitsWriteEntry("@semantic-defense/flow-store/testing", viaTest)).toBe(false);
+    expect(hitsWriteEntry("../../../packages/flow-store/src/testing.js", viaTest)).toBe(false);
+    expect(hitsTestingEntry("@semantic-defense/flow-store/testing", viaSrc)).toBe(true);
+    expect(hitsTestingEntry("../../../packages/flow-store/src/testing.js", viaSrc)).toBe(true);
+    expect(hitsTestingEntry("@semantic-defense/flow-store/read", viaSrc)).toBe(false);
+    expect(hitsTestingEntry("../../../packages/flow-store/src/write.js", viaSrc)).toBe(false);
+  });
+
+  it("control-api／sensor-ingest 的產品碼（src）不 import 測試入口", () => {
+    const files = ["apps/control-api/src", "apps/sensor-ingest/src"].flatMap((d) => walk(join(REPO, d))).filter(isCode);
+    expect(files.length).toBeGreaterThan(0);
+    const bad = files.flatMap((f) => specifiers(readFileSync(f, "utf8"))
+      .filter((s) => hitsTestingEntry(s, f)).map((s) => `${relative(REPO, f)}: ${s}`));
+    expect(bad).toEqual([]);
   });
 });

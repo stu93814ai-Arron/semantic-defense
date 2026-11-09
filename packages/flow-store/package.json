@@ -18,6 +18,7 @@
   },
   "exports": {
     "./write": "./src/write.ts",
-    "./read": "./src/read.ts"
+    "./read": "./src/read.ts",
+    "./testing": "./src/testing.ts"
   }
 }
