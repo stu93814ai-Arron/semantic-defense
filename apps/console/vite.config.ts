@@ -9,13 +9,21 @@ const root = dirname(fileURLToPath(import.meta.url));
 export default defineConfig({
   plugins: [phase2ApiPlugin()],
   resolve: {
-    alias: {
-      "@semantic-defense/contracts/ip-cidr.js": resolve(
-        root,
-        "../../packages/contracts/src/ip-cidr.ts",
-      ),
-      "node:net": resolve(root, "src/shims/node-net.ts"),
-    },
+    alias: [
+      // 精確比對根入口（勿用字串前綴，否則會吃掉 /ip-cidr.js）
+      {
+        find: /^@semantic-defense\/contracts$/,
+        replacement: resolve(root, "src/shims/contracts-browser.ts"),
+      },
+      {
+        find: "@semantic-defense/contracts/ip-cidr.js",
+        replacement: resolve(root, "../../packages/contracts/src/ip-cidr.ts"),
+      },
+      {
+        find: "node:net",
+        replacement: resolve(root, "src/shims/node-net.ts"),
+      },
+    ],
   },
   server: { host: "127.0.0.1", port: 5173, strictPort: true },
   esbuild: { jsx: "automatic" },
