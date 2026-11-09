@@ -84,7 +84,10 @@ describe("R-A：flow_ts_ms 遇 'infinity'／'-infinity'（0A000 feature_not_supp
     await ensureFlowSchema(db);
     const r = await db.query<{ prosrc: string }>(
       "SELECT prosrc FROM pg_proc WHERE proname = 'flow_ts_ms' AND pronamespace = current_schema()::regnamespace");
-    const handlers = [...r.rows[0]!.prosrc.matchAll(/WHEN\s+([\s\S]*?)\s+THEN/gi)].map((m) => m[1]!.split(/\s+OR\s+/i).map((c) => c.trim().toLowerCase()));
+    expect(r.rows).toHaveLength(1); // 同名只有一個：不得另有 overload（例如帶 WHEN OTHERS 的版本）而本測試只看到其中一個
+    // 先去掉 SQL 註解（-- 行尾、/* */），註解裡的 WHEN … THEN 不算 handler
+    const src = r.rows[0]!.prosrc.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/--[^\n]*/g, " ");
+    const handlers = [...src.matchAll(/WHEN\s+([\s\S]*?)\s+THEN/gi)].map((m) => m[1]!.split(/\s+OR\s+/i).map((c) => c.trim().toLowerCase()));
     expect(handlers).toEqual([["data_exception", "feature_not_supported"]]);
   });
 });
