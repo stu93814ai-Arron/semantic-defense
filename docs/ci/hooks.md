@@ -23,7 +23,7 @@ pre-commit 只檢查**暫存區（index）**的內容，不讀工作目錄未暫
 因此：已 `git add` 的紅碼會擋 commit；只存在工作目錄、尚未暫存的紅碼不會擋。請仍養成「要提交的變更都先 add」的習慣。
 
 ## 測試
-`.ci/test-precommit-index-only.sh`：在拋棄式 repo 驗證 (a) 暫存紅／WD 綠 → 拒、(b) 暫存綠／WD 紅 → 過、(c) WD／index／stash 不變、(d) 中途失敗仍還原。
+`scripts/test-precommit-index-only.sh`：在拋棄式 repo 驗證 (a) 暫存紅／WD 綠 → 拒、(b) 暫存綠／WD 紅 → 過、(c) WD／index／stash 不變、(d) 中途失敗仍還原。
 
 ## `git commit -n`（跳過 hook）規範
 - 只有緊急情況才可以使用。
