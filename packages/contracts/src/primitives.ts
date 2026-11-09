@@ -8,8 +8,10 @@ export const NonNegInt = z.number().int().nonnegative();
 
 export const Port = z.number().int().min(1).max(65535);
 
-/** RFC3339（含 offset）。 */
-export const Rfc3339 = z.iso.datetime({ offset: true });
+/** offset 時數 ≥16（Postgres timestamptz 只收 ±15:59；超過會讓下游 ts::timestamptz 拋錯，資安退回 B2）。 */
+const OFFSET_OVER_15H = /[+-](?:1[6-9]|[2-9]\d):\d{2}$/;
+/** RFC3339（含 offset，限 ±15:59；Z 照收）。 */
+export const Rfc3339 = z.iso.datetime({ offset: true }).refine((s) => !OFFSET_OVER_15H.test(s), { message: "offset_out_of_range" });
 
 /** 單一 IPv4／IPv6；拒 CIDR（/）、zone（%）、非 RFC5952、IPv4-mapped；保留位址可過。 */
 export const SingleIp = z.string().refine(assertFlowSingleIp, { message: "single_ip" });
