@@ -18,12 +18,12 @@ pre-push 只是快速檢查，不會寫入 gate-history。正式紀錄仍然要�
 ## 注意
 遠端庫已公開。推送到遠端時 pre-push 會跑型別檢查與 lint。完整閘門在 GitHub Actions（見 [github-actions.md](./github-actions.md)）。合入 `main` 的快轉契約、現況保護，以及尚未套用的修正，都寫在該檔。GitHub 的「必須線性歷史」不是快轉。
 
-pre-commit 只檢查**暫存區（index）**的內容，不讀工作目錄未暫存的改動。實作方式：`git checkout-index -a --prefix=<tmpdir>/` 匯出 index 到暫存目錄，再把本 worktree 的 `node_modules` 用 symlink 接過去跑檢查；`trap` 保證結束時刪掉暫存目錄。不用 `git stash`，因此不會碰到主目錄「禁止 stash」規則，也不會動到別人 worktree 既有的 stash 堆疊。
+pre-commit 只檢查**暫存區（index）**的內容，不讀工作目錄未暫存的改動。實作方式：`git checkout-index -a --prefix=<tmpdir>/` 匯出 index 到暫存目錄；根目錄 `node_modules` 用 symlink，**`packages/*`／`apps/*` 的 `node_modules` 用 `cp -a` 複製**（保留 pnpm 相對連結，讓它們解析到暫存目錄內的 `packages/*`，而不是工作目錄）。若對套件 `node_modules` 也用 symlink，相對路徑會指回工作目錄的 src，index 隔離會失效。`trap`＋`rm -rf "${TMP:?}"` 保證結束時刪掉暫存目錄。不用 `git stash`，因此不會碰到主目錄「禁止 stash」規則，也不會動到別人 worktree 既有的 stash 堆疊。
 
-因此：已 `git add` 的紅碼會擋 commit；只存在工作目錄、尚未暫存的紅碼不會擋。請仍養成「要提交的變更都先 add」的習慣。
+因此：已 `git add` 的紅碼會擋 commit；只存在工作目錄、尚未暫存的紅碼不會擋。跨套件改名（例如只暫存 contracts 匯出改名、依賴方未改）也會被擋下。請仍養成「要提交的變更都先 add」的習慣。
 
 ## 測試
-`scripts/test-precommit-index-only.sh`：在拋棄式 repo 驗證 (a) 暫存紅／WD 綠 → 拒、(b) 暫存綠／WD 紅 → 過、(c) WD／index／stash 不變、(d) 中途失敗仍還原。
+`scripts/test-precommit-index-only.sh`：拋棄式 stub repo 驗證 (a)–(d)；另以真實 monorepo（實際 pnpm/tsc）驗證 (r1) 暫存 contracts 改名、依賴未改 → 拒、(r2) 暫存綠、WD contracts 紅 → 過，並確認套件 `node_modules` 相對連結落在暫存樹內。
 
 ## `git commit -n`（跳過 hook）規範
 - 只有緊急情況才可以使用。

@@ -9,7 +9,7 @@ cd "$ROOT"
 
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/sd-precommit-XXXXXX")
 cleanup() {
-  rm -rf "$TMP" 2>/dev/null || true
+  rm -rf "${TMP:?}" 2>/dev/null || true
 }
 trap cleanup EXIT
 trap 'cleanup; exit 130' INT
@@ -42,7 +42,10 @@ if git -C "$ROOT" rev-parse HEAD >/dev/null 2>&1; then
 fi
 echo "secrets: OK"
 
-# 接上依賴：node_modules 不在版控內，從本 worktree 符號連結過去（gitleaks 之後再連）
+# 接上依賴（gitleaks 之後）：
+# - 根目錄 node_modules：symlink（體積大、.pnpm store）
+# - packages/*/apps/*/node_modules：cp -a 複製，保留相對連結，使其解析到 $TMP 內的
+#   packages/*（若 symlink 過去，相對路徑會指回工作目錄的 src，index 隔離就失效）
 if [ -d "$ROOT/node_modules" ]; then
   ln -s "$ROOT/node_modules" "$TMP/node_modules"
 fi
@@ -50,7 +53,8 @@ for d in "$ROOT"/packages/*/node_modules "$ROOT"/apps/*/node_modules; do
   [ -e "$d" ] || continue
   rel=${d#"$ROOT"/}
   mkdir -p "$TMP/$(dirname "$rel")"
-  ln -sfn "$d" "$TMP/$rel"
+  rm -rf "${TMP:?}/$rel"
+  cp -a "$d" "$TMP/$rel"
 done
 
 # --- typecheck / eslint：在暫存樹內跑，看不到工作目錄未暫存改動 ---
