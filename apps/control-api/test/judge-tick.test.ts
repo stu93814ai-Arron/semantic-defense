@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import type { FlowMetadataEvent } from "@semantic-defense/contracts";
-import { createFlowTables, insertFlowEvents } from "@semantic-defense/flow-store/testing";
+import { createFlowTables, insertFlowEvents, insertLegacyFlowEvents } from "@semantic-defense/flow-store/testing";
 import { buildApp, seedPhase2Fixtures, type ControlApi } from "./helpers/app.js";
 import { requireDatabaseUrl } from "./helpers/pg.js";
 import { JUDGE_LOCK, runJudgeTick } from "../src/judge.js";
@@ -350,20 +350,44 @@ describe("hit_while_listed 去重查詢的 partial index（資安退回 R5）", 
   });
 });
 
-describe("每組一個 SAVEPOINT：Postgres 不收的 ts 不再讓整個 tick rollback（資安退回 B2）", () => {
+describe("判定只讀 ts_ms（ts slice；B2 改寫）：ts_ms NULL 的列不分組、只計數，cursor 照常前進", () => {
   const BAD_TS = ["0000-01-01T00:00:00Z", "2026-11-08T23:58:00+23:59", "2026-11-08T23:58:00-23:59"];
+  const NULL_TS_MSG = "judge tick skipped rows without ts_ms";
+  /** 舊列（ts_ms NULL）：Postgres 不收的 ts，模擬 ts_ms 之前就寫入、回填也算不出值的列。 */
+  const poison = (n: number, receivedAt: number) => insertLegacyFlowEvents(app.db, Array.from({ length: n }, (_, i) => ({
+    flow: { ...flow(`198.51.${Math.floor(i / 250)}.${(i % 250) + 1}`, T0 - 2 * MIN, 1000, true), ts: BAD_TS[i % 3]! },
+    sensorId: "s-1", receivedAt })));
+  const logged = () => lines.map((l) => JSON.parse(l) as object);
 
-  it("3 筆壞 ts（各自一組）與正常 IP 同批 → tick 成功、正常 IP 成案、cursor 前進；warn {failed:3} 不帶 IP／ts", async () => {
+  it("50 筆舊毒列排在佇列最前＋正常 IP 同批 → 正常 IP 成案、cursor 前進；log 只有 {null_ts:50}，不帶 IP／ts", async () => {
     await boot();
-    await insertFlowEvents(app.db, BAD_TS.map((ts, i) => ({
-      flow: { ...flow(`198.51.100.${i + 1}`, T0 - 2 * MIN, 1000, true), ts }, sensorId: "s-1", receivedAt: T0 - MIN })));
+    await poison(50, T0 - 2 * MIN);
     await scan("203.0.113.11", T0 - 2 * MIN, T0 - 30_000);
-    await expect(runJudgeTick(app.db, T0, log)).resolves.toMatchObject({ ran: true, hits: 1 });
+    await expect(runJudgeTick(app.db, T0, log)).resolves.toMatchObject({ ran: true, hits: 1, groups: 1 });
     expect((await cases()).map((c) => c.ip)).toEqual(["203.0.113.11/32"]);
     expect(await cursor()).toEqual([{ received_upto: String(T0 - 30_000) }]);
-    expect(lines.map((l) => JSON.parse(l) as object)).toEqual([
-      { failed: 3, codes: { "22008": 1, "22009": 2 }, msg: "judge tick rolled back failed groups" }]);
-    for (const s of [...BAD_TS, "198.51.100", "0000-01-01"]) expect(lines.join("\n")).not.toContain(s);
+    expect(logged()).toEqual([{ null_ts: 50, msg: NULL_TS_MSG }]);
+    for (const s of [...BAD_TS, "198.51.", "0000-01-01"]) expect(lines.join("\n")).not.toContain(s);
+  });
+
+  it("整批只有毒列 → 不成案、cursor 仍推到這批最大 received_at；重疊區再看到不重複計數", async () => {
+    await boot();
+    await poison(3, T0 - MIN);
+    await runJudgeTick(app.db, T0, log);
+    expect(await cases()).toEqual([]);
+    expect(await cursor()).toEqual([{ received_upto: String(T0 - MIN) }]);
+    await runJudgeTick(app.db, T0 + 1000, log);
+    expect(logged()).toEqual([{ null_ts: 3, msg: NULL_TS_MSG }]);
+  });
+
+  it("ts_ms 已寫入、ts 為 +23:59 的列 → 依 ts_ms 正常判定（不再對 ts 做 ::timestamptz）", async () => {
+    await boot();
+    await insertFlowEvents(app.db, Array.from({ length: 30 }, (_, i) => ({
+      flow: { ...flow("203.0.113.13", T0, 1000 + i, true), ts: BAD_TS[1]! }, sensorId: "s-1", receivedAt: T0 - MIN })));
+    await runJudgeTick(app.db, T0, log);
+    expect(await cases()).toEqual([{ ip: "203.0.113.13/32", hit_count: 1, has_late: true, max_confidence: 1 }]);
+    expect(Number((await hits())[0]!.window_start)).toBe(Math.floor(Date.parse(BAD_TS[1]!) / (5 * MIN)) * 5 * MIN);
+    expect(lines).toEqual([]);
   });
 });
 
@@ -375,6 +399,16 @@ describe("只吞 SQLSTATE 22（data exception）；其他錯誤讓整個 tick ro
     BEGIN RAISE EXCEPTION 'trap' USING ERRCODE = '${code}'; END $$;
     CREATE TRIGGER test_trap BEFORE INSERT ON case_hits FOR EACH ROW WHEN (NEW.src_ip = '${IP}/32') EXECUTE FUNCTION test_trap();`);
   const untrap = () => app.db.exec("DROP TRIGGER test_trap ON case_hits; DROP FUNCTION test_trap()");
+
+  it("trigger 丟 22008（data exception）→ 只回滾該組、記 {failed:1, codes}，cursor 照常前進（SAVEPOINT 保留，Q5）", async () => {
+    await boot();
+    await scan(IP, T0 - 2 * MIN, T0 - 30_000);
+    await trap("22008");
+    await expect(runJudgeTick(app.db, T0, log)).resolves.toMatchObject({ ran: true, hits: 0 });
+    await untrap();
+    expect(await cursor()).toEqual([{ received_upto: String(T0 - 30_000) }]);
+    expect(lines.map((l) => JSON.parse(l) as object)).toEqual([{ failed: 1, codes: { "22008": 1 }, msg: "judge tick rolled back failed groups" }]);
+  });
 
   it.each(["40P01", "55P03"])("trigger 丟 %s → tick reject、cursor 不變、不寫 failed log；移除後下一個 tick 成案", async (code) => {
     await boot();

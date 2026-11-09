@@ -13,8 +13,9 @@ import { writeAudit } from "./audit.js";
  * - 掃描：新列 received_at ∈ (cursor, now]，每批上限 JUDGE_BATCH；cursor 只推到這批實際看到的最大 received_at
  *   （received_at 是 sensor-ingest 的時鐘，不能跳到 control-api 的 now）；沒有新列就不動。
  *   另掃 (cursor − 60s, cursor] 的重疊，涵蓋接收時間較早但較晚 commit 的列。
+ * - 分窗只用 ts_ms（ts slice）：ts_ms NULL 的列不分組、只計數（log {null_ts}），cursor 照常前進，毒列不會卡住佇列。
  * - 每組從 flow_events 重讀整組再算：confidence 用全部 flow；ontime_confidence 只用準時 flow（全部遲到 → NULL）。
- *   遲到＝received_at − ts > 5 分鐘。confidence ≥ case 才存命中（case_hits 絕對值 upsert，重掃冪等）；
+ *   遲到＝received_at − ts_ms > 5 分鐘。confidence ≥ case 才存命中（case_hits 絕對值 upsert，重掃冪等）；
  *   命中第一次寫入時才累加待審（hit_count +1、max 取大），所以重掃不會重複累加；
  *   重掃（命中已存在）只以 GREATEST 拉高 open 待審的 max（raiseCaseMax）。
  * - 門檻走 loadThresholds（fail-closed）並帶 tick 的 logger：列值不合上下限時 log.warn。
@@ -31,27 +32,34 @@ export type TickResult = { ran: boolean; groups: number; hits: number };
 const NOOP: TickResult = { ran: false, groups: 0, hits: 0 };
 
 type GroupKey = { sensor_id: string; app_id: string; src_ip: string; win: number };
-/** 分組鍵欄位（窗由 ts 算，與 judgeFlows 同用 Date.parse）；新列另帶 received_at 推 cursor。 */
-type KeyRow = Pick<FlowEventRow, "sensor_id" | "app_id" | "src_ip" | "ts">;
+/**
+ * 分組鍵欄位：窗由 ts_ms 算（ingest 以 Date.parse 寫入／啟動時 SQL 同值回填，與 judgeFlows 一致）；新列另帶 received_at 推 cursor。
+ * ts_ms NULL（ts 無法換算的舊列）→ 不分組，只計入 stats.nullTs；仍參與 upto，cursor 照常前進（ts slice）。
+ */
+type KeyRow = Pick<FlowEventRow, "sensor_id" | "app_id" | "src_ip" | "ts_ms">;
 type ScanRow = KeyRow & Pick<FlowEventRow, "received_at">;
 /** 一個 tick 內共用：門檻、白名單判斷（每個 tick 只讀一次）、時間、本 tick 計數（被去重的 hit_while_listed）。 */
-type TickCtx = { th: FlowThresholds; isAllowlisted: (ip: string) => boolean; now: number; stats: { suppressed: number; codes: Map<string, number> } };
+type TickCtx = { th: FlowThresholds; isAllowlisted: (ip: string) => boolean; now: number;
+  stats: { suppressed: number; codes: Map<string, number>; nullTs: number } };
 
 /** upto：這批實際看到的最大 received_at（沒有新列 → null，cursor 不動）。不用 control-api 的 now，ingest 時鐘較慢時才不會漏列。 */
-async function scanGroups(q: Queryable, cursor: number, now: number): Promise<{ keys: GroupKey[]; upto: number | null }> {
+async function scanGroups(q: Queryable, cursor: number, now: number): Promise<{ keys: GroupKey[]; upto: number | null; nullTs: number }> {
   const fresh = (await q.query<ScanRow>(
-    `SELECT sensor_id, app_id, src_ip, ts, received_at FROM flow_events
+    `SELECT sensor_id, app_id, src_ip, ts_ms, received_at FROM flow_events
      WHERE received_at > $1 AND received_at <= $2 ORDER BY received_at LIMIT ${JUDGE_BATCH}`, [cursor, now])).rows;
+  // 重疊區只取可分組的列：NULL 列在第一次掃到時已計數，不重複計
   const overlap = (await q.query<KeyRow>(
-    `SELECT sensor_id, app_id, src_ip, ts FROM flow_events
-     WHERE received_at > $1 AND received_at <= $2`, [cursor - JUDGE_OVERLAP_MS, cursor])).rows;
+    `SELECT sensor_id, app_id, src_ip, ts_ms FROM flow_events
+     WHERE received_at > $1 AND received_at <= $2 AND ts_ms IS NOT NULL`, [cursor - JUDGE_OVERLAP_MS, cursor])).rows;
   const keys = new Map<string, GroupKey>();
+  let nullTs = 0;
   for (const r of [...overlap, ...fresh]) {
-    const win = Math.floor(Date.parse(r.ts) / FLOW_WINDOW_MS) * FLOW_WINDOW_MS;
+    if (r.ts_ms === null) { nullTs += 1; continue; }
+    const win = Math.floor(Number(r.ts_ms) / FLOW_WINDOW_MS) * FLOW_WINDOW_MS;
     keys.set(JSON.stringify([r.sensor_id, r.app_id, r.src_ip, win]), { sensor_id: r.sensor_id, app_id: r.app_id, src_ip: r.src_ip, win });
   }
   const last = fresh.at(-1);
-  return { keys: [...keys.values()], upto: last ? Number(last.received_at) : null };
+  return { keys: [...keys.values()], upto: last ? Number(last.received_at) : null, nullTs };
 }
 
 const toFlow = (r: FlowEventRow): FlowMetadataEvent => ({
@@ -102,11 +110,11 @@ async function judgeGroup(q: Queryable, k: GroupKey, ctx: TickCtx): Promise<"hit
   if (hostCidr(k.src_ip) === null) return "skipped";
   const rows = (await q.query<FlowEventRow>(
     `SELECT * FROM flow_events WHERE sensor_id = $1 AND app_id = $2 AND src_ip = $3
-       AND ts::timestamptz >= to_timestamp($4 / 1000.0) AND ts::timestamptz < to_timestamp($5 / 1000.0)`,
+       AND ts_ms >= $4 AND ts_ms < $5`,
     [k.sensor_id, k.app_id, k.src_ip, k.win, k.win + FLOW_WINDOW_MS])).rows;
   const all = judgeFlows(rows.map(toFlow), th)[0];
   if (!all?.open_case) return "miss";
-  const ontime = rows.filter((r) => Number(r.received_at) - Date.parse(r.ts) <= LATE_MS).map(toFlow);
+  const ontime = rows.filter((r) => Number(r.received_at) - Number(r.ts_ms) <= LATE_MS).map(toFlow);
   const ontimeConfidence = ontime.length > 0 ? judgeFlows(ontime, th)[0]!.confidence : null;
   const { created } = await upsertCaseHit(q, { src_ip: k.src_ip, sensor_id: k.sensor_id, app_id: k.app_id,
     window_start: k.win, confidence: all.confidence, ontime_confidence: ontimeConfidence }, now);
@@ -117,14 +125,14 @@ async function judgeGroup(q: Queryable, k: GroupKey, ctx: TickCtx): Promise<"hit
   return "hit";
 }
 
-/** 組內錯誤的 SQLSTATE；只有 class 22（data exception：0000 年、offset 超界等感測器資料問題）可吞。 */
+/** 組內錯誤的 SQLSTATE；只有 class 22（data exception）可吞。ts slice 後判定不再對 ts 做 ::timestamptz，這層 SAVEPOINT 保留作縱深防禦（Q5）。 */
 const sqlState = (e: unknown): string | undefined => {
   const code = (e as { code?: unknown } | null)?.code;
   return typeof code === "string" ? code : undefined;
 };
 
 /**
- * 每組一個 SAVEPOINT（資安退回 B2）：感測器送來 Postgres 不收的 ts（0000 年、offset ±23:59…）會讓 ts::timestamptz 拋錯；
+ * 每組一個 SAVEPOINT（資安退回 B2）：感測器送來 Postgres 不收的 ts（0000 年、offset ±23:59…）在 ts slice 前會讓 ts::timestamptz 拋錯（現已改讀 ts_ms）；
  * 只有 SQLSTATE 22xxx 才 ROLLBACK TO SAVEPOINT 這一組、記入 failed（以 SQLSTATE 計數），其他組照常、cursor 照常前進。
  * 其他錯誤（40P01 deadlock、55P03 lock_not_available、沒有 code 的…）一律往外丟：整個 tick rollback、cursor 不動，
  * 下一個 tick 重判，否則該 IP 會被 cursor 跳過、永遠不再判定（資安退回 B3）。
@@ -144,8 +152,12 @@ async function judgeGroupIsolated(q: Queryable, k: GroupKey, ctx: TickCtx): Prom
   }
 }
 
-/** 每個 tick 各一行，只記數量／SQLSTATE、不記 IP／ts／錯誤訊息：跳過的非主機位址組（B1）、失敗回滾的組（B2／B3）、被去重的 hit_while_listed（R5）。 */
+/**
+ * 每個 tick 各一行，只記數量／SQLSTATE、不記 IP／ts／錯誤訊息：ts_ms NULL 不分組的列（ts slice，Q6 只記 {null_ts}）、
+ * 跳過的非主機位址組（B1）、失敗回滾的組（B2／B3）、被去重的 hit_while_listed（R5）。
+ */
 function logTickCounts(log: WarnLog | undefined, n: { skipped: number; failed: number }, stats: TickCtx["stats"]): void {
+  if (stats.nullTs > 0) log?.warn({ null_ts: stats.nullTs }, "judge tick skipped rows without ts_ms");
   if (n.skipped > 0) log?.warn({ skipped: n.skipped }, "judge tick skipped non-host src_ip groups");
   if (n.failed > 0) log?.warn({ failed: n.failed, codes: Object.fromEntries(stats.codes) }, "judge tick rolled back failed groups");
   if (stats.suppressed > 0) log?.warn({ suppressed: stats.suppressed }, "judge tick suppressed hit_while_listed audits (1 per entry per hour)");
@@ -159,8 +171,8 @@ export async function runJudgeTick(db: Db, now: number, log?: WarnLog): Promise<
     const th = await loadThresholds(q, log);
     await expireOpenCases(q, now);
     const cur = (await q.query<{ received_upto: string }>("SELECT received_upto FROM judge_cursor WHERE id")).rows[0];
-    const { keys, upto } = await scanGroups(q, Number(cur?.received_upto ?? 0), now);
-    const ctx: TickCtx = { th, isAllowlisted: await loadAllowlist(q, now), now, stats: { suppressed: 0, codes: new Map() } };
+    const { keys, upto, nullTs } = await scanGroups(q, Number(cur?.received_upto ?? 0), now);
+    const ctx: TickCtx = { th, isAllowlisted: await loadAllowlist(q, now), now, stats: { suppressed: 0, codes: new Map(), nullTs } };
     const n = { hit: 0, miss: 0, skipped: 0, failed: 0 };
     for (const k of keys) n[await judgeGroupIsolated(q, k, ctx)] += 1;
     logTickCounts(log, n, ctx.stats);
