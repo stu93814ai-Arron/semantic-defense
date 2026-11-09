@@ -194,3 +194,55 @@ describe("重掃時待審 max 以 GREATEST 更新（A 裁定 11-09）", () => {
     expect(await full()).toEqual(before);
   });
 });
+
+describe("白名單 IP 不開案；已上榜 IP 只寫 hit_while_listed（commit 8）", () => {
+  type Audit = { action: string; actor: string; sensor_id: string | null; detail: Record<string, unknown> };
+  const audits = async () => (await app.db.query<Audit>(
+    "SELECT action, actor, sensor_id, detail FROM audit_events WHERE action LIKE 'blacklist.%' ORDER BY id")).rows;
+  const hitIps = async () => (await hits()).map((h) => h.src_ip);
+  const allow = (cidr: string) => app.db.query(
+    "INSERT INTO allowlist_entries VALUES ($1, $2, 'office', 'admin1', $3, NULL)", [randomUUID(), cidr, T0 - DAY]);
+  /** 直接以 SQL 塞黑名單列（可塞 /24，繞過 insertActiveBlocklistEntry 的前綴護欄）。 */
+  const listed = async (ip: string, o: { revoked?: boolean; ended?: boolean; expires?: number } = {}) => {
+    const id = randomUUID();
+    await app.db.query(
+      `INSERT INTO blocklist_entries (entry_id, ip, source, confidence, case_id, created_at, expires_at, approved_by, approved_at, revoked_at, ended_at)
+       VALUES ($1, $2, 'auto', 0.95, $3, $4, $5, 'system:auto', $4, $6, $7)`,
+      [id, ip, randomUUID(), T0 - DAY / 2, o.expires ?? T0 + DAY / 2, o.revoked ? T0 - 1 : null, o.ended ? T0 - 1 : null]);
+    return id;
+  };
+
+  it("白名單 /24 內的 IP 命中 → 存 case_hits、不開案、不寫稽核", async () => {
+    await boot();
+    await allow("203.0.113.0/24");
+    await scan("203.0.113.5", T0 - 2 * MIN, T0 - MIN);
+    await runJudgeTick(app.db, T0);
+    expect([await hitIps(), await cases(), await audits()]).toEqual([["203.0.113.5/32"], [], []]);
+  });
+
+  it("已上榜 IP 再命中 → 存 case_hits、不開案、hit_while_listed 一筆；重掃不重寫、不延長", async () => {
+    await boot();
+    const entry = await listed("203.0.113.5/32");
+    await scan("203.0.113.5", T0 - 2 * MIN, T0 - MIN, 30, "s-2");
+    await runJudgeTick(app.db, T0);
+    await runJudgeTick(app.db, T0 + 10_000);
+    expect([await hitIps(), await cases()]).toEqual([["203.0.113.5/32"], []]);
+    expect(await audits()).toEqual([{ action: "blacklist.hit_while_listed", actor: "system:auto", sensor_id: "s-2",
+      detail: { ip: "203.0.113.5/32", entry_id: entry, app_id: "app-1",
+        window_start: new Date(T0 - 5 * MIN).toISOString(), confidence: 1 } }]);
+    expect((await app.db.query<{ expires_at: string }>("SELECT expires_at FROM blocklist_entries")).rows)
+      .toEqual([{ expires_at: String(T0 + DAY / 2) }]);
+  });
+
+  it("「已上榜」只認 canonical IP 完全相等且生效：生效的 /24、已撤回、已結束、已到期 → 照常成案、不寫稽核", async () => {
+    await boot();
+    await listed("203.0.113.0/24");
+    await listed("198.51.100.1/32", { revoked: true });
+    await listed("198.51.100.2/32", { ended: true });
+    await listed("198.51.100.3/32", { expires: T0 });
+    for (const ip of ["203.0.113.9", "198.51.100.1", "198.51.100.2", "198.51.100.3"]) await scan(ip, T0 - 2 * MIN, T0 - MIN);
+    await runJudgeTick(app.db, T0);
+    expect((await cases()).map((c) => c.ip)).toEqual(["198.51.100.1/32", "198.51.100.2/32", "198.51.100.3/32", "203.0.113.9/32"]);
+    expect(await audits()).toEqual([]);
+  });
+});

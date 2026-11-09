@@ -3,6 +3,8 @@ import { RETENTION_MS, flowEventsReady, type FlowEventRow } from "@semantic-defe
 import type { Db, Queryable } from "./db.js";
 import { loadThresholds, type WarnLog } from "./thresholds.js";
 import { accumulateCase, raiseCaseMax, upsertCaseHit } from "./cases.js";
+import { allowlisted, hostCidr } from "./auto-blacklist.js";
+import { writeAudit } from "./audit.js";
 
 /**
  * 成案流程 commit 7：判定 tick（計畫 §1／§2）。讀 flow_events → 依 (sensor, app, src_ip, 5 分鐘窗) 分組重算 → 命中 → 待審。
@@ -16,7 +18,8 @@ import { accumulateCase, raiseCaseMax, upsertCaseHit } from "./cases.js";
  *   重掃（命中已存在）只以 GREATEST 拉高 open 待審的 max（raiseCaseMax）。
  * - 門檻走 loadThresholds（fail-closed）並帶 tick 的 logger：列值不合上下限時 log.warn。
  * - 清除：case_hits 最後更新滿 7 天；已結案 case 的 resolved_at 滿 7 天（計畫 Q18）。
- * 白名單、已上榜（commit 8）與 E3.A 自動上榜（commit 9–11）不在本檔這一步。
+ * 命中存好後（計畫 §1）：白名單內 → 不開案、不寫稽核（Q13）；已上榜 → 只寫 hit_while_listed（Q16）；否則開案／累加。
+ * E3.A 自動上榜（commit 9–11）不在本檔這一步。
  */
 export const JUDGE_LOCK = 872_364_203;
 export const JUDGE_OVERLAP_MS = 60_000;
@@ -49,6 +52,24 @@ const toFlow = (r: FlowEventRow): FlowMetadataEvent => ({
   bytes_out: Number(r.bytes_out), packets: Number(r.packets), duration_ms: Number(r.duration_ms),
 });
 
+/**
+ * 已上榜（canonical IP 完全相等、ended_at／revoked_at 為 NULL、expires_at > now）→ 不開案、不延長；
+ * 命中第一次寫入時寫一筆 blacklist.hit_while_listed（重掃不重寫）。回是否已上榜。
+ */
+async function onActiveBlocklist(q: Queryable, k: GroupKey, confidence: number, created: boolean, now: number): Promise<boolean> {
+  const ip = hostCidr(k.src_ip)!;
+  const r = await q.query<{ entry_id: string }>(
+    `SELECT entry_id FROM blocklist_entries
+     WHERE ip = $1 AND ended_at IS NULL AND revoked_at IS NULL AND expires_at > $2`, [ip, now]);
+  const entry = r.rows[0];
+  if (!entry) return false;
+  if (created) {
+    await writeAudit(q, { action: "blacklist.hit_while_listed", actor: "system:auto", sensor_id: k.sensor_id, at: now,
+      detail: { ip, entry_id: entry.entry_id, app_id: k.app_id, window_start: new Date(k.win).toISOString(), confidence } });
+  }
+  return true;
+}
+
 /** 重讀整組並判定；confidence ≥ case → 存命中（第一次寫入時累加待審），回 true。 */
 async function judgeGroup(q: Queryable, k: GroupKey, th: FlowThresholds, now: number): Promise<boolean> {
   const rows = (await q.query<FlowEventRow>(
@@ -61,6 +82,8 @@ async function judgeGroup(q: Queryable, k: GroupKey, th: FlowThresholds, now: nu
   const ontimeConfidence = ontime.length > 0 ? judgeFlows(ontime, th)[0]!.confidence : null;
   const { created } = await upsertCaseHit(q, { src_ip: k.src_ip, sensor_id: k.sensor_id, app_id: k.app_id,
     window_start: k.win, confidence: all.confidence, ontime_confidence: ontimeConfidence }, now);
+  if (await allowlisted(q, k.src_ip, now)) return true;
+  if (await onActiveBlocklist(q, k, all.confidence, created, now)) return true;
   if (created) await accumulateCase(q, { ip: k.src_ip, confidence: all.confidence, late: ontime.length < rows.length }, now);
   else await raiseCaseMax(q, k.src_ip, all.confidence, now);
   return true;

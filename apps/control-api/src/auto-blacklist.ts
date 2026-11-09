@@ -29,7 +29,8 @@ export type AutoListResult =
 const addrOf = (s: string) => s.split("/")[0]!;
 const family = (addr: string) => (isIP(addr) === 6 ? "ipv6" : "ipv4");
 
-async function allowlisted(q: Queryable, ip: string, now: number): Promise<boolean> {
+/** ip（單一位址，可帶 /32、/128）是否落在未到期白名單內（CIDR 包含）。判定 tick 也用。 */
+export async function allowlisted(q: Queryable, ip: string, now: number): Promise<boolean> {
   const r = await q.query<{ cidr: string }>(
     "SELECT cidr FROM allowlist_entries WHERE expires_at IS NULL OR expires_at > $1", [now]);
   if (r.rows.length === 0) return false;
