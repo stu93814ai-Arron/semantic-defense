@@ -33,6 +33,8 @@ export type BuildAppOptions = {
   judgeIntervalMs?: number;
   /** E3.A 熔斷上限 N：滑動 1 小時內 source=auto 最多 N 筆（正整數，預設 50；計畫 §6.3，這一刀不做管理頁）。 */
   autoBreakerPerHour?: number;
+  /** E3.A 自動上榜總開關；省略＝AUTO_LIST_ENABLED_DEFAULT（false，關）。關時判定 tick 只開案、不自動上榜。 */
+  autoListEnabled?: boolean;
   /** 測試用：ready／listen 前掛額外路由（例如無 roles 探針）。 */
   beforeReady?: (app: ControlApi) => void | Promise<void>;
 };
@@ -222,7 +224,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<ControlApi> 
   allowEmptyJson(app);
   app.decorate("db", db);
   installRouteAudit(app);
-  const stopJudge = startJudgeTimer(app, db, now, opts.judgeIntervalMs ?? 5000, { autoBreakerPerHour: opts.autoBreakerPerHour });
+  const stopJudge = startJudgeTimer(app, db, now, opts.judgeIntervalMs ?? 5000, { autoBreakerPerHour: opts.autoBreakerPerHour, autoListEnabled: opts.autoListEnabled });
   app.addHook("onClose", async () => { await stopJudge(); await db.close(); });
   app.addHook("preHandler", createAuthPreHandler(db, idleTimeoutMs, now));
   registerLogin(app, db, limiter, now);

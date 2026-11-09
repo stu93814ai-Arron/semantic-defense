@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { insertFlowEvents } from "@semantic-defense/flow-store/testing";
 import { buildApp, type ControlApi } from "./helpers/app.js";
 import { DAY, MIN, T0, auditIndexDefAfterReinit, bootJudgeApp, flowEvent } from "./helpers/judge.js";
-import { runJudgeTick, type TickOpts } from "../src/judge.js";
+import { AUTO_LIST_ENABLED_DEFAULT, runJudgeTick, type TickOpts } from "../src/judge.js";
 import { autoListInTx } from "../src/auto-blacklist.js";
 import { writeAutoBlocklistEntry } from "./helpers/auto-list.js";
 import { requireDatabaseUrl } from "./helpers/pg.js";
@@ -40,7 +40,9 @@ const kases = async () => (await app.db.query<{ case_id: string; ip: string; sta
   "SELECT case_id, ip, state, resolved_by FROM blacklist_cases ORDER BY created_at")).rows;
 const audits = async (action: string) => (await app.db.query<{ actor: string; sensor_id: string | null; detail: Record<string, unknown> }>(
   "SELECT actor, sensor_id, detail FROM audit_events WHERE action = $1 ORDER BY id", [action])).rows;
-const tick = (at = T0, opts: TickOpts = {}) => runJudgeTick(app.db, at, undefined, opts);
+/** 本檔測 E3.A 自動上榜：tick 一律明確開啟總開關（預設關，見檔尾 autoListEnabled 測試）。 */
+const ON = { autoListEnabled: true } as const;
+const tick = (at = T0, opts: TickOpts = {}) => runJudgeTick(app.db, at, undefined, { ...ON, ...opts });
 /** 三個不同窗（T0−25m、−15m、−5m）的命中。 */
 const three = async (apps: [string, string, string], sensors: [string, string, string] = ["s-1", "s-1", "s-1"]) => {
   const plan = [[25, apps[0], sensors[0]], [15, apps[1], sensors[1]], [5, apps[2], sensors[2]]] as const;
@@ -242,7 +244,7 @@ describe("E3.A 熔斷（1 小時內 source=auto ≥ N 筆 → 退回人工審核
 
   it("tick 路徑：熔斷中 E3.A 成立 → auto_suppressed{breaker}、warn、case 仍 open；N 來自 buildApp autoBreakerPerHour", async () => {
     const warns: string[] = [];
-    await boot(undefined, { judgeIntervalMs: 20, autoBreakerPerHour: 3,
+    await boot(undefined, { judgeIntervalMs: 20, autoBreakerPerHour: 3, autoListEnabled: true,
       logger: { level: "warn", stream: { write: (l: string) => { warns.push(l); } } } });
     await autos(3);
     await three(["app-1", "app-2", "app-1"]);
@@ -405,15 +407,15 @@ describe("auto_suppressed 去重：同一 (ip, reason) 每小時最多一筆，�
     lines = [];
     await app.db.query("INSERT INTO allowlist_entries VALUES ($1, '64.0.113.0/24', 'office', 'admin1', $2, NULL)", [randomUUID(), T0 - DAY]);
     await three(["app-1", "app-2", "app-1"]);
-    await runJudgeTick(app.db, T0, log);
+    await runJudgeTick(app.db, T0, log, ON);
     await more(T0);
-    await runJudgeTick(app.db, T0 + 6 * MIN, log);
+    await runJudgeTick(app.db, T0 + 6 * MIN, log, ON);
     expect(await suppressed()).toEqual(["allowlist"]);
     expect(lines.map((l) => JSON.parse(l) as object)).toEqual([
       { deduped: 1, msg: "judge tick deduped auto_suppressed audits (1 per ip+reason per hour)" }]);
     expect(lines.join("\n")).not.toContain("64.0.113");
     for (const off of [40, 50, 60]) await hit({ at: T0 + off * MIN, app: off === 50 ? "app-2" : "app-1" });
-    await runJudgeTick(app.db, T0 + 66 * MIN, log);
+    await runJudgeTick(app.db, T0 + 66 * MIN, log, ON);
     expect(await suppressed()).toEqual(["allowlist", "allowlist"]);
   });
 
@@ -482,5 +484,40 @@ describe("鎖等待測試護欄（資安 low）：等鎖的連線設 lock_timeou
       (await q.query<{ lock_timeout: string }>("SHOW lock_timeout")).rows[0]!.lock_timeout;
     expect(await show(app.db)).toBe(`${LOCK_TIMEOUT_MS / 1000}s`);
     expect(LOCK_TEST_TIMEOUT_MS).toBeGreaterThan(LOCK_TIMEOUT_MS * 2);
+  });
+});
+
+describe("autoListEnabled（總開關，預設關）：關時 tick 完全不做自動上榜", () => {
+  it("預設值是唯一匯出常數 AUTO_LIST_ENABLED_DEFAULT = false", () => {
+    expect(AUTO_LIST_ENABLED_DEFAULT).toBe(false);
+  });
+
+  it("未指定（預設關）：E3.A 成立、白名單、熔斷都一樣 → 不上榜、案件留待審、不寫任何上榜相關稽核", async () => {
+    await boot();
+    await autos(50, T0 - 90 * MIN);
+    await app.db.query("UPDATE auto_breaker SET opened_at = $1 WHERE id", [T0 - 70 * MIN]);
+    await three(["app-1", "app-2", "app-1"]);
+    for (const [off, a] of [[25, "app-1"], [15, "app-2"], [5, "app-1"]] as const) await hit({ at: T0 - off * MIN, app: a, ip: "64.0.2.9" });
+    await app.db.query("INSERT INTO allowlist_entries VALUES ($1, '64.0.2.0/24', 'office', 'admin1', $2, NULL)", [randomUUID(), T0 - DAY]);
+    await runJudgeTick(app.db, T0);
+    expect((await listed()).filter((e) => !e.ip.startsWith("64.51.100."))).toEqual([]);
+    expect((await kases()).map((c) => [c.ip, c.state])).toEqual([[CIDR, "open"]]);
+    for (const a of ["blacklist.auto_list", "blacklist.auto_suppressed", "blacklist.auto_breaker_open", "blacklist.auto_breaker_close"]) {
+      expect(await audits(a)).toEqual([]);
+    }
+    expect(await opened()).toEqual([{ opened_at: String(T0 - 70 * MIN) }]);
+  });
+
+  it("buildApp 排程（預設關）：E3.A 成立 → 案件留待審、不上榜", async () => {
+    await boot(undefined, { judgeIntervalMs: 20 });
+    await app.db.query("DELETE FROM judge_cursor"); // 前一個測試的 cursor 會跳過本測試較早收到的列
+    // 排程在 boot 重建 fixtures 前就可能先跑，前一個測試的列／命中會混進來：本測試用沒人用過的 IP
+    const ip = "64.0.113.77";
+    for (const [off, a] of [[25, "app-1"], [15, "app-2"], [5, "app-1"]] as const) await hit({ at: T0 - off * MIN, app: a, ip });
+    const mine = async () => (await kases()).filter((c) => c.ip === `${ip}/32`);
+    const judged = async () => (await app.db.query("SELECT 1 FROM case_hits WHERE src_ip = $1", [`${ip}/32`])).rows.length;
+    await expect.poll(judged, { timeout: 5_000 }).toBe(3);
+    await new Promise((r) => setTimeout(r, 100));
+    expect([await listed(), (await mine()).map((c) => c.state)]).toEqual([[], ["open"]]);
   });
 });

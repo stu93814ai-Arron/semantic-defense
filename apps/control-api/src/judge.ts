@@ -47,10 +47,16 @@ type ScanRow = KeyRow & Pick<FlowEventRow, "received_at">;
  * 只能經 runJudgeTick 第 4 個參數傳入；buildApp 的排程不傳（A 裁定 11-09）。
  */
 export type TickHooks = { beforeAutoList?: () => Promise<void> };
-/** runJudgeTick 第 4 個參數：掛勾＋熔斷上限 N（buildApp 的 autoBreakerPerHour，預設 50）。 */
-export type TickOpts = TickHooks & { autoBreakerPerHour?: number };
+/**
+ * 自動上榜總開關的預設值（唯一來源）：關。關時 tick 完全不做自動上榜——不評估 E3.A、不判熔斷恢復、
+ * 不寫 auto_list／auto_suppressed／auto_breaker_*，案件只留在待審。buildApp 的 autoListEnabled 與測試明確開啟。
+ */
+export const AUTO_LIST_ENABLED_DEFAULT = false;
+/** runJudgeTick 第 4 個參數：掛勾＋熔斷上限 N（buildApp 的 autoBreakerPerHour，預設 50）＋自動上榜總開關。 */
+export type TickOpts = TickHooks & { autoBreakerPerHour?: number; autoListEnabled?: boolean };
 /** 一個 tick 內共用：門檻、白名單（每個 tick 只讀一次；只決定要不要開案）、時間、log、掛勾、本 tick 計數（去重的 hit_while_listed、failed 的 SQLSTATE）。 */
 type TickCtx = { th: FlowThresholds; isAllowlisted: (ip: string) => boolean; now: number; log?: WarnLog; hooks: TickHooks; breakerPerHour: number;
+  autoList: boolean;
   stats: { suppressed: number; deduped: number; codes: Map<string, number>; nullTs: number } };
 
 /** upto：這批實際看到的最大 received_at（沒有新列 → null，cursor 不動）。不用 control-api 的 now，ingest 時鐘較慢時才不會漏列。 */
@@ -122,9 +128,9 @@ type StoredHit = { confidence: number; late: boolean; created: boolean; newHigh:
  * 已在榜 → hit_while_listed；否則累加／提高待審，再評估 E3.A → autoListCase。兩條路徑共用同一個計數函式。
  */
 async function routeHit(q: Queryable, k: GroupKey, ctx: TickCtx, h: StoredHit): Promise<void> {
-  const { th, isAllowlisted, now, log, hooks, breakerPerHour } = ctx;
+  const { th, isAllowlisted, now, log, hooks, breakerPerHour, autoList } = ctx;
   const ip = hostCidr(k.src_ip)!;
-  const e3a = async () => h.newHigh && e3aHolds(await countHighSeverity(q, ip, th.auto, now));
+  const e3a = async () => autoList && h.newHigh && e3aHolds(await countHighSeverity(q, ip, th.auto, now));
   if (isAllowlisted(k.src_ip)) {
     if ((await e3a()) && !(await writeSuppressed(q, { reason: "allowlist", ip, case_id: null }, now))) ctx.stats.deduped += 1;
     return;
@@ -209,6 +215,14 @@ function logTickCounts(log: WarnLog | undefined, n: { skipped: number; failed: n
   for (const [count, obj, msg] of lines) if (count > 0) log.warn(obj, msg);
 }
 
+/** 自動上榜設定（總開關、熔斷 N）；開著才在 tick 開頭判熔斷恢復（關時熔斷狀態原樣不動、不寫 auto_breaker_close）。 */
+async function prepareAutoList(q: Queryable, opts: TickOpts, now: number, log?: WarnLog): Promise<{ breakerPerHour: number; autoList: boolean }> {
+  const breakerPerHour = opts.autoBreakerPerHour ?? AUTO_BREAKER_PER_HOUR;
+  const autoList = opts.autoListEnabled ?? AUTO_LIST_ENABLED_DEFAULT;
+  if (autoList) await recoverBreakerIfOpen(q, breakerPerHour, now, log);
+  return { breakerPerHour, autoList };
+}
+
 export async function runJudgeTick(db: Db, now: number, log?: WarnLog, opts: TickOpts = {}): Promise<TickResult> {
   if (!(await flowEventsReady(db))) return NOOP;
   return db.tx(async (q): Promise<TickResult> => {
@@ -216,11 +230,10 @@ export async function runJudgeTick(db: Db, now: number, log?: WarnLog, opts: Tic
     if (lock.rows[0]?.ok !== true) return NOOP;
     const th = await loadThresholds(q, log);
     await expireOpenCases(q, now);
-    const breakerPerHour = opts.autoBreakerPerHour ?? AUTO_BREAKER_PER_HOUR;
-    await recoverBreakerIfOpen(q, breakerPerHour, now, log);
+    const { breakerPerHour, autoList } = await prepareAutoList(q, opts, now, log);
     const cur = (await q.query<{ received_upto: string }>("SELECT received_upto FROM judge_cursor WHERE id")).rows[0];
     const { keys, upto, nullTs } = await scanGroups(q, Number(cur?.received_upto ?? 0), now);
-    const ctx: TickCtx = { th, isAllowlisted: await loadAllowlist(q, now), now, log, hooks: opts, breakerPerHour, stats: { suppressed: 0, deduped: 0, codes: new Map(), nullTs } };
+    const ctx: TickCtx = { th, isAllowlisted: await loadAllowlist(q, now), now, log, hooks: opts, breakerPerHour, autoList, stats: { suppressed: 0, deduped: 0, codes: new Map(), nullTs } };
     const n = { hit: 0, miss: 0, skipped: 0, failed: 0 };
     for (const k of keys) n[await judgeGroupIsolated(q, k, ctx)] += 1;
     logTickCounts(log, n, ctx.stats);
