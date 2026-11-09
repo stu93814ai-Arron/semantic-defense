@@ -114,6 +114,10 @@ describe("門檻：角色", () => {
       const c = await as(u, p);
       expect((await get(c)).statusCode, u).toBe(403);
       expect((await put(c, { case: 0.6, auto: 0.95 })).statusCode, u).toBe(403);
+      // 護欄：超出上下限／case≥auto 的值也先被角色擋下 → 403，不寫 thresholds.update_rejected
+      for (const bad of [{ case: 0.29, auto: 0.9 }, { case: 0.5, auto: 1.5 }, { case: 0.95, auto: 0.9 }]) {
+        expect((await put(c, bad)).statusCode, `${u} ${JSON.stringify(bad)}`).toBe(403);
+      }
     }
     expect((await get()).statusCode).toBe(401);
     expect((await put(undefined, { case: 0.6, auto: 0.95 })).statusCode).toBe(401);
