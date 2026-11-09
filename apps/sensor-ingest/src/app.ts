@@ -20,6 +20,8 @@ export type BuildIngestOptions = {
   requireHttps?: boolean;
   /** 注入時鐘（epoch ms），預設 Date.now。 */
   now?: () => number;
+  /** 未授權失敗計數 Map 上限（預設 AUTH_FAIL_MAX_KEYS；測試可注入小值）。 */
+  authFailMaxKeys?: number;
 };
 
 declare module "fastify" {
@@ -68,7 +70,7 @@ export async function buildIngest(opts: BuildIngestOptions): Promise<FastifyInst
     : Fastify({ trustProxy: false, bodyLimit: BODY_LIMIT })) as unknown as FastifyInstance;
   const clock = opts.now ?? Date.now;
   await ensureFlowSchema(opts.db);
-  const limiter = createAuthFailLimiter();
+  const limiter = createAuthFailLimiter({ maxKeys: opts.authFailMaxKeys });
   const guard = makeGuard(opts.db, opts.requireHttps ?? true, clock, limiter);
 
   app.setNotFoundHandler((_req, reply) => reply.code(404).send({ error: "查無此路徑" }));

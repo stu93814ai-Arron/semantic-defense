@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { buildIngest } from "../src/app.js";
-import { AUTH_FAIL_LIMIT, AUTH_FAIL_WINDOW_MS } from "../src/rate-limit.js";
+import { AUTH_FAIL_LIMIT, AUTH_FAIL_MAX_KEYS, AUTH_FAIL_WINDOW_MS, createAuthFailLimiter } from "../src/rate-limit.js";
 import { openTestDb, seedToken } from "./helpers.js";
 
 let db: Awaited<ReturnType<typeof openTestDb>>;
@@ -55,6 +55,58 @@ describe("未授權來源 IP 速率限制", () => {
     expect([a.statusCode, b.statusCode]).toEqual([401, 401]);
     expect(a.body).toBe(b.body);
     expect(a.json()).toEqual({ error: "未授權" });
+    await app.close();
+  });
+});
+
+describe("失敗計數 Map 上限與過期清理", () => {
+  const MAX = 4;
+  const block = (l: ReturnType<typeof createAuthFailLimiter>, ip: string, now: number) => {
+    for (let i = 0; i < AUTH_FAIL_LIMIT; i++) l.recordFail(ip, now);
+  };
+
+  it("常數：AUTH_FAIL_MAX_KEYS = 10_000（預設）", () => {
+    expect(AUTH_FAIL_MAX_KEYS).toBe(10_000);
+  });
+
+  it("Map 滿時先清掉已過窗的 key（size 下降）", () => {
+    const l = createAuthFailLimiter({ maxKeys: MAX });
+    for (let i = 0; i < MAX; i++) l.recordFail(`10.0.0.${i}`, T0);
+    expect(l.size()).toBe(MAX);
+    l.recordFail("10.0.1.1", T0 + AUTH_FAIL_WINDOW_MS);
+    expect(l.size()).toBe(1);
+  });
+
+  it("MAX＋1 個 IP 失敗後 size <= MAX，淘汰的是最舊的未封鎖 key", () => {
+    const l = createAuthFailLimiter({ maxKeys: MAX });
+    block(l, "10.0.0.1", T0);
+    for (let i = 0; i < AUTH_FAIL_LIMIT - 1; i++) l.recordFail("10.0.0.2", T0 + 1);
+    l.recordFail("10.0.0.3", T0 + 2);
+    l.recordFail("10.0.0.4", T0 + 3);
+    l.recordFail("10.0.0.5", T0 + 4);
+    expect(l.size()).toBeLessThanOrEqual(MAX);
+    l.recordFail("10.0.0.2", T0 + 5);
+    expect(l.check("10.0.0.2", T0 + 5)).toBe("ok");
+    expect(l.check("10.0.0.1", T0 + 5)).toBe("limited");
+    expect(l.size()).toBeLessThanOrEqual(MAX);
+  });
+
+  it("A 已 429，用新 IP 把 Map 灌滿後 A 仍是 429", async () => {
+    const app = await buildIngest({ db, requireHttps: false, now: () => T0, authFailMaxKeys: MAX });
+    for (let i = 0; i < AUTH_FAIL_LIMIT; i++) await get(app, "10.0.0.1");
+    expect((await get(app, "10.0.0.1")).statusCode).toBe(429);
+    for (let i = 0; i < MAX * 3; i++) expect((await get(app, `10.9.0.${i}`)).statusCode).toBe(401);
+    expect((await get(app, "10.0.0.1")).statusCode).toBe(429);
+    await app.close();
+  });
+
+  it("全部 key 都在封鎖中：新 IP 不被追蹤，照常走認證（401／200），不回 429", async () => {
+    const app = await buildIngest({ db, requireHttps: false, now: () => T0, authFailMaxKeys: 2 });
+    for (const ip of ["10.0.0.1", "10.0.0.2"]) for (let i = 0; i < AUTH_FAIL_LIMIT; i++) await get(app, ip);
+    for (let i = 0; i < AUTH_FAIL_LIMIT + 5; i++) expect((await get(app, "10.0.0.3")).statusCode).toBe(401);
+    const t = await seedToken(db, ["10.0.0.0/8"]);
+    expect((await get(app, "10.0.0.3", { authorization: `Bearer ${t}` })).statusCode).toBe(200);
+    expect((await get(app, "10.0.0.1")).statusCode).toBe(429);
     await app.close();
   });
 });
