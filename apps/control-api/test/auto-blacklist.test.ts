@@ -59,12 +59,12 @@ describe("writeAutoBlocklistEntry：ip 正規化", () => {
     expect(rows).toEqual([{ ip: stored }]);
   });
 
-  it("1.2.3.4 與 1.2.3.4/32 存成同一個值（去重延後：兩筆皆寫入）", async () => {
+  it("1.2.3.4 與 1.2.3.4/32 存成同一個值：第二筆視為同 IP → already_listed，只留一列", async () => {
     await boot();
-    await writeAutoBlocklistEntry(app.db, input("1.2.3.4"), NOW);
-    await writeAutoBlocklistEntry(app.db, input("1.2.3.4/32"), NOW);
+    expect((await writeAutoBlocklistEntry(app.db, input("1.2.3.4"), NOW)).status).toBe("listed");
+    expect(await writeAutoBlocklistEntry(app.db, input("1.2.3.4/32"), NOW)).toEqual({ status: "already_listed" });
     const rows = (await app.db.query<{ ip: string }>("SELECT ip FROM blocklist_entries ORDER BY created_at")).rows;
-    expect(rows.map((x) => x.ip)).toEqual(["1.2.3.4/32", "1.2.3.4/32"]);
+    expect(rows.map((x) => x.ip)).toEqual(["1.2.3.4/32"]);
   });
 });
 

@@ -70,8 +70,12 @@ const SCHEMA_STATEMENTS = [
   expires_at BIGINT NOT NULL CHECK (expires_at > created_at),
   approved_by TEXT NOT NULL,
   approved_at BIGINT NOT NULL CHECK (approved_at >= created_at AND approved_at <= expires_at),
-  revoked_at BIGINT NULL CHECK (revoked_at IS NULL OR revoked_at >= created_at)
+  revoked_at BIGINT NULL CHECK (revoked_at IS NULL OR revoked_at >= created_at),
+  ended_at BIGINT NULL CHECK (ended_at IS NULL OR ended_at >= created_at)
 )`,
+  // ended_at：只放 DB、不進契約（過期 sweep 設 expires_at；撤回設撤回時間）。同 IP 至多一筆 ended_at IS NULL。
+  // 註：IF NOT EXISTS 不會幫舊表加 ended_at 欄；本階段不做 migration。
+  "CREATE UNIQUE INDEX IF NOT EXISTS blocklist_one_active ON blocklist_entries (ip) WHERE ended_at IS NULL",
   `CREATE TABLE IF NOT EXISTS audit_events (
   id BIGSERIAL PRIMARY KEY,
   action TEXT NOT NULL,

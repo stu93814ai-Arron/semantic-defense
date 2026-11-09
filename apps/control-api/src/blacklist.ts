@@ -8,7 +8,7 @@ import type { Role } from "./auth.js";
  * ③b 已上榜黑名單：讀取與撤回（MONITOR §7a：僅 operator）。
  * - 時間以 epoch ms 存；回應轉 RFC3339，形狀＝contracts 黑名單項目。
  * - 撤回：revoked_at IS NULL 才更新（條件式 UPDATE 序列化並行；兩人同時只一個成功），與 blacklist.revoke 稽核同一 Db.tx。
- *   已撤回 → 409、不存在 → 404，皆不寫稽核。
+ *   已撤回 → 409、不存在 → 404，皆不寫稽核。撤回同時設 ended_at（已 sweep 者保留原值），之後同 IP 可再上榜。
  */
 const OPERATOR: Role[] = ["operator"];
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -39,7 +39,8 @@ export function registerBlacklistRoutes(app: FastifyInstance, db: Db, now: () =>
     const at = now();
     const out = await db.tx(async (q) => {
       const r = await q.query<BlocklistRow>(
-        `UPDATE blocklist_entries SET revoked_at = $2 WHERE entry_id = $1 AND revoked_at IS NULL RETURNING ${BLOCKLIST_COLS}`,
+        `UPDATE blocklist_entries SET revoked_at = $2, ended_at = COALESCE(ended_at, $2)
+         WHERE entry_id = $1 AND revoked_at IS NULL RETURNING ${BLOCKLIST_COLS}`,
         [id, at],
       );
       const row = r.rows[0];

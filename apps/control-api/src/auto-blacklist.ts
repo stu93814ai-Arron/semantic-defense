@@ -4,7 +4,7 @@ import { BlocklistEntrySchema, parseCidr, type BlocklistEntry } from "@semantic-
 import type { Db, Queryable } from "./db.js";
 import { writeAudit } from "./audit.js";
 import { loadThresholds } from "./thresholds.js";
-import { BLOCKLIST_COLS, toBlocklistEntry, type BlocklistRow } from "./blacklist.js";
+import { insertActiveBlocklistEntry } from "./blocklist-store.js";
 
 /**
  * ④ source=auto 寫入邊界（內部函式，不開 HTTP）。不含觸發條件（命中次數、去重、冷卻、熔斷）。
@@ -12,7 +12,8 @@ import { BLOCKLIST_COLS, toBlocklistEntry, type BlocklistRow } from "./blacklist
  *    存放一律正規化為 `<address>/32` 或 `<address>/128`（單一 IP 與帶前綴寫法存成同一值）。
  * 2. 同一 tx 內：鎖白名單（SHARE，擋並行新增／修改），讀目前 auto 門檻；confidence < auto → below_auto_threshold。
  * 3. 命中未到期白名單 → allowlisted（白名單永遠優先，不上榜）。
- * 4. 寫入黑名單項目（approved_by=system:auto、created_at=approved_at=now、expires_at=now+24h）
+ * 4. 經 insertActiveBlocklistEntry 寫入（同 IP 已有生效列 → already_listed：不延長、不寫稽核）；
+ *    黑名單項目 approved_by=system:auto、created_at=approved_at=now、expires_at=now+24h
  *    與 blacklist.auto_list 稽核（信心、依據 case_id、時間）同一 tx。
  */
 export const AUTO_LIST_TTL_MS = 24 * 60 * 60 * 1000;
@@ -21,7 +22,8 @@ export type AutoListResult =
   | { status: "listed"; entry: BlocklistEntry }
   | { status: "invalid_ip" }
   | { status: "below_auto_threshold" }
-  | { status: "allowlisted" };
+  | { status: "allowlisted" }
+  | { status: "already_listed" };
 
 const addrOf = (s: string) => s.split("/")[0]!;
 const family = (addr: string) => (isIP(addr) === 6 ? "ipv6" : "ipv4");
@@ -60,12 +62,11 @@ export async function writeAutoBlocklistEntry(db: Db, input: AutoListInput, now:
       created_at: new Date(now).toISOString(), expires_at: new Date(now + AUTO_LIST_TTL_MS).toISOString(),
       approved_by: "system:auto", approved_at: new Date(now).toISOString(), revoked_at: null,
     });
-    const r = await q.query<BlocklistRow>(
-      `INSERT INTO blocklist_entries (${BLOCKLIST_COLS}) VALUES ($1,$2,'auto',$3,$4,$5,$6,'system:auto',$5,NULL)
-       RETURNING ${BLOCKLIST_COLS}`,
-      [draft.entry_id, draft.ip, draft.confidence, draft.case_id, now, now + AUTO_LIST_TTL_MS],
-    );
-    const entry = toBlocklistEntry(r.rows[0]!);
+    const entry = await insertActiveBlocklistEntry(q, {
+      entry_id: draft.entry_id, ip: draft.ip, source: "auto", confidence: draft.confidence, case_id: draft.case_id,
+      created_at: now, expires_at: now + AUTO_LIST_TTL_MS, approved_by: "system:auto", approved_at: now,
+    }, now);
+    if (!entry) return { status: "already_listed" };
     await writeAudit(q, { action: "blacklist.auto_list", actor: "system:auto", sensor_id: null, at: now,
       detail: { entry_id: entry.entry_id, ip: entry.ip, confidence: entry.confidence, case_id: entry.case_id, expires_at: entry.expires_at } });
     return { status: "listed", entry };
