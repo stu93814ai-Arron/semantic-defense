@@ -13,27 +13,50 @@ export { RETENTION_MS, type FlowDb };
  * - 保留 7 天：年齡 ≥ RETENTION_MS（now - received_at／at >= 7d）即刪（含 flow_rejections）。
  */
 
-const DDL = [
-  `CREATE TABLE IF NOT EXISTS flow_events (
+/** 遷移串行化：sensor-ingest 多實例同時啟動時，建表／補欄／回填一次只跑一個（pg_advisory_xact_lock，交易結束自動釋放）。 */
+export const FLOW_SCHEMA_LOCK = 872_364_210;
+
+/**
+ * 一個多語句 simple query＝一個隱含交易（不寫 BEGIN／COMMIT：中途出錯整串回滾，不會把 pool 連線留在 aborted 交易）。
+ * ts_ms（ts slice，計畫 Q1–Q8）：ts 的 epoch ms，由 insertFlow 以 JS Date.parse 寫入；判定 tick 只讀 ts_ms、不再對 ts 做 ::timestamptz。
+ * - flow_ts_ms：SQL 端同值換算（floor 到 ms），只吞 data_exception（class 22：0000 年、offset ±23:59…）回 NULL，其他錯誤照拋；
+ *   ::timestamptz 依 TimeZone 設定，故 STABLE 不標 IMMUTABLE。
+ * - 回填：每次啟動都跑 WHERE ts_ms IS NULL（舊列、滾動升級期間舊版 ingest 寫的列；Q2／Q4）。這是 flow_events 全表掃描，
+ *   且整段持有 FLOW_SCHEMA_LOCK——見 docs R15 部署前檢查。
+ * - flow_events_group_ms：判定 tick 依 (sensor, app, src_ip) 等值＋ts_ms 範圍重讀整組；完整索引（非 partial，Q7）。
+ */
+const SCHEMA_SQL = `
+SELECT pg_advisory_xact_lock(${FLOW_SCHEMA_LOCK});
+CREATE TABLE IF NOT EXISTS flow_events (
   flow_id TEXT NOT NULL, app_id TEXT NOT NULL, ts TEXT NOT NULL,
   src_ip TEXT NOT NULL, dst_ip TEXT NOT NULL, src_port INTEGER NOT NULL, dst_port INTEGER NOT NULL,
   protocol TEXT NOT NULL, bytes_in BIGINT NOT NULL, bytes_out BIGINT NOT NULL,
   packets BIGINT NOT NULL, duration_ms BIGINT NOT NULL,
-  sensor_id TEXT NOT NULL, received_at BIGINT NOT NULL,
+  sensor_id TEXT NOT NULL, received_at BIGINT NOT NULL, ts_ms BIGINT NULL,
   PRIMARY KEY (sensor_id, flow_id)
-)`,
-  "CREATE INDEX IF NOT EXISTS flow_events_received_at ON flow_events (received_at)",
-  // 判定 tick 依 (sensor, app, src_ip, 5 分鐘窗) 重讀整組（control-api judge.ts）：前三欄等值走索引，ts 再過濾。
-  // IF NOT EXISTS：舊表也會補建；sensor-ingest 啟動時的 ensureFlowSchema 建立（control-api 不建表、不建索引）。
-  "CREATE INDEX IF NOT EXISTS flow_events_group ON flow_events (sensor_id, app_id, src_ip, ts)",
-  // app_id 未綁定的拒絕紀錄：只記 id（代理 PK）＋sensor_id＋時間，不記 payload；與 flow_events 同 7 天清除。
-  // 註：IF NOT EXISTS 不會改既有舊表（無 id）的結構；本階段不做 migration。
-  "CREATE TABLE IF NOT EXISTS flow_rejections (id BIGSERIAL PRIMARY KEY, sensor_id TEXT NOT NULL, at BIGINT NOT NULL)",
-  "CREATE INDEX IF NOT EXISTS flow_rejections_at ON flow_rejections (at)",
-];
+);
+ALTER TABLE flow_events ADD COLUMN IF NOT EXISTS ts_ms BIGINT NULL;
+CREATE OR REPLACE FUNCTION flow_ts_ms(t TEXT) RETURNS BIGINT LANGUAGE plpgsql STABLE AS $fn$
+BEGIN
+  RETURN floor(extract(epoch FROM t::timestamptz) * 1000)::bigint;
+EXCEPTION WHEN data_exception THEN
+  RETURN NULL;
+END
+$fn$;
+UPDATE flow_events SET ts_ms = flow_ts_ms(ts) WHERE ts_ms IS NULL;
+CREATE INDEX IF NOT EXISTS flow_events_received_at ON flow_events (received_at);
+-- 舊索引（依 ts 文字）：commit 4 依 Q3 grep 結果決定是否移除
+CREATE INDEX IF NOT EXISTS flow_events_group ON flow_events (sensor_id, app_id, src_ip, ts);
+CREATE INDEX IF NOT EXISTS flow_events_group_ms ON flow_events (sensor_id, app_id, src_ip, ts_ms);
+-- app_id 未綁定的拒絕紀錄：只記 id（代理 PK）＋sensor_id＋時間，不記 payload；與 flow_events 同 7 天清除。
+-- 註：IF NOT EXISTS 不會改既有舊表（無 id）的結構。
+CREATE TABLE IF NOT EXISTS flow_rejections (id BIGSERIAL PRIMARY KEY, sensor_id TEXT NOT NULL, at BIGINT NOT NULL);
+CREATE INDEX IF NOT EXISTS flow_rejections_at ON flow_rejections (at);
+`;
 
+/** sensor-ingest 啟動時呼叫（control-api 不建表、不建索引）；可重複、可並行。 */
 export async function ensureFlowSchema(db: FlowDb): Promise<void> {
-  for (const sql of DDL) await db.query(sql);
+  await db.query(SCHEMA_SQL);
 }
 
 /** 刪除年齡 ≥ 7 天的 flow_events／flow_rejections，回兩表刪除總筆數。 */
