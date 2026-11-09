@@ -24,7 +24,7 @@ import { autoListCase, countHighSeverity, e3aHolds, writeSuppressed } from "./au
  * - 清除：case_hits 第一次寫入（first_seen_at）滿 7 天；已結案 case 的 resolved_at 滿 7 天（計畫 Q18）。
  * 命中存好後（計畫 §1）：白名單內 → 不開案、不寫稽核（Q13）；已上榜 → 只寫 hit_while_listed（Q16）；否則開案／累加。
  * 新的高嚴重命中 → E3.A（auto-trigger.ts）：白名單 IP 只寫 auto_suppressed{allowlist}（不開案）；
- * 有案路徑經 autoListInTx 上榜（白名單在其中以 SHARE 鎖重查）。冷卻、熔斷見 commit 10、11。
+ * 有案路徑經 autoListInTx 上榜（白名單在其中以 SHARE 鎖重查）。冷卻在 autoListInTx 內（gates，tick 才開）；熔斷見 commit 11。
  */
 export const JUDGE_LOCK = 872_364_203;
 export const JUDGE_OVERLAP_MS = 60_000;
@@ -130,7 +130,7 @@ async function routeHit(q: Queryable, k: GroupKey, ctx: TickCtx, h: StoredHit): 
   else await raiseCaseMax(q, k.src_ip, h.confidence, now);
   if (await e3a()) {
     await hooks.beforeAutoList?.();
-    await autoListCase(q, ip, now, { log });
+    await autoListCase(q, ip, now, { log, gates: true });
   }
 }
 

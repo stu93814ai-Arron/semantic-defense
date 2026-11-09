@@ -32,7 +32,8 @@ export async function writeSuppressed(q: Queryable, detail: Suppressed, now: num
 
 /**
  * 有案路徑：E3.A 成立 → 以該 IP 的 open case 呼叫 autoListInTx（白名單在其中以 SHARE 鎖重查）。
- * listed → case 改 auto_listed（resolved_by system:auto）；allowlisted → auto_suppressed{allowlist}，case 維持 open；
+ * gates 開（冷卻／熔斷）。listed → case 改 auto_listed（resolved_by system:auto）；
+ * allowlisted／cooldown → auto_suppressed{allowlist | cooldown(+revoked_at)}，case 維持 open；
  * below_auto_threshold／already_listed → 留在待審、不寫稽核。confidence 用 case 的 max_confidence（Q3）。
  */
 export async function autoListCase(q: Queryable, ip: string, now: number, opts: AutoListOpts): Promise<void> {
@@ -45,5 +46,7 @@ export async function autoListCase(q: Queryable, ip: string, now: number, opts: 
       [c.case_id, now]);
   } else if (r.status === "allowlisted") {
     await writeSuppressed(q, { reason: "allowlist", ip, case_id: c.case_id }, now);
+  } else if (r.status === "cooldown") {
+    await writeSuppressed(q, { reason: "cooldown", ip, case_id: c.case_id, revoked_at: new Date(r.revoked_at).toISOString() }, now);
   }
 }

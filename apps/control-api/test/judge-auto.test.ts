@@ -156,3 +156,57 @@ describe("E3.A 與白名單", () => {
     expect(await writeAutoBlocklistEntry(app.db, { ip: IP, confidence: 0.5, case_id: randomUUID() }, T0)).toEqual({ status: "allowlisted" });
   });
 });
+
+describe("E3.A 冷卻（同一 canonical IP 撤回後 2 小時內不自動上榜）", () => {
+  const H = 60 * MIN;
+  /** 已撤回的舊項目（SQL 直塞）；revoked_at 相對 T0。 */
+  const revoked = (ip: string, source: "auto" | "manual", ago: number) => app.db.query(
+    `INSERT INTO blocklist_entries (entry_id, ip, source, confidence, case_id, created_at, expires_at, approved_by, approved_at, revoked_at, ended_at)
+     VALUES ($1, $2, $3, 1, $4, $5, $6, 'admin1', $5, $7, $7)`,
+    [randomUUID(), ip, source, randomUUID(), T0 - 3 * H, T0 + 21 * H, T0 - ago]);
+  const active = async () => (await app.db.query<{ ip: string }>("SELECT ip FROM blocklist_entries WHERE ended_at IS NULL")).rows;
+
+  it("auto 項目撤回 1h59m 後 → 不上榜、case 仍 open、auto_suppressed{cooldown, revoked_at}", async () => {
+    await boot();
+    await revoked(CIDR, "auto", 119 * MIN);
+    await three(["app-1", "app-2", "app-1"]);
+    await tick();
+    const [c] = await kases();
+    expect([await active(), c!.state]).toEqual([[], "open"]);
+    expect(await audits("blacklist.auto_suppressed")).toEqual([{ actor: "system:auto", sensor_id: null,
+      detail: { reason: "cooldown", ip: CIDR, case_id: c!.case_id, revoked_at: new Date(T0 - 119 * MIN).toISOString() } }]);
+  });
+
+  it("撤回剛好 2h → 冷卻結束，照常上榜", async () => {
+    await boot();
+    await revoked(CIDR, "auto", 120 * MIN);
+    await three(["app-1", "app-2", "app-1"]);
+    await tick();
+    expect(await active()).toEqual([{ ip: CIDR }]);
+    expect(await audits("blacklist.auto_suppressed")).toEqual([]);
+  });
+
+  it("manual 項目撤回也觸發冷卻", async () => {
+    await boot();
+    await revoked(CIDR, "manual", 30 * MIN);
+    await three(["app-1", "app-2", "app-1"]);
+    await tick();
+    expect(await active()).toEqual([]);
+    expect((await audits("blacklist.auto_suppressed")).map((a) => a.detail.reason)).toEqual(["cooldown"]);
+  });
+
+  it("涵蓋該 IP 的 /24 剛撤回不算 → 照常上榜", async () => {
+    await boot();
+    await revoked("203.0.113.0/24", "manual", 30 * MIN);
+    await three(["app-1", "app-2", "app-1"]);
+    await tick();
+    expect(await active()).toEqual([{ ip: CIDR }]);
+  });
+
+  it("writeAutoBlocklistEntry（§7 原行為）不受冷卻影響", async () => {
+    await boot();
+    await revoked(CIDR, "auto", 30 * MIN);
+    const r = await writeAutoBlocklistEntry(app.db, { ip: IP, confidence: 0.95, case_id: randomUUID() }, T0);
+    expect(r.status).toBe("listed");
+  });
+});

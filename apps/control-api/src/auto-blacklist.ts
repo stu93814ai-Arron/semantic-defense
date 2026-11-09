@@ -7,7 +7,7 @@ import { loadThresholds, type WarnLog } from "./thresholds.js";
 import { insertActiveBlocklistEntry } from "./blocklist-store.js";
 
 /**
- * ④ source=auto 寫入邊界（內部函式，不開 HTTP）。不含觸發條件（命中次數、去重、冷卻、熔斷）。
+ * ④ source=auto 寫入邊界（內部函式，不開 HTTP）。觸發條件（命中次數）在 auto-trigger.ts；冷卻只在 opts.gates 開時檢查。
  * 1. ip 只收 /32、/128（contracts ip-cidr 規則，IPv6 須已是 canonical 小寫）→ 否則 invalid_ip。
  *    存放一律正規化為 `<address>/32` 或 `<address>/128`（單一 IP 與帶前綴寫法存成同一值）。
  * 2. 同一 tx 內：鎖白名單（SHARE，擋並行新增／修改），讀目前 auto 門檻；confidence < auto → below_auto_threshold。
@@ -24,7 +24,8 @@ export type AutoListResult =
   | { status: "invalid_ip" }
   | { status: "below_auto_threshold" }
   | { status: "allowlisted" }
-  | { status: "already_listed" };
+  | { status: "already_listed" }
+  | { status: "cooldown"; revoked_at: number };
 
 const addrOf = (s: string) => s.split("/")[0]!;
 const family = (addr: string) => (isIP(addr) === 6 ? "ipv6" : "ipv4");
@@ -52,7 +53,19 @@ export function hostCidr(raw: string): string | null {
   return `${p.address}/${p.prefix}`;
 }
 
-export type AutoListOpts = { log?: WarnLog };
+/** 冷卻：同一 canonical IP（完全相同；涵蓋它的 /24 不算）在這段時間內被撤回過（auto 或 manual）就不自動上榜。 */
+export const AUTO_COOLDOWN_MS = 2 * 60 * 60 * 1000;
+/**
+ * gates：E3.A 觸發才有的閘門（冷卻；commit 11 加熔斷）。判定 tick 開、writeAutoBlocklistEntry 關，§7 原行為不變。
+ */
+export type AutoListOpts = { log?: WarnLog; gates?: boolean };
+
+async function lastRevokedWithin(q: Queryable, ip: string, now: number): Promise<number | null> {
+  const r = await q.query<{ revoked_at: string }>(
+    "SELECT revoked_at FROM blocklist_entries WHERE ip = $1 AND revoked_at > $2 ORDER BY revoked_at DESC LIMIT 1",
+    [ip, now - AUTO_COOLDOWN_MS]);
+  return r.rows[0] ? Number(r.rows[0].revoked_at) : null;
+}
 
 /**
  * tx 內版本（計畫 §7；判定 tick 在自己的 tx 裡呼叫）。白名單在這裡以 SHARE 鎖重新檢查：
@@ -67,6 +80,10 @@ export async function autoListInTx(q: Queryable, input: AutoListInput, now: numb
   if (await allowlisted(q, ip, now)) return { status: "allowlisted" };
   const { auto } = await loadThresholds(q, opts.log);
   if (!(input.confidence >= auto)) return { status: "below_auto_threshold" };
+  if (opts.gates) {
+    const revokedAt = await lastRevokedWithin(q, ip, now);
+    if (revokedAt !== null) return { status: "cooldown", revoked_at: revokedAt };
+  }
   const draft = BlocklistEntrySchema.parse({
     entry_id: randomUUID(), ip, source: "auto", confidence: input.confidence, case_id: input.case_id,
     created_at: new Date(now).toISOString(), expires_at: new Date(now + AUTO_LIST_TTL_MS).toISOString(),

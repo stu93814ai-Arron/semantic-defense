@@ -76,6 +76,8 @@ const SCHEMA_STATEMENTS = [
   // ended_at：只放 DB、不進契約（過期 sweep 設 expires_at；撤回設撤回時間）。同 IP 至多一筆 ended_at IS NULL。
   // 註：IF NOT EXISTS 不會幫舊表加 ended_at 欄；本階段不做 migration。
   "CREATE UNIQUE INDEX IF NOT EXISTS blocklist_one_active ON blocklist_entries (ip) WHERE ended_at IS NULL",
+  // 成案流程 commit 10（計畫 §5）：E3.A 冷卻查「同 IP 最近撤回」。
+  "CREATE INDEX IF NOT EXISTS blocklist_ip_revoked ON blocklist_entries (ip, revoked_at)",
   // 成案流程 commit 6（計畫 §5）：待審與命中明細。註：IF NOT EXISTS 不會改舊表；本階段不做 migration。
   `CREATE TABLE IF NOT EXISTS blacklist_cases (
   case_id UUID PRIMARY KEY,
