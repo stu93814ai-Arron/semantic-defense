@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { buildIngest } from "../src/app.js";
-import { AUTH_FAIL_LIMIT, AUTH_FAIL_MAX_KEYS, AUTH_FAIL_WINDOW_MS, createAuthFailLimiter } from "../src/rate-limit.js";
+import { AUTH_FAIL_LIMIT, AUTH_FAIL_MAX_KEYS, AUTH_FAIL_WINDOW_MS, authFailKey, createAuthFailLimiter } from "../src/rate-limit.js";
 import { openTestDb, seedToken } from "./helpers.js";
 
 let db: Awaited<ReturnType<typeof openTestDb>>;
@@ -108,5 +108,48 @@ describe("失敗計數 Map 上限與過期清理", () => {
     expect((await get(app, "10.0.0.3", { authorization: `Bearer ${t}` })).statusCode).toBe(200);
     expect((await get(app, "10.0.0.1")).statusCode).toBe(429);
     await app.close();
+  });
+});
+
+describe("計數鍵：IPv4 /32、IPv6 /64", () => {
+  const hammer = async (app: Awaited<ReturnType<typeof buildIngest>>, ips: string[], n: number) => {
+    for (let i = 0; i < n; i++) expect((await get(app, ips[i % ips.length]!)).statusCode).toBe(401);
+  };
+
+  it("IPv6 同一 /64 共用計數：::1 與 ::ffff 合計 30 次後第 31 次 429；不同 /64 仍 401", async () => {
+    const app = await buildIngest({ db, requireHttps: false, now: () => T0 });
+    await hammer(app, ["2001:db8:1:2::1", "2001:db8:1:2::ffff"], AUTH_FAIL_LIMIT);
+    expect((await get(app, "2001:db8:1:2::1")).statusCode).toBe(429);
+    expect((await get(app, "2001:db8:1:2::abcd")).statusCode).toBe(429);
+    expect((await get(app, "2001:db8:1:3::1")).statusCode).toBe(401);
+    await app.close();
+  });
+
+  it("IPv4 維持 /32：10.0.0.1 與 10.0.0.2 各自獨立", async () => {
+    const app = await buildIngest({ db, requireHttps: false, now: () => T0 });
+    await hammer(app, ["10.0.0.1"], AUTH_FAIL_LIMIT);
+    expect((await get(app, "10.0.0.1")).statusCode).toBe(429);
+    expect((await get(app, "10.0.0.2")).statusCode).toBe(401);
+    await app.close();
+  });
+
+  it("IPv4-mapped（::ffff:10.0.0.1）視同 10.0.0.1", async () => {
+    const app = await buildIngest({ db, requireHttps: false, now: () => T0 });
+    await hammer(app, ["::ffff:10.0.0.1", "10.0.0.1"], AUTH_FAIL_LIMIT);
+    expect((await get(app, "10.0.0.1")).statusCode).toBe(429);
+    expect((await get(app, "::ffff:10.0.0.1")).statusCode).toBe(429);
+    expect((await get(app, "::ffff:10.0.0.2")).statusCode).toBe(401);
+    await app.close();
+  });
+
+  it("鍵正規化：非 canonical IPv6（全展開、大寫）歸同一 /64；mapped → IPv4", () => {
+    const k = authFailKey("2001:db8:1:2::1");
+    expect(authFailKey("2001:0DB8:0001:0002:0000:0000:0000:0001")).toBe(k);
+    expect(authFailKey("2001:DB8:1:2:FFFF:FFFF:FFFF:FFFF")).toBe(k);
+    expect(authFailKey("2001:db8:1:3::1")).not.toBe(k);
+    expect(authFailKey("::ffff:10.0.0.1")).toBe(authFailKey("10.0.0.1"));
+    expect(authFailKey("::FFFF:0a00:0001")).toBe(authFailKey("10.0.0.1"));
+    expect(authFailKey("10.0.0.1")).not.toBe(authFailKey("10.0.0.2"));
+    expect(authFailKey("::1")).not.toBe(authFailKey("10.0.0.1"));
   });
 });
