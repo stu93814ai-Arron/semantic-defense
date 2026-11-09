@@ -45,7 +45,6 @@ describe("writeAutoBlocklistEntry", () => {
     await boot();
     expect((await writeAutoBlocklistEntry(app.db, input(ip), NOW)).status).toBe("listed");
   });
-
 });
 
 describe("writeAutoBlocklistEntry：ip 正規化", () => {
@@ -67,7 +66,6 @@ describe("writeAutoBlocklistEntry：ip 正規化", () => {
     const rows = (await app.db.query<{ ip: string }>("SELECT ip FROM blocklist_entries ORDER BY created_at")).rows;
     expect(rows.map((x) => x.ip)).toEqual(["1.2.3.4/32", "1.2.3.4/32"]);
   });
-
 });
 
 describe("writeAutoBlocklistEntry：拒絕與邊界", () => {

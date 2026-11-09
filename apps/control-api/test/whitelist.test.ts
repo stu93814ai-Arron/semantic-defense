@@ -102,7 +102,6 @@ describe("白名單 CRUD（platform_admin）", () => {
     const items = ((await req(c, "GET", LIST)).json() as { items: { entry_id: string; reason: string }[] }).items;
     expect(items.map((x) => [x.entry_id, x.reason])).toEqual([[entry_id, C.reason]]);
   });
-
 });
 
 describe("白名單 reason 控制字元", () => {
@@ -118,4 +117,3 @@ describe("白名單 reason 控制字元", () => {
     expect((await audits()).map((a) => a.action)).toEqual(["whitelist.create"]);
   });
 });
-

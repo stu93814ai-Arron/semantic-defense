@@ -62,7 +62,6 @@ describe("門檻讀寫", () => {
     expect((await get(c)).json()).toEqual({ case: 0.5, auto: 0.9 });
     expect(await audits()).toEqual([]);
   });
-
 });
 
 describe("門檻上下限（case 0.30–1、auto 0.70–1、case<auto）", () => {
@@ -104,7 +103,6 @@ describe("門檻上下限（case 0.30–1、auto 0.70–1、case<auto）", () =>
       detail: { before: { case: 0.5, auto: 0.9 }, attempted: { case: 0.29, auto: 0.9 }, violation: "case_below_min" } }]);
     expect((await app.db.query("SELECT 1 FROM thresholds")).rows).toEqual([]);
   });
-
 });
 
 describe("門檻：角色", () => {
@@ -124,7 +122,6 @@ describe("門檻：角色", () => {
     expect((await get(await admin())).json()).toEqual({ case: 0.5, auto: 0.9 });
     expect(await audits()).toEqual([]);
   });
-
 });
 
 describe("門檻：原子性、DB 約束與判定一致", () => {

@@ -19,4 +19,3 @@ const CONTROL_OR_BIDI = /[\u0000-\u001F\u007F-\u009F\u200E\u200F\u202A-\u202E\u2
 
 /** 人寫的理由文字（白名單 reason 等）：1–200 字，拒控制與 bidi 字元；HTML 不擋，由輸出端跳脫。 */
 export const Reason = z.string().min(1).max(200).refine((s) => !CONTROL_OR_BIDI.test(s), { message: "control_or_bidi_char" });
-

@@ -61,4 +61,3 @@ describe("runTx 連線歸還", () => {
     expect(f.releases[0]![0]).toBe(f.rollbackErr);
   });
 });
-
