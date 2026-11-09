@@ -372,6 +372,25 @@ describe("白名單 SHARE 鎖與鎖順序（A 覆核）", () => {
   });
 });
 
+describe("R19：被熔斷擋下的高嚴重命中，熔斷恢復後重掃不得補上榜；新的高嚴重命中才上榜（isNewHigh）", () => {
+  const mine = async () => (await listed()).filter((e) => e.ip === CIDR);
+
+  it("熔斷開 → E3.A 成立被擋；恢復後同一批命中重掃（重疊區）→ 不上榜；之後新的高嚴重命中 → 上榜", async () => {
+    await boot();
+    await autos(50, T0 - 59 * MIN);
+    await three(["app-1", "app-2", "app-1"]);
+    await tick();
+    expect((await audits("blacklist.auto_suppressed")).map((a) => a.detail.reason)).toEqual(["breaker"]);
+    await tick(T0 + 2 * MIN);
+    expect(await opened()).toEqual([{ opened_at: null }]);
+    expect(await mine()).toEqual([]);
+    expect((await kases()).map((c) => c.state)).toEqual(["open"]);
+    await hit({ at: T0, app: "app-2" });
+    await tick(T0 + 3 * MIN);
+    expect((await mine()).map((e) => e.source)).toEqual(["auto"]);
+  });
+});
+
 describe("auto_suppressed 去重：同一 (ip, reason) 每小時最多一筆，多出來的每個 tick 一行 log 記數量（A 覆核）", () => {
   let lines: string[] = [];
   const log = { warn: (obj: object, msg: string) => { lines.push(JSON.stringify({ ...obj, msg })); } };
