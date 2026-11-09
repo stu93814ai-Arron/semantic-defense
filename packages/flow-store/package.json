@@ -1,0 +1,19 @@
+{
+  "name": "@semantic-defense/flow-store",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@semantic-defense/contracts": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "@types/pg": "^8.23.1",
+    "pg": "^8.23.1",
+    "typescript": "^5.9.3",
+    "vitest": "^5.1.0"
+  }
+}
