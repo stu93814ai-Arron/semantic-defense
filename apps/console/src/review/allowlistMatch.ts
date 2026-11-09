@@ -1,4 +1,3 @@
-import { isIP } from "node:net";
 import type { AllowlistItem } from "./types";
 
 export function ipv4ToInt(ip: string): number | null {
@@ -91,12 +90,19 @@ function ipv6InCidr(ip: string, cidr: string): boolean {
   return (ipv6ToBigInt(baseParts) & mask) === (ipv6ToBigInt(targetParts) & mask);
 }
 
+
+function ipFamily(ip: string): 0 | 4 | 6 {
+  if (ipv4ToInt(ip) !== null) return 4;
+  if (expandIpv6(ip) !== null) return 6;
+  return 0;
+}
+
 /** 候選 IP 是否落在任一白名單 CIDR（IPv4 與 IPv6 皆做前綴包含判定）。 */
 export function ipOnAllowlist(ip: string, allowlist: AllowlistItem[]): boolean {
-  const fam = isIP(ip);
+  const fam = ipFamily(ip);
   if (fam === 0) return false;
   for (const item of allowlist) {
-    const entryFam = isIP(item.cidr.split("/")[0] ?? "");
+    const entryFam = ipFamily(item.cidr.split("/")[0] ?? "");
     if (entryFam !== fam) continue;
     if (fam === 4 && ipv4InCidr(ip, item.cidr)) return true;
     if (fam === 6 && ipv6InCidr(ip, item.cidr)) return true;

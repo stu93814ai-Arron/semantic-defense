@@ -1,4 +1,4 @@
-import { assertAllowlistCidr } from "@semantic-defense/contracts";
+import { assertAllowlistCidr } from "@semantic-defense/contracts/browser";
 import type { AllowlistItem, Decision } from "./types";
 
 export type CidrCheck = { ok: true; cidr: string } | { ok: false; message: string };

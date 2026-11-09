@@ -1,8 +1,5 @@
-import { resolve } from "node:path";
 import { defineConfig } from "vitest/config";
 
-const consoleNetShim = resolve("apps/console/src/shims/node-net.ts");
-const contractsIpCidr = resolve("packages/contracts/src/ip-cidr.ts");
 // 核心邏輯覆蓋率清單（契約、回放、簽名、授權）。路徑不存在時不計；程式出現即納入 70% 門檻。
 // 之後加 packages/gate（回放）、簽名等，在此擴充。
 export const CORE_COVERAGE_INCLUDE = [
@@ -26,12 +23,6 @@ export const CORE_COVERAGE_INCLUDE = [
 // E2E（Playwright）不在 vitest 內跑
 const E2E = ["**/e2e/**", "**/*.e2e.*", "**/node_modules/**", "**/dist/**"];
 export default defineConfig({
-  resolve: {
-    // contracts ip-cidr 子路徑：各 project 可解析；node:net shim 僅 console（見下）
-    alias: {
-      "@semantic-defense/contracts/ip-cidr.js": contractsIpCidr,
-    },
-  },
   test: {
     passWithNoTests: false,
     projects: [
@@ -43,9 +34,7 @@ export default defineConfig({
       // sensor-ingest 測試用獨立 schema（sensor_ingest_test），與 control-api 共用同一 DATABASE_URL 但不互相清表
       { extends: true, test: { name: "sensor-ingest", environment: "node", exclude: E2E, testTimeout: 60_000, hookTimeout: 60_000,
         fileParallelism: false, include: ["apps/sensor-ingest/{src,test}/**/*.test.ts"] } },
-      // browser shim：只在 console project alias node:net（勿污染 sensor-auth BlockList）
-      { extends: true, resolve: { alias: { "node:net": consoleNetShim } },
-        test: { name: "console", environment: "jsdom", exclude: E2E,
+      { extends: true, test: { name: "console", environment: "jsdom", exclude: E2E,
         include: ["apps/console/{src,test}/**/*.test.{ts,tsx}"] } },
     ],
     coverage: {
