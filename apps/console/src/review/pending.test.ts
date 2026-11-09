@@ -107,3 +107,14 @@ describe("待審核准與白名單 IPv6", () => {
     expect(r.code).toBe("on_allowlist");
   });
 });
+
+describe("待審核准預設到期（created_at + 24h）", () => {
+  it("expires_at 以候選 created_at 加 24h，不用核准當下 now", () => {
+    const r = approvePending(base, ctx({ now: "2026-11-05T01:00:00Z" }));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.value.created_at).toBe("2026-11-05T00:00:00Z");
+    expect(r.value.approved_at).toBe("2026-11-05T01:00:00Z");
+    expect(r.value.expires_at).toBe("2026-11-06T00:00:00Z");
+  });
+});

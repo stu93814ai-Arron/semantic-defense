@@ -49,7 +49,7 @@ export function approvePending(
     confidence: candidate.confidence,
     case_id: candidate.case_id,
     created_at: candidate.created_at,
-    expires_at: hoursLater(ctx.now, ttl),
+    expires_at: hoursLater(candidate.created_at, ttl),
     approved_by: ctx.actorId,
     approved_at: ctx.now,
     revoked_at: null,
