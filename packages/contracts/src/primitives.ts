@@ -19,10 +19,14 @@ export const SingleIp = z.string().refine(assertFlowSingleIp, { message: "single
  * U+180E、U+FFF9–FFFB、tag 字元等）、Zl（U+2028）、Zp（U+2029）。另列 Lo 的填充字元 U+115F、U+3164，
  * 以及整段 tag 區 U+E0000–E007F（其中 U+E0000、U+E0002–E001F 未指派，不屬 Cf，須明列）。
  * 刻意：擋 tag 字元會連帶擋掉英格蘭、蘇格蘭、威爾斯這類分區旗幟 emoji（以 tag 序列組成）；一般國旗 emoji 仍可。
+ * 資安退回 R2：再擋填充字元 U+1160、U+FFA0，組合字素連接 U+034F，變體選擇符 U+FE00–FE0F、U+E0100–E01EF（皆非 Cf）。
+ * 刻意：擋 U+FE0F 會連帶擋掉帶 emoji 變體的寫法（如 ❤️＝U+2764 U+FE0F）；不帶變體選擇符的 emoji 仍可。
  */
-const CONTROL_OR_BIDI = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u115F\u3164]/u;
-/** tag 區以 code point 比對（regex 寫 \u{E0000}-\u{E007F} 會被 security/detect-unsafe-regex 誤報）。 */
-const hasTagChar = (s: string): boolean => [...s].some((c) => c.codePointAt(0)! >= 0xe0000 && c.codePointAt(0)! <= 0xe007f);
+const CONTROL_OR_BIDI = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u115F\u3164\u1160\uFFA0\u034F\uFE00-\uFE0F]/u;
+/** 補充平面的兩段以 code point 比對（regex 寫 \u{E0000}-\u{E007F} 會被 security/detect-unsafe-regex 誤報）：tag 區、變體選擇符補充區。 */
+const ASTRAL_BLOCKED: readonly (readonly [number, number])[] = [[0xe0000, 0xe007f], [0xe0100, 0xe01ef]];
+const hasBlockedAstral = (s: string): boolean =>
+  [...s].some((c) => ASTRAL_BLOCKED.some(([lo, hi]) => c.codePointAt(0)! >= lo && c.codePointAt(0)! <= hi));
 
 /**
  * 未配對 surrogate（資安殘留 3；取代 ES2024 的 isWellFormed）：高位後面不是低位，或低位前面不是高位。
@@ -35,4 +39,4 @@ const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[
  * 刻意：reason 擋 ZWJ（U+200D），所以 ZWJ 組合 emoji（如家庭圖示）會被拒；單一 emoji 仍可。
  */
 export const Reason = z.string().min(1).max(200)
-  .refine((s) => !LONE_SURROGATE.test(s) && !CONTROL_OR_BIDI.test(s) && !hasTagChar(s), { message: "control_or_bidi_char" });
+  .refine((s) => !LONE_SURROGATE.test(s) && !CONTROL_OR_BIDI.test(s) && !hasBlockedAstral(s), { message: "control_or_bidi_char" });
