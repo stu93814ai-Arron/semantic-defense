@@ -61,3 +61,18 @@ describe("control-api err serializer 去掉 query（資安殘留：reply-already
     expect(lines.join("\n")).not.toContain("token=");
   });
 });
+
+describe("control-api logMethod 處理直接傳 Error（A 組領航員修正 3）", () => {
+  it("log.error(new Error(\"…/p?token=S\")) 與帶字串 msg 的寫法 → log 不含 S，path 仍在", async () => {
+    const lines: string[] = [];
+    app = await buildApp({ idleTimeoutMs: 60_000, databaseUrl: requireDatabaseUrl(),
+      logger: { level: "info", stream: { write: (l: string) => { lines.push(l); } } } });
+    app.log.error(new Error(`fail at /p${QS}`));
+    app.log.error(new Error(`fail at /q${QS}`), `while GET /q${QS}`);
+    const out = lines.join("\n");
+    expect(out).not.toContain(SECRET);
+    expect(out).not.toContain("token=");
+    expect(out).toContain("fail at /p");
+    expect(out).toContain("while GET /q");
+  });
+});

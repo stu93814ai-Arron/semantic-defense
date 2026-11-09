@@ -41,10 +41,15 @@ const noQuery = (v: unknown): unknown => (typeof v === "string" ? v.replace(/(\/
 export const safeErrSerializer = (e: FastifyError) =>
   ({ type: e.name, ...e, message: noQuery(e.message) as string, stack: noQuery(e.stack) as string });
 type LogHooks = { logMethod(this: unknown, args: unknown[], method: (...a: unknown[]) => void): void };
-/** pino 在沒給 msg 時直接拿原始 err.message 當 msg（不經 serializer）：補上去 query 的 msg，字串參數也去 query。 */
+/**
+ * pino 在沒給 msg 時直接拿原始 err.message 當 msg（不經 serializer）：補上去 query 的 msg，字串參數也去 query。
+ * 直接傳 Error（log.error(err)）時先包成 {err}，才會走 err serializer，頂層 msg 也一併去 query。
+ */
 const logMethod: LogHooks["logMethod"] = function (args, method) {
-  const err = (args[0] as { err?: { message?: unknown } } | null)?.err;
-  const out = args.length === 1 && err ? [args[0], noQuery(err.message)] : args.map(noQuery);
+  const [first, ...rest] = args;
+  const obj = first instanceof Error ? { err: first } : first;
+  const err = (obj as { err?: { message?: unknown } } | null)?.err;
+  const out = rest.length === 0 && err ? [obj, noQuery(err.message)] : [obj, ...rest].map(noQuery);
   method.apply(this, out);
 };
 
