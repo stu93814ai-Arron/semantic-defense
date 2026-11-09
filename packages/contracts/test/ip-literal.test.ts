@@ -2,7 +2,16 @@ import { isIP } from "node:net";
 import { describe, expect, it } from "vitest";
 import { ipVersion } from "../src/ip-literal.js";
 
-describe("ipVersion（純 TS）與 node:net isIP 行為一致", () => {
+/** 對拍基準：contracts 不收 zone，含 % 一律 0；其餘與 node:net isIP 一致。 */
+const expected = (s: string) => (s.includes("%") ? 0 : isIP(s));
+
+describe("ipVersion 不接受 zone（含 % 一律 0）", () => {
+  it.each(["fe80::1%eth0", "fe80::1%a b", "::1%%", "::1%/", "::1%x/y", "::1%é", "::1%a\n", "::1%\u0000", "::1%abc]"])("%j → 0", (s) => {
+    expect(ipVersion(s)).toBe(0);
+  });
+});
+
+describe("ipVersion（純 TS）與 node:net isIP 行為一致（含 % 者預期 0）", () => {
   const CORPUS = [
     "1.2.3.4", "0.0.0.0", "255.255.255.255", "01.2.3.4", "1.2.3.04", "1.2.3", "1.2.3.4.5", "256.1.1.1", "1.2.3.4 ", " 1.2.3.4",
     "1.2.3.4/24", "", ".", "1..2.3", "1.2.3.", "-1.2.3.4", "1e1.2.3.4", "0x1.2.3.4",
@@ -12,7 +21,7 @@ describe("ipVersion（純 TS）與 node:net isIP 行為一致", () => {
     "::ffff:1.2.3", "1.2.3.4::", "::1.2.3.4:1", "fe80::1%eth0", "fe80::1%", "::1%1", "1.2.3.4%eth0", "2001:db8::/64",
   ];
   it.each(CORPUS)("%j", (s) => {
-    expect(ipVersion(s)).toBe(isIP(s));
+    expect(ipVersion(s)).toBe(expected(s));
   });
 
   it("隨機字串 5000 筆一致", () => {
@@ -23,7 +32,7 @@ describe("ipVersion（純 TS）與 node:net isIP 行為一致", () => {
       let s = "";
       const len = rnd(24);
       for (let j = 0; j < len; j++) s += alpha[rnd(alpha.length)]!;
-      expect([s, ipVersion(s)]).toEqual([s, isIP(s)]);
+      expect([s, ipVersion(s)]).toEqual([s, expected(s)]);
     }
   });
 
@@ -39,8 +48,8 @@ describe("ipVersion（純 TS）與 node:net isIP 行為一致", () => {
       let s = "";
       for (let j = 0; j < n; j++) s += (j === 0 ? "" : rnd(4) === 0 ? "::" : ":") + tok();
       if (rnd(10) === 0) s += rnd(2) ? "%eth0" : "%";
-      seen.add(isIP(s));
-      expect([s, ipVersion(s)]).toEqual([s, isIP(s)]);
+      seen.add(expected(s));
+      expect([s, ipVersion(s)]).toEqual([s, expected(s)]);
     }
     expect([...seen].sort()).toEqual([0, 4, 6]);
   });

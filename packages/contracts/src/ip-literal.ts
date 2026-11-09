@@ -1,7 +1,7 @@
 /**
- * 純 TS 的 IP 字面判定，行為對齊 node:net isIP（不引用 node 內建，供瀏覽器入口）。
- * 回傳 4／6／0。IPv4：四段十進位 0–255、無前導 0。IPv6：1–4 位十六進位、至多一個 `::`、
- * 末段可內嵌 IPv4、可帶非空 zone（`%…`）。對齊性由 test/ip-literal.test.ts 與 node:net 比對鎖住。
+ * 純 TS 的 IP 字面判定（不引用 node 內建，供瀏覽器入口）：對齊 node:net isIP，但不接受 zone（含 % 一律 0）。
+ * 回傳 4／6／0。IPv4：四段十進位 0–255、無前導 0。IPv6：1–4 位十六進位、至多一個 `::`、末段可內嵌 IPv4。
+ * 對齊性由 test/ip-literal.test.ts 與 node:net 比對鎖住（含 % 的輸入預期 0）。
  */
 const V4_OCTET = /^(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)$/;
 const HEXTET = /^[0-9a-fA-F]{1,4}$/;
@@ -11,16 +11,7 @@ function isV4(s: string): boolean {
   return parts.length === 4 && parts.every((p) => V4_OCTET.test(p));
 }
 
-/** 去掉 zone（`%…`）；zone 為空 → null。 */
-function stripZone(raw: string): string | null {
-  const zone = raw.indexOf("%");
-  if (zone === -1) return raw;
-  return zone === raw.length - 1 ? null : raw.slice(0, zone);
-}
-
-function isV6(raw: string): boolean {
-  const s = stripZone(raw);
-  if (s === null) return false;
+function isV6(s: string): boolean {
   const sides = s.split("::");
   if (sides.length > 2) return false;
   const groups = (side: string) => (side === "" ? [] : side.split(":"));
@@ -39,5 +30,6 @@ function isV6(raw: string): boolean {
 
 export function ipVersion(s: string): 0 | 4 | 6 {
   if (isV4(s)) return 4;
-  return s.includes(":") && isV6(s) ? 6 : 0;
+  // contracts 不收 zone：含 % 一律 0
+  return s.includes(":") && !s.includes("%") && isV6(s) ? 6 : 0;
 }
