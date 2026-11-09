@@ -46,7 +46,7 @@
 | **已測** | 假資料：可疑來源成案、正常流量不成案 | 附錄 §8 A | `packages/contracts/test/flow-verdict.test.ts` |
 | **部分** | 信心達門檻→`source=auto`；未達→待審。門檻預設保守；僅 `platform_admin` 可調且寫稽核 | 附錄 §8 A | 常數／分數：`flow-verdict.test.ts`（`AUTO_THRESHOLD=0.9`）。**缺**：自動建列管線、門檻調整 API／UI／稽核（路徑未入 PLAN／附錄 → 待總召裁示） |
 | **已測（單元）** | 白名單 IP 永不產生有效黑名單（人工核准路徑） | 附錄 §8 A／B | `apps/console/src/review/pending.test.ts`、`demoStore.test.ts`。**缺**：自動上榜路徑對白名單的驗收、以及管理面 API（目前為 console 記憶體 demoStore） |
-| **紅燈中** | 預設到期 24 小時（`expires_at = created_at + 24h`） | 附錄 §3、§8 A | `apps/console/test/phase3-write-side-ttl.test.ts`（寫入端須以 `created_at` 加 24h） |
+| **紅燈中** | 到期規則（V2 §2b）：待審 `created_at+24h`（累加不延長）；封鎖 `listed_at(=approved_at)+24h`；`created_at≤approved_at≤expires_at`（MONITOR §3） | V2-DECISIONS §2b、MONITOR §3 | `apps/console/test/phase3-write-side-ttl.test.ts`（窗內核准之 `expires_at` 仍為實作 `created_at+24h` 時紅燈） |
 | **已測** | §7a 路由空狀態／角色／無權限（`/blacklist/review`、`/blacklist`、`/whitelist`；不含 `/mode`） | 附錄 §7a、§8 B | `apps/console/e2e/helpers/routes.ts`、`roles-pages.spec.ts`、`routes-empty-states.spec.ts`、`phase3-monitor-empty.spec.ts`（`a70cd6d`） |
 | **已測（單元）** | 待審核准／退回；已上榜篩自動／人工；一鍵撤回；兩人同時核准只留一筆 | 附錄 §8 B | `apps/console/src/review/pending.test.ts`、`listed.test.ts`、`demoStore.test.ts`。**缺**：帶資料的 E2E（無 PLAN 規定的種子／API 面） |
 | **已測＋E2E** | 白名單頁新增／刪除；格式錯誤擋下 | 附錄 §8 B | 單元：`allowlistForm.test.ts`；E2E：`apps/console/e2e/phase3-whitelist-ops.spec.ts` |
