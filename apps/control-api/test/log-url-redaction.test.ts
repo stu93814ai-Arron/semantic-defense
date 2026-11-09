@@ -103,4 +103,15 @@ describe("control-api noQuery 遇到引號不中斷（資安退回 R1）", () =>
     expect(recs.flatMap((r) => [r.msg, r.err?.message, r.err?.stack]).filter((f) => typeof f !== "string" || f.includes(SECRET))).toEqual([]);
     expect(recs.map((r) => r.msg)).toEqual(['fail at /p"x', 'while GET /p"x']);
   });
+
+  it("asterisk-form（OPTIONS *?token=SECRET）：err.message、msg、stack 都不含 SECRET（R7）", async () => {
+    const lines: string[] = [];
+    app = await buildApp({ idleTimeoutMs: 60_000, databaseUrl: requireDatabaseUrl(),
+      logger: { level: "info", stream: { write: (l: string) => { lines.push(l); } } } });
+    app.log.error(new Error(`bad target *?token=${SECRET}`));
+    app.log.error({ err: new Error(`bad target *?token=${SECRET}`) }, `while OPTIONS *?token=${SECRET}`);
+    const recs = lines.map((l) => JSON.parse(l) as { msg?: string; err?: { message?: string; stack?: string } });
+    expect(recs.flatMap((r) => [r.msg, r.err?.message, r.err?.stack]).filter((f) => typeof f !== "string" || f.includes(SECRET))).toEqual([]);
+    expect(recs.map((r) => r.msg)).toEqual(["bad target *", "while OPTIONS *"]);
+  });
 });
