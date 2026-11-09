@@ -13,7 +13,7 @@ import { registerAuditRoute } from "./audit.js";
 import { registerThresholdRoutes } from "./thresholds.js";
 import { registerWhitelistRoutes } from "./whitelist.js";
 import { registerBlacklistRoutes } from "./blacklist.js";
-import { badJsonError, installErrorHandler } from "./errors.js";
+import { badJsonError, installErrorHandler, withSafeReqLog } from "./errors.js";
 
 export type BuildAppOptions = {
   idleTimeoutMs?: number;
@@ -194,7 +194,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<ControlApi> 
   const now = opts.now ?? Date.now;
   const db = await openDb(resolveDatabaseUrl(opts.databaseUrl));
   const limiter = new LoginLimiter(db, rl.maxFailures, rl.windowMs, now);
-  const app = Fastify({ trustProxy: opts.trustProxy ?? false, logger: opts.logger ?? true });
+  const app = Fastify({ trustProxy: opts.trustProxy ?? false, logger: withSafeReqLog(opts.logger) });
   installErrorHandler(app);
   allowEmptyJson(app);
   app.decorate("db", db);

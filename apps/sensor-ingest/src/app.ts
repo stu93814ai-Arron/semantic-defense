@@ -4,7 +4,7 @@ import Fastify, {
 import { parseFlowMetadataEvent } from "@semantic-defense/contracts";
 import { findSensorByToken, ipAllowed, type SensorDb } from "@semantic-defense/sensor-auth";
 import { createAuthFailLimiter } from "./rate-limit.js";
-import { installErrorHandler } from "./errors.js";
+import { installErrorHandler, withSafeReqLog } from "./errors.js";
 import { ensureFlowSchema, insertFlow, purgeExpired, recordRejection } from "./store.js";
 
 /**
@@ -71,7 +71,7 @@ const hasSelfReportedSensorId = (body: unknown): boolean =>
   body !== null && typeof body === "object" && Object.prototype.hasOwnProperty.call(body, "sensor_id");
 
 export async function buildIngest(opts: BuildIngestOptions): Promise<FastifyInstance> {
-  const logger = opts.logger ?? true;
+  const logger = withSafeReqLog(opts.logger);
   const app = (opts.https
     ? Fastify({ https: opts.https, trustProxy: false, bodyLimit: BODY_LIMIT, logger })
     : Fastify({ trustProxy: false, bodyLimit: BODY_LIMIT, logger })) as unknown as FastifyInstance;

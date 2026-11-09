@@ -1,4 +1,4 @@
-import type { FastifyError, FastifyInstance } from "fastify";
+import type { FastifyError, FastifyInstance, FastifyServerOptions } from "fastify";
 
 /**
  * 錯誤處理（資安殘留 1，與 control-api 同作法；流量平面不得 import control-api，故各自一份）：
@@ -23,10 +23,29 @@ export function safeErr(err: ErrLike): Record<string, unknown> {
   return { name: err.name, message: err.message, code: err.code, stack: err.stack };
 }
 
+/** log 用 url：只留 path，去掉 query（?token=… 等可能含憑證）。 */
+export const pathOnly = (url: string): string => {
+  const i = url.indexOf("?");
+  return i === -1 ? url : url.slice(0, i);
+};
+
+type ReqLike = { method: string; url: string; host?: string; ip?: string; socket?: { remotePort?: number } };
+/** 自訂 req serializer：欄位同 Fastify 預設，但 url 只記 path。 */
+export const safeReqSerializer = (req: ReqLike) => ({
+  method: req.method, url: pathOnly(req.url), host: req.host, remoteAddress: req.ip, remotePort: req.socket?.remotePort,
+});
+
+/** 套上 safeReqSerializer 的 logger 設定；false 維持關閉，true／省略＝預設 logger。 */
+export function withSafeReqLog(logger: FastifyServerOptions["logger"] | undefined): FastifyServerOptions["logger"] {
+  if (logger === false) return false;
+  const base = logger === true || logger === undefined ? {} : logger;
+  return { ...base, serializers: { ...base.serializers, req: safeReqSerializer } };
+}
+
 export function installErrorHandler(app: FastifyInstance): void {
   app.setErrorHandler((err: FastifyError, req, reply) => {
     if ((err.statusCode ?? 500) >= 500) {
-      req.log.error({ err: safeErr(err), method: req.method, url: req.url }, "server error");
+      req.log.error({ err: safeErr(err), method: req.method, url: pathOnly(req.url) }, "server error");
       return reply.code(500).send(SERVER_ERROR_BODY);
     }
     return reply.send(err);
