@@ -6,6 +6,7 @@ import { DAY, MIN, T0, bootJudgeApp, flowEvent } from "./helpers/judge.js";
 import { runJudgeTick, type TickOpts } from "../src/judge.js";
 import { autoListInTx, writeAutoBlocklistEntry } from "../src/auto-blacklist.js";
 import { requireDatabaseUrl } from "./helpers/pg.js";
+import { holdAllowlistInsert, waitShareWaiter } from "./helpers/locks.js";
 
 /**
  * 成案流程 commit 9：E3.A 自動上榜條件（計畫 §1 步驟 4、§6.1、§7；A 裁定 11-09）。
@@ -335,5 +336,22 @@ describe("自動上榜路徑只吞 data exception：其他錯誤讓整個 tick r
     await three(["app-1", "app-2", "app-1"]);
     await expect(tick(T0, { beforeAutoList: () => Promise.reject(new Error("boom")) })).rejects.toThrow("boom");
     await rolledBack();
+  });
+});
+
+describe("白名單 SHARE 鎖與鎖順序（A 覆核）", () => {
+  it("SHARE 鎖：上榜前另一連線有未 commit 的白名單新增 → tick 等它 commit、重查 → auto_suppressed{allowlist}、不上榜", async () => {
+    await boot();
+    await three(["app-1", "app-2", "app-1"]);
+    let waiter: number | null = null;
+    let bg: Promise<void> = Promise.resolve();
+    await tick(T0, { beforeAutoList: async () => {
+      const hold = await holdAllowlistInsert("203.0.113.0/24", T0 - DAY);
+      bg = (async () => { waiter = await waitShareWaiter(app.db); await hold.commit(); })();
+    } });
+    await bg;
+    expect(waiter).not.toBeNull();
+    expect(await listed()).toEqual([]);
+    expect((await audits("blacklist.auto_suppressed")).map((a) => a.detail.reason)).toEqual(["allowlist"]);
   });
 });
