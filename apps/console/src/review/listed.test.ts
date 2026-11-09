@@ -75,4 +75,47 @@ describe("已上榜篩選與撤回", () => {
     if (r.ok) return;
     expect(r.code).toBe("already_revoked");
   });
+
+  it("已到期項目不出現在 active 清單", () => {
+    const withExpired: ListedEntry[] = [
+      ...entries,
+      {
+        entry_id: "e-expired",
+        ip: "198.51.100.9",
+        source: "manual",
+        confidence: 0.5,
+        case_id: "66666666-6666-4666-8666-666666666666",
+        created_at: "2026-11-03T00:00:00Z",
+        expires_at: "2026-11-04T00:00:00Z",
+        approved_by: "operator1",
+        approved_at: "2026-11-03T00:00:00Z",
+        revoked_at: null,
+      },
+    ];
+    const active = filterListed(withExpired, "all", "2026-11-05T12:00:00Z");
+    expect(active.map((e) => e.entry_id)).toEqual(["e-auto", "e-manual"]);
+  });
+
+  it("已到期不可撤回", () => {
+    const expired: ListedEntry = {
+      entry_id: "e-expired",
+      ip: "198.51.100.9",
+      source: "manual",
+      confidence: 0.5,
+      case_id: "66666666-6666-4666-8666-666666666666",
+      created_at: "2026-11-03T00:00:00Z",
+      expires_at: "2026-11-04T00:00:00Z",
+      approved_by: "operator1",
+      approved_at: "2026-11-03T00:00:00Z",
+      revoked_at: null,
+    };
+    const r = withdrawListed(expired, {
+      actorId: "operator1",
+      now: "2026-11-05T12:00:00Z",
+    });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.code).toBe("already_expired");
+    expect(r.message).toMatch(/到期/);
+  });
 });

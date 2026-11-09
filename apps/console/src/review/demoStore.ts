@@ -34,7 +34,7 @@ const seedListed = (): ListedEntry[] => [
     confidence: 0.96,
     case_id: "22222222-2222-4222-8222-222222222222",
     created_at: "2026-11-05T00:00:00Z",
-    expires_at: "2026-11-06T00:00:00Z",
+    expires_at: "2099-01-01T00:00:00Z",
     approved_by: "system:auto",
     approved_at: "2026-11-05T00:00:00Z",
     revoked_at: null,
@@ -56,7 +56,7 @@ export function listPending(): PendingCandidate[] {
 }
 
 export function listActive(filter: SourceFilter = "all"): ListedEntry[] {
-  return filterListed(listed, filter);
+  return filterListed(listed, filter, nowIso());
 }
 
 export function listAllowlist(): AllowlistItem[] {
