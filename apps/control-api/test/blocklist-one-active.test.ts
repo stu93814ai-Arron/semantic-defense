@@ -5,6 +5,7 @@ import { buildApp, seedPhase2Fixtures, type ControlApi } from "./helpers/app.js"
 import { cookieHeader, login } from "./helpers/session.js";
 import { requireDatabaseUrl } from "./helpers/pg.js";
 import { writeAutoBlocklistEntry } from "../src/auto-blacklist.js";
+import { insertActiveBlocklistEntry } from "../src/blocklist-store.js";
 
 /** 成案流程 Q8／Q9：同 IP 只能有一筆生效黑名單（ended_at＋partial UNIQUE(ip) WHERE ended_at IS NULL＋同 tx sweep＋ON CONFLICT DO NOTHING）。 */
 let app: ControlApi;
@@ -81,5 +82,22 @@ describe("黑名單同 IP 唯一生效", () => {
     await boot();
     await auto(T0);
     await expect(app.db.query("UPDATE blocklist_entries SET ended_at = $1", [T0 - 1])).rejects.toMatchObject({ code: "23514" });
+  });
+});
+
+describe("insertActiveBlocklistEntry 前綴護欄（資安殘留 4：程式錯誤的護欄，不加 DB CHECK）", () => {
+  const draft = (ip: string) => ({ entry_id: randomUUID(), ip, source: "auto" as const, confidence: 0.95, case_id: randomUUID(),
+    created_at: T0, expires_at: T0 + DAY, approved_by: "system:auto", approved_at: T0 });
+  it.each(["203.0.113.7", "203.0.113.0/24", "2001:db8::1", "2001:DB8::1/128", "2001:db8:0::1/128", "2001:db8::/64", "203.0.113.007/32"])(
+    "非正規化 x/32、x/128（%s）→ 拋錯、不寫入", async (ip) => {
+      await boot();
+      await expect(app.db.tx((q) => insertActiveBlocklistEntry(q, draft(ip), T0))).rejects.toThrow(/x\/32|x\/128/);
+      expect(await rows()).toEqual([]);
+    });
+  it("正規化 203.0.113.7/32、2001:db8::1/128 → 寫入", async () => {
+    await boot();
+    for (const ip of ["203.0.113.7/32", "2001:db8::1/128"]) {
+      expect((await app.db.tx((q) => insertActiveBlocklistEntry(q, draft(ip), T0)))?.ip).toBe(ip);
+    }
   });
 });
