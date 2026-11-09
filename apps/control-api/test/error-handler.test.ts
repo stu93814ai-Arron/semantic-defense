@@ -43,9 +43,9 @@ describe("control-api 5xx 錯誤處理", () => {
     expect(r.statusCode).toBe(500);
     expect(r.json()).toEqual({ error: "伺服器錯誤" });
     for (const leak of ["t_leak_probe", "audit_events", "violates", "constraint", "relation", "23514"]) expect(r.body).not.toContain(leak);
-    const errs = lines.map((l) => JSON.parse(l) as { level: number; msg?: string; err?: { message?: string } }).filter((x) => x.level >= 50);
+    const errs = lines.map((l) => JSON.parse(l) as { level: number; err?: Record<string, unknown> }).filter((x) => x.level >= 50);
     expect(errs).toHaveLength(1);
-    expect(errs[0]!.err?.message).toContain("t_leak_probe");
+    expect(errs[0]!.err).toMatchObject({ code: "23514", constraint: "t_leak_probe" });
     const all = lines.join("\n");
     for (const s of ["auth-marker-xyz", c.split("=")[1]!, "pass-admin-1"]) expect(all).not.toContain(s);
   });
@@ -62,6 +62,26 @@ describe("control-api 5xx 錯誤處理", () => {
     expect(lines.some((l) => (JSON.parse(l) as { level: number }).level >= 50)).toBe(true);
     expect(lines.join("\n")).not.toContain(BODY_MARKER);
     expect(lines.join("\n")).not.toContain("auth-marker-xyz");
+  });
+});
+
+describe("control-api 5xx log 不含請求資料（pg detail／message）", () => {
+  it("稽核 CHECK 失敗：log 不含請求本文的值（pg 的 Failing row contains 會帶出）", async () => {
+    await boot();
+    const c = await admin();
+    await app.db.exec("ALTER TABLE audit_events ADD CONSTRAINT t_leak_probe2 CHECK (action <> 'whitelist.create') NOT VALID");
+    let r;
+    try {
+      r = await app.inject({ method: "POST", url: ADMIN_API_PATHS.whitelist, headers: cookieHeader(c),
+        payload: { cidr: "10.0.0.0/8", reason: "reason-marker-q7", expires_at: null } });
+    } finally {
+      await app.db.exec("ALTER TABLE audit_events DROP CONSTRAINT t_leak_probe2");
+    }
+    expect([r.statusCode, r.json()]).toEqual([500, { error: "伺服器錯誤" }]);
+    const errs = lines.map((l) => JSON.parse(l) as { level: number; err?: Record<string, unknown> }).filter((x) => x.level >= 50);
+    expect(errs).toHaveLength(1);
+    expect(errs[0]!.err).toMatchObject({ code: "23514", constraint: "t_leak_probe2" });
+    expect(lines.join("\n")).not.toContain("reason-marker-q7");
   });
 });
 

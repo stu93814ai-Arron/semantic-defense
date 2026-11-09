@@ -2,7 +2,7 @@ import type { FastifyError, FastifyInstance } from "fastify";
 
 /**
  * 錯誤處理（資安殘留 1）：
- * - 5xx：回固定 body {error:"伺服器錯誤"}，不回 DB 原文／約束名／表名；錯誤只寫 log（只記 err 與 method／url，不記 request body、headers）。
+ * - 5xx：回固定 body {error:"伺服器錯誤"}，不回 DB 原文／約束名／表名；錯誤只寫 log（safeErr＋method／url，不記 request body、headers、pg detail）。
  * - 壞 JSON（BAD_JSON_CODE）：400 固定 body {error:"請求格式錯誤"}，不外洩 parser 原文。
  * - 其他 4xx：交回 Fastify 預設處理，body 維持原樣。
  */
@@ -14,11 +14,27 @@ export function badJsonError(): FastifyError {
   return Object.assign(new Error("invalid json body"), { statusCode: 400, code: BAD_JSON_CODE, name: "BadJson" }) as FastifyError;
 }
 
+type ErrLike = {
+  name?: string; message?: string; code?: string; stack?: string;
+  severity?: unknown; table?: string; constraint?: string; column?: string;
+};
+
+/**
+ * log 用的錯誤摘要。pg 錯誤（帶 severity）的 message／detail／stack 可能嵌入請求值（如 Failing row contains、invalid input syntax），
+ * 故只記 code、table、constraint、column；其他錯誤記 name／message／code／stack。
+ */
+export function safeErr(err: ErrLike): Record<string, unknown> {
+  if (typeof err.severity === "string") {
+    return { name: err.name, code: err.code, table: err.table, constraint: err.constraint, column: err.column };
+  }
+  return { name: err.name, message: err.message, code: err.code, stack: err.stack };
+}
+
 export function installErrorHandler(app: FastifyInstance): void {
   app.setErrorHandler((err: FastifyError, req, reply) => {
     const status = err.statusCode ?? 500;
     if (status >= 500) {
-      req.log.error({ err, method: req.method, url: req.url }, "server error");
+      req.log.error({ err: safeErr(err), method: req.method, url: req.url }, "server error");
       return reply.code(500).send(SERVER_ERROR_BODY);
     }
     if (err.code === BAD_JSON_CODE) return reply.code(400).send({ error: "請求格式錯誤" });
