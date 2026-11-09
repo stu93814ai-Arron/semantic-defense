@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 驗證 .githooks/pre-commit 只驗 index、不碰工作目錄／stash。
-# 含：(1) 拋棄式 stub repo 快速案例 (a–d)
+# 含：(1) 拋棄式 stub repo 快速案例 (a–d)＋(s) symlink 逃逸
 #     (2) 真實 monorepo workspace 跨套件案例（實際 pnpm/tsc，不用 stub）
 set -euo pipefail
 
@@ -33,11 +33,19 @@ assert_files_eq() {
   fi
 }
 
-# ======================== (1) stub repo ========================
 BASE=$(mktemp -d "${TMPDIR:-/tmp}/sd-pci-test-XXXXXX")
-cleanup_base() { rm -rf "${BASE:?}" 2>/dev/null || true; }
-trap cleanup_base EXIT
+REAL=""
+cleanup_all() {
+  if [ -n "${REAL:-}" ]; then
+    git -C "$ROOT" worktree remove --force "$REAL" 2>/dev/null || true
+    git -C "$ROOT" worktree prune 2>/dev/null || true
+    rm -rf "${REAL:?}" 2>/dev/null || true
+  fi
+  rm -rf "${BASE:?}" 2>/dev/null || true
+}
+trap cleanup_all EXIT INT TERM
 
+# ======================== (1) stub repo ========================
 REPO="$BASE/repo"
 mkdir -p "$REPO/.githooks" "$REPO/scripts" "$BASE/bin"
 git -C "$REPO" init -q -b main
@@ -83,9 +91,9 @@ export PATH="$BASE/bin:$PATH"
 } > "$REPO/.githooks/pre-commit"
 chmod +x "$REPO/.githooks/pre-commit"
 grep -q 'test stub gitleaks' "$REPO/.githooks/pre-commit" || { echo "hook patch failed"; exit 1; }
-# stub 案例仍用 symlink 即可（無 workspace 相對連結）；確認 cp -a 路徑在真實 hook 存在
-grep -q 'cp -a' "$HOOK" || { echo "真實 hook 缺少 cp -a"; exit 1; }
-grep -q '\${TMP:?}' "$HOOK" || { echo "真實 hook 缺少 \${TMP:?}"; exit 1; }
+grep -q 'TMP_REAL' "$HOOK" || { echo "真實 hook 缺少 TMP_REAL"; exit 1; }
+grep -q 'assert_under_tmp\|指出暫存樹外' "$HOOK" || { echo "真實 hook 缺少路徑防護"; exit 1; }
+grep -q '\.vite' "$HOOK" || { echo "真實 hook 缺少 .vite 排除"; exit 1; }
 
 cat > "$REPO/package.json" << 'JSON'
 {
@@ -205,10 +213,46 @@ assert_eq "(d) mid-fail rejects" 1 "$ec_d"
 snapshot after-d
 assert_files_eq "(d) restore WD/index/stash" "$BASE/snap-before-d.txt" "$BASE/snap-after-d.txt"
 [ -f "$REPO/UNTRACKED_KEEP.txt" ] && { echo "PASS: (d) untracked kept"; pass=$((pass+1)); } || { echo "FAIL: (d) untracked lost"; fail=$((fail+1)); }
+git -C "$REPO" reset -q HEAD
+rm -f "$REPO/FAIL.marker" "$REPO/UNTRACKED_KEEP.txt"
+git -C "$REPO" checkout -q -- . 2>/dev/null || true
+git -C "$REPO" clean -fdq
+
+# (s) 暫存區 packages → 樹外 symlink；不得刪到樹外 SENTINEL
+echo "---- symlink escape case ----"
+OUTSIDE=$(mktemp -d "${TMPDIR:-/tmp}/sd-pci-outside-XXXXXX")
+echo 'SENTINEL_ALIVE' > "$OUTSIDE/SENTINEL"
+mkdir -p "$OUTSIDE/contracts/node_modules"
+# 換成 symlink 並寫入 index
+rm -rf "$REPO/packages"
+ln -s "$OUTSIDE" "$REPO/packages"
+git -C "$REPO" add -A
+# 確認 index 裡 packages 是 symlink
+git -C "$REPO" ls-files -s packages | head -3
+ec_s=$(run_hook)
+if [ "$ec_s" -ne 0 ]; then
+  echo "PASS: (s) packages→outside symlink → reject (ec=$ec_s)"
+  pass=$((pass+1))
+else
+  echo "FAIL: (s) expected non-zero, got 0"
+  cat "$BASE/hook.out" || true
+  fail=$((fail+1))
+fi
+if [ -f "$OUTSIDE/SENTINEL" ] && grep -q 'SENTINEL_ALIVE' "$OUTSIDE/SENTINEL"; then
+  echo "PASS: (s) SENTINEL still present"
+  pass=$((pass+1))
+else
+  echo "FAIL: (s) SENTINEL missing or overwritten"
+  fail=$((fail+1))
+fi
+grep -E '指出暫存樹外|symlink' "$BASE/hook.out" | head -5 || true
+rm -rf "${OUTSIDE:?}"
+# 還原 stub repo packages 為普通目錄（後續若還用）
+git -C "$REPO" reset -q --hard HEAD 2>/dev/null || true
+git -C "$REPO" clean -fdq
 
 # ======================== (2) real workspace ========================
 echo "---- real workspace cases ----"
-# 拿掉 stub pnpm/gitleaks，改用真實工具
 export PATH="$REAL_PATH"
 hash -r 2>/dev/null || true
 command -v pnpm
@@ -216,17 +260,9 @@ command -v pnpm
 [ -d "$ROOT/packages/contracts" ] || { echo "需要 packages/contracts"; exit 1; }
 
 REAL=$(mktemp -d "${TMPDIR:-/tmp}/sd-pci-real-XXXXXX")
-cleanup_real() {
-  git -C "$ROOT" worktree remove --force "$REAL" 2>/dev/null || true
-  rm -rf "${REAL:?}" 2>/dev/null || true
-}
-trap 'cleanup_real; cleanup_base' EXIT
-
 git worktree add -q --detach "$REAL" HEAD
-# 使用工作區未提交的 hook 修正（HEAD 可能尚無 cp -a）
 cp -f "$HOOK" "$REAL/.githooks/pre-commit"
 chmod +x "$REAL/.githooks/pre-commit"
-# 接上依賴：與 hook 相同策略（根 symlink、套件 cp -a），避免再跑完整 install
 ln -s "$ROOT/node_modules" "$REAL/node_modules"
 for d in "$ROOT"/packages/*/node_modules "$ROOT"/apps/*/node_modules; do
   [ -e "$d" ] || continue
@@ -235,7 +271,6 @@ for d in "$ROOT"/packages/*/node_modules "$ROOT"/apps/*/node_modules; do
   rm -rf "${REAL:?}/$rel"
   cp -a "$d" "$REAL/$rel"
 done
-# 確認相對連結落在 REAL 樹內
 resolved=$(realpath "$REAL/apps/console/node_modules/@semantic-defense/contracts")
 case "$resolved" in
   "$REAL"/packages/contracts*) echo "PASS: (real) package nm 相對連結指向 REAL/packages"; pass=$((pass+1)) ;;
@@ -270,9 +305,7 @@ run_real_hook() {
   echo "$ec"
 }
 
-# (r1) 暫存區改名 contracts 匯出、依賴方未跟著改 → 拒絕
-# 改 ADMIN_API_PATHS 識別名；contracts 測試跟著改以免套件自身 tsc 先紅。
-# apps/* 仍 import 舊名且不進 index → 跨套件 typecheck 應紅。
+# (r1)
 sed -i 's/export const ADMIN_API_PATHS/export const ADMIN_API_PATHS_RENAMED_FOR_PCI_TEST/' "$ADMIN_SRC"
 sed -i 's/ADMIN_API_PATHS/ADMIN_API_PATHS_RENAMED_FOR_PCI_TEST/g' "$REAL/packages/contracts/test/admin-api.test.ts"
 git -C "$REAL" add -- packages/contracts/src/admin-api.ts packages/contracts/test/admin-api.test.ts
@@ -295,12 +328,10 @@ fi
 snap_real after-r1
 assert_files_eq "(r1) WD/index/stash unchanged" "$BASE/rsnap-before-r1.txt" "$BASE/rsnap-after-r1.txt"
 
-# 還原 REAL 到乾淨 HEAD（會蓋掉已複製的 hook，需再貼一次）
 git -C "$REAL" reset -q --hard HEAD
 git -C "$REAL" clean -fdq
 cp -f "$HOOK" "$REAL/.githooks/pre-commit"
 chmod +x "$REAL/.githooks/pre-commit"
-# reset/clean 可能清掉 node_modules 連結，補回
 if [ ! -e "$REAL/node_modules" ]; then
   ln -s "$ROOT/node_modules" "$REAL/node_modules"
 fi
@@ -313,8 +344,7 @@ for d in "$ROOT"/packages/*/node_modules "$ROOT"/apps/*/node_modules; do
   fi
 done
 
-# (r2) 暫存區綠、工作目錄 contracts 未暫存部分是紅 → 放行
-# index 乾淨；WD 改名 contracts 匯出（未 add）
+# (r2)
 sed -i 's/export const ADMIN_API_PATHS/export const ADMIN_API_PATHS_WD_ONLY_BROKEN/' "$ADMIN_SRC"
 git -C "$REAL" diff --name-only | grep -q 'admin-api.ts'
 if git -C "$REAL" diff --cached --name-only | grep -q 'admin-api.ts'; then
@@ -328,13 +358,7 @@ if [ "$ec_r2" -ne 0 ]; then
 fi
 snap_real after-r2
 assert_files_eq "(r2) WD/index/stash unchanged" "$BASE/rsnap-before-r2.txt" "$BASE/rsnap-after-r2.txt"
-# WD 仍應是紅的
 grep -q 'ADMIN_API_PATHS_WD_ONLY_BROKEN' "$ADMIN_SRC" && { echo "PASS: (r2) WD still broken"; pass=$((pass+1)); } || { echo "FAIL: (r2) WD restored unexpectedly"; fail=$((fail+1)); }
-
-git -C "$REAL" reset -q --hard HEAD
-git -C "$REAL" clean -fdq
-cleanup_real
-trap cleanup_base EXIT
 
 echo
 echo "RESULT: pass=$pass fail=$fail"

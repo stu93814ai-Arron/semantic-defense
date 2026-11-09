@@ -8,6 +8,18 @@ ROOT=$(git rev-parse --show-toplevel)
 cd "$ROOT"
 
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/sd-precommit-XXXXXX")
+TMP_REAL=$(realpath "$TMP")
+# 寫入／刪除 $TMP 子路徑前，確認解析後仍在暫存樹內（防止 index 內 symlink 指到樹外）
+assert_under_tmp() {
+  local label=$1 raw=$2
+  local dst
+  dst=$(realpath -m "$raw")
+  case "$dst" in
+    "$TMP_REAL"/*|"$TMP_REAL") ;;
+    *) echo "❌ ${label} 經 symlink 指出暫存樹外（$dst），拒絕" >&2; exit 1 ;;
+  esac
+  printf '%s\n' "$dst"
+}
 cleanup() {
   rm -rf "${TMP:?}" 2>/dev/null || true
 }
@@ -18,7 +30,7 @@ trap 'cleanup; exit 143' TERM
 # 匯出「目前 index」的完整樹（含已暫存變更，不含未暫存的工作目錄改動）
 git checkout-index --all --prefix="$TMP/"
 
-# --- gitleaks：先掃暫存樹（尚未 symlink node_modules，避免掃到依賴）＋本 repo 歷史 ---
+# --- gitleaks：先掃暫存樹（尚未接上 node_modules，避免掃到依賴）＋本 repo 歷史 ---
 VER=8.21.2
 SHA=5bc41815076e6ed6ef8fbecc9d9b75bcae31f39029ceb55da08086315316e3ba
 CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/semantic-defense/gitleaks-$VER"
@@ -46,15 +58,32 @@ echo "secrets: OK"
 # - 根目錄 node_modules：symlink（體積大、.pnpm store）
 # - packages/*/apps/*/node_modules：cp -a 複製，保留相對連結，使其解析到 $TMP 內的
 #   packages/*（若 symlink 過去，相對路徑會指回工作目錄的 src，index 隔離就失效）
+# 寫入前一律 realpath 確認未逃出 $TMP_REAL（index 若含 packages→樹外 symlink 會被擋下）
 if [ -d "$ROOT/node_modules" ]; then
+  nm_dst=$(assert_under_tmp "node_modules" "$TMP/node_modules")
+  if [ -L "$TMP/node_modules" ]; then
+    rm -f "$TMP/node_modules"
+  elif [ -e "$TMP/node_modules" ]; then
+    rm -rf "${nm_dst:?}"
+  fi
   ln -s "$ROOT/node_modules" "$TMP/node_modules"
 fi
 for d in "$ROOT"/packages/*/node_modules "$ROOT"/apps/*/node_modules; do
   [ -e "$d" ] || continue
   rel=${d#"$ROOT"/}
-  mkdir -p "$TMP/$(dirname "$rel")"
-  rm -rf "${TMP:?}/$rel"
-  cp -a "$d" "$TMP/$rel"
+  case "$rel" in
+    /*|*".."*) echo "❌ 非法相對路徑 rel=$rel（來自 $d）" >&2; exit 1 ;;
+  esac
+  dst=$(assert_under_tmp "$rel" "$TMP/$rel")
+  parent=$(assert_under_tmp "$(dirname "$rel")" "$TMP/$(dirname "$rel")")
+  mkdir -p "$parent"
+  rm -rf "${dst:?}"
+  cp -a "$d" "$dst"
+  # 排除 Vite 快取（若有）
+  if [ -e "$dst/.vite" ] || [ -L "$dst/.vite" ]; then
+    vite_dst=$(assert_under_tmp "$rel/.vite" "$dst/.vite")
+    rm -rf "${vite_dst:?}"
+  fi
 done
 
 # --- typecheck / eslint：在暫存樹內跑，看不到工作目錄未暫存改動 ---
