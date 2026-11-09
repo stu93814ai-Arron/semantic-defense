@@ -4,6 +4,7 @@ import { defineConfig } from "vitest/config";
 // 之後加 packages/gate（回放）、簽名等，在此擴充。
 export const CORE_COVERAGE_INCLUDE = [
   "packages/contracts/src/**/*.ts",
+  "apps/control-api/src/**/*.ts", // 管理面全部產品碼（成案、判定 tick、自動上榜、熔斷…；A 組 11-09 補入，原本只有 auth／authz）
   "apps/control-api/src/auth.ts", // 實際佈局：登入、session、cookie、角色型別集中於此檔
   "apps/control-api/src/authz.ts", // PM 核准自 app.ts 拆出集中授權
   "apps/control-api/src/auth/**/*.ts",
