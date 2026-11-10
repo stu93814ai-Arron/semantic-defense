@@ -11,7 +11,7 @@ export type SyslogConfig = {
   host: string; port: number; transport: SyslogTransport;
   hostname: string; appName: string; allow: import("node:net").BlockList;
 };
-export type SyslogHooks = { ca?: string; lookup?: LookupFn; timeoutMs?: number; now?: () => number };
+export type SyslogHooks = { ca?: string; lookup?: LookupFn; timeoutMs?: number; now?: () => number; signal?: AbortSignal };
 
 function throwInvalid(flag: string): never {
   throw new Error(`${flag} is invalid`);
@@ -80,32 +80,43 @@ function classify(err: unknown): string {
   return "send_failed";
 }
 
-function connectTcp(address: string, port: number, family: 4 | 6, remain: number): Promise<net.Socket> {
+function bindAbort(signal: AbortSignal | undefined, destroy: () => void): () => void {
+  if (!signal) return () => {};
+  const on = () => destroy();
+  if (signal.aborted) { on(); return () => {}; }
+  signal.addEventListener("abort", on, { once: true });
+  return () => signal.removeEventListener("abort", on);
+}
+
+function connectTcp(address: string, port: number, family: 4 | 6, remain: number, signal?: AbortSignal): Promise<net.Socket> {
   return new Promise((resolve, reject) => {
     const s = net.connect({ host: address, port, family });
-    const fail = (e: unknown) => { s.destroy(); reject(e); };
+    const unbind = bindAbort(signal, () => { s.destroy(); reject(new AlertSendError("syslog_timeout")); });
+    const fail = (e: unknown) => { unbind(); s.destroy(); reject(e); };
     s.setTimeout(remain, () => fail(new AlertSendError("syslog_timeout")));
-    s.once("connect", () => resolve(s));
+    s.once("connect", () => { unbind(); resolve(s); });
     s.once("error", fail);
   });
 }
 
-function wrapTls(socket: net.Socket, servername: string, remain: number, ca?: string): Promise<tls.TLSSocket> {
+function wrapTls(socket: net.Socket, servername: string, remain: number, ca?: string, signal?: AbortSignal): Promise<tls.TLSSocket> {
   return new Promise((resolve, reject) => {
     const t = tls.connect({ socket, servername, rejectUnauthorized: true, ca });
-    const fail = (e: unknown) => { t.destroy(); reject(e); };
+    const unbind = bindAbort(signal, () => { t.destroy(); reject(new AlertSendError("syslog_timeout")); });
+    const fail = (e: unknown) => { unbind(); t.destroy(); reject(e); };
     t.setTimeout(remain, () => fail(new AlertSendError("syslog_timeout")));
-    t.once("secureConnect", () => resolve(t));
+    t.once("secureConnect", () => { unbind(); resolve(t); });
     t.once("error", fail);
   });
 }
 
-async function writeAndClose(socket: net.Socket, frame: Buffer, remain: number): Promise<void> {
+async function writeAndClose(socket: net.Socket, frame: Buffer, remain: number, signal?: AbortSignal): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    const fail = (e: unknown) => { socket.destroy(); reject(e); };
+    const unbind = bindAbort(signal, () => { socket.destroy(); reject(new AlertSendError("syslog_timeout")); });
+    const fail = (e: unknown) => { unbind(); socket.destroy(); reject(e); };
     socket.setTimeout(remain, () => fail(new AlertSendError("syslog_timeout")));
     socket.once("error", fail);
-    socket.end(frame, () => resolve());
+    socket.end(frame, () => { unbind(); resolve(); });
   });
 }
 
@@ -114,11 +125,16 @@ async function postSyslog(cfg: SyslogConfig, row: OutboxRow, hooks: SyslogHooks)
   const budget = hooks.timeoutMs ?? SYSLOG_TIMEOUT_MS;
   const pin = await pinHost(cfg.host, cfg.allow, hooks.lookup ?? defaultLookup, "ssrf");
   const remain = budget - (Date.now() - started);
-  if (remain <= 0) throw new AlertSendError("syslog_timeout");
+  if (remain <= 0 || hooks.signal?.aborted) throw new AlertSendError("syslog_timeout");
   const frame = octetFrame(formatSyslog5424(cfg, row, hooks.now?.() ?? Date.now()));
-  const sock = await connectTcp(pin.address, cfg.port, pin.family, remain);
-  const out = cfg.transport === "tls" ? await wrapTls(sock, cfg.host, remain, hooks.ca) : sock;
-  await writeAndClose(out, frame, remain);
+  const sock = await connectTcp(pin.address, cfg.port, pin.family, remain, hooks.signal);
+  const unbind = bindAbort(hooks.signal, () => sock.destroy());
+  try {
+    const out = cfg.transport === "tls" ? await wrapTls(sock, cfg.host, remain, hooks.ca, hooks.signal) : sock;
+    await writeAndClose(out, frame, remain, hooks.signal);
+  } finally {
+    unbind();
+  }
 }
 
 export async function sendSyslog(cfg: SyslogConfig, row: OutboxRow, hooks: SyslogHooks = {}): Promise<void> {
@@ -129,6 +145,6 @@ export async function sendSyslog(cfg: SyslogConfig, row: OutboxRow, hooks: Syslo
   }
 }
 
-export function syslogSender(cfg: SyslogConfig, hooks: SyslogHooks = {}): (row: OutboxRow) => Promise<void> {
-  return (row) => sendSyslog(cfg, row, hooks);
+export function syslogSender(cfg: SyslogConfig, hooks: SyslogHooks = {}): (row: OutboxRow, opts?: { signal?: AbortSignal }) => Promise<void> {
+  return (row, opts) => sendSyslog(cfg, row, { ...hooks, signal: opts?.signal ?? hooks.signal });
 }

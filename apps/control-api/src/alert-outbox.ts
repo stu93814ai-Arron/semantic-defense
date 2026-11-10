@@ -29,7 +29,8 @@ export type OutboxRow = {
   attempts: number; next_attempt_at: string; status: "pending" | "delivered" | "failed";
   error_class: string | null; created_at: string; delivered_at: string | null;
 };
-export type AlertSender = (row: OutboxRow) => Promise<void>;
+export type AlertSendOpts = { signal?: AbortSignal };
+export type AlertSender = (row: OutboxRow, opts?: AlertSendOpts) => Promise<void>;
 export type AlertLog = { error(obj: object, msg: string): void };
 export type AlertHealth = { pending: number; failed: number; delivered_1h: number; undelivered: number; last_failed_at: number | null; purged?: number };
 
@@ -236,10 +237,14 @@ function sendTimeoutClass(channel: AlertChannel): string {
   return "syslog_timeout";
 }
 
-function withSendDeadline<T>(p: Promise<T>, ms: number, errorClass: string): Promise<T> {
+function withSendDeadline<T>(run: (signal: AbortSignal) => Promise<T>, ms: number, errorClass: string): Promise<T> {
+  const ac = new AbortController();
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new AlertSendError(errorClass)), ms);
-    p.then((v) => { clearTimeout(timer); resolve(v); }, (e) => { clearTimeout(timer); reject(e); });
+    const timer = setTimeout(() => {
+      ac.abort();
+      reject(new AlertSendError(errorClass));
+    }, ms);
+    run(ac.signal).then((v) => { clearTimeout(timer); resolve(v); }, (e) => { clearTimeout(timer); reject(e); });
   });
 }
 
@@ -251,7 +256,7 @@ async function deliverClaimedRow(
   const send = senderOf(senders, row.channel);
   if (!send) return;
   try {
-    await withSendDeadline(send(row), deadlineMs, sendTimeoutClass(row.channel));
+    await withSendDeadline((signal) => send(row, { signal }), deadlineMs, sendTimeoutClass(row.channel));
     const marked = await db.tx((q) => markDelivered(q, row, clock()));
     if (marked === "delivered") out.delivered += 1;
   } catch (err) {

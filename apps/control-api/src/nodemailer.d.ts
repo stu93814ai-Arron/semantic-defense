@@ -11,6 +11,8 @@ declare module "nodemailer" {
     debug?: boolean;
     proxy?: string;
     connectionTimeout?: number; greetingTimeout?: number; socketTimeout?: number;
+    connection?: import("node:net").Socket;
+    socket?: import("node:net").Socket;
   };
   export type Transporter = {
     sendMail(mail: { from: string; to: string; subject: string; text: string }): Promise<unknown>;
