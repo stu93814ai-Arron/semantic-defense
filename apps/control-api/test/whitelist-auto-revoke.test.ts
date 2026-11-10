@@ -2,9 +2,9 @@ import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import { insertFlowEvents } from "@semantic-defense/flow-store/testing";
 import { ADMIN_API_PATHS } from "@semantic-defense/contracts";
-import { buildApp, seedPhase2Fixtures, type ControlApi } from "./helpers/app.js";
-import { cookieHeader, login } from "./helpers/session.js";
-import { requireDatabaseUrl } from "./helpers/pg.js";
+import type { ControlApi } from "./helpers/app.js";
+import { bootWithPhase2, requireLoginCookie } from "./helpers/boot-fixtures.js";
+import { cookieHeader } from "./helpers/session.js";
 import { DAY, MIN, T0, bootJudgeApp, flowEvent } from "./helpers/judge.js";
 import { runJudgeTick } from "../src/judge.js";
 import {
@@ -21,15 +21,10 @@ const entryPath = (id: string) => ADMIN_API_PATHS.whitelistEntry.replace(":entry
 const body = (cidr: string) => ({ cidr, reason: "office", expires_at: null });
 
 async function boot(): Promise<ControlApi> {
-  app = await buildApp({ idleTimeoutMs: 60_000, databaseUrl: requireDatabaseUrl(), now: () => NOW });
-  await seedPhase2Fixtures(app);
+  app = await bootWithPhase2(() => NOW);
   return app;
 }
-async function cookie(username: string, password: string): Promise<string> {
-  const r = await login(app, { username, password });
-  expect(r.status).toBe(200);
-  return r.cookie!;
-}
+const cookie = (username: string, password: string) => requireLoginCookie(app, username, password);
 const postWl = (c: string | undefined, cidr: string) =>
   app.inject({ method: "POST", url: LIST, headers: c ? cookieHeader(c) : {}, payload: body(cidr) });
 
