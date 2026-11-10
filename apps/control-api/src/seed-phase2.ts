@@ -6,6 +6,7 @@ import argon2 from "argon2";
 import type { FastifyInstance } from "fastify";
 import type { Db } from "./db.js";
 import type { Role } from "./auth.js";
+import { insertUser } from "./users.js";
 
 type SeedApp = FastifyInstance & { db: Db };
 
@@ -28,14 +29,11 @@ export async function seedPhase2Fixtures(app: SeedApp): Promise<void> {
       ["admin1", "pass-admin-1", "platform_admin"],
     ];
     for (const [u, p, role, appId, note] of users) {
-      const r = await app.db.query<{ id: number }>(
-        "INSERT INTO users (username, password_hash, role) VALUES ($1,$2,$3) RETURNING id",
-        [u, await argon2.hash(p), role],
-      );
+      const id = await insertUser(app.db, { username: u, password_hash: await argon2.hash(p), role });
       if (appId) {
         await app.db.query(
           "INSERT INTO apps (id, owner_id, note) VALUES ($1,$2,$3)",
-          [appId, r.rows[0]!.id, note],
+          [appId, id, note],
         );
       }
     }
