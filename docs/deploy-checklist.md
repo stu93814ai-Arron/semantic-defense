@@ -22,44 +22,27 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS flow_events_group_ms
 
 **升級順序（Q4）**：所有 sensor-ingest 實例都升級完，才升級判定（control-api）。
 
-- sensor-ingest 新版啟動時跑遷移（`packages/flow-store/src/write.ts` 的 `ensureFlowSchema`），補 `ts_ms` 欄並回填。
-- 滾動升級期間，舊版 ingest 寫入的列 ts 合法但 `ts_ms` 為 NULL：新版判定 tick 會略過（只計 `{null_ts:n}`），下一次 sensor-ingest 啟動時由回填補上。全部 ingest 升級完後再重啟一次 sensor-ingest，即可補齊。
+- sensor-ingest 新版啟動時跑遷移（`packages/flow-store/src/write.ts` 的 `ensureFlowSchema`），補 `ts_ms` 欄並分批回填。
+- 滾動升級期間，舊版 ingest 寫入的列 ts 合法但 `ts_ms` 為 NULL：新版判定 cursor 會停在該列之前（log `{pending_backfill:n}`），回填補上後再判定分組。全部 ingest 升級完後再重啟一次 sensor-ingest，即可補齊。
 - **已接受的缺口**：若順序沒守住，新版判定的 cursor 已越過某些列之後，舊版 ingest 才寫入 `ts_ms` 為 NULL 的列，這些列下次啟動會被回填，但**不會再被判定**（cursor 不會倒退）。這是已接受的缺口，所以務必先升完所有 ingest。
 
 **每次啟動的成本（Q2）**：
 
-- 回填 `UPDATE flow_events SET ts_ms = flow_ts_ms(ts) WHERE ts_ms IS NULL` 每次啟動都跑。`ts_ms` 沒有索引，這是 flow_events 的全表掃描（量受 7 天保留期限制）。
-- 整段遷移在一個交易內，持有 `pg_advisory_xact_lock(872364210)`（`FLOW_SCHEMA_LOCK`）直到交易結束。多個 sensor-ingest 同時啟動會依序等待。
+- 回填依 `(received_at, sensor_id, flow_id)` 分批（每批 1000），各為短交易、只拿列鎖；只對可轉換的列寫入 `ts_ms`。
+- 遷移持有 session 級 `pg_advisory_lock(872364210)`（`FLOW_SCHEMA_LOCK`），結束後在 finally 釋放。多個 sensor-ingest 同時啟動會依序等待。
 - 部署前先估量：
 
 ```sql
 SELECT count(*) AS total, count(*) FILTER (WHERE ts_ms IS NULL) AS null_ts FROM flow_events;
 ```
 
-**無法換算的舊列**：Postgres 不收的 ts（0000 年、offset 超過 ±15:59 等）回填後仍為 NULL，判定永遠不會分組。判定 log `judge tick skipped rows without ts_ms {null_ts:n}` 持續出現時，表示有這類列。本切片不自動刪除，7 天保留期到期後會由 `purgeExpired` 清掉。在那之前，每次啟動的回填都會對這些毒列跑一次沒有效果的 UPDATE，會產生少量 bloat，可接受。若要提前清理（需人工確認）：
+**無法換算的舊列（毒列）**（A 組領航員裁示 (2026-11-10)）：Postgres 不收的 ts（0000 年、offset 超過 ±15:59、infinity 等）回填時會跳過、不重寫，`ts_ms` 維持 NULL。判定不分組、計 `{null_ts}`、cursor 照常前進。本切片不刪除這些列；7 天保留期到期後由 `purgeExpired` 清掉。判定 log `judge tick skipped rows without ts_ms {null_ts:n}` 持續出現時，表示還有這類列。
 
-```sql
--- 先看筆數與 sensor 分布（不看 ts／IP 內容）
-SELECT sensor_id, count(*) FROM flow_events WHERE ts_ms IS NULL GROUP BY sensor_id;
--- 確認已跑過最新回填（重啟 sensor-ingest）後仍為 NULL 才刪
-DELETE FROM flow_events WHERE ts_ms IS NULL;
-```
+## R-B（已解決）：啟動遷移不再以 ACCESS EXCLUSIVE 鎖住整段回填
 
-## R-B（部署前必修，須在 default-on 切片之前合入）：每次啟動的遷移鎖住 flow_events
+**已合入**：欄位已存在則跳過 ALTER；DDL 短交易設 `lock_timeout` 5s（逾時即失敗）；`flow_events_group_ms` 以 `CREATE INDEX CONCURRENTLY` 建立（`statement_timeout` 10min；若有 INVALID 索引會先 `DROP INDEX CONCURRENTLY`），舊 `flow_events_group` 也以 CONCURRENTLY 刪除；回填分批且毒列不重寫。回填期間其他實例的 INSERT 與判定 SELECT 只碰到列鎖。
 
-**現況問題**：
-
-- `ALTER TABLE flow_events ADD COLUMN IF NOT EXISTS ts_ms` 即使欄位已存在也會拿 **ACCESS EXCLUSIVE** 鎖。這把鎖在同一個遷移交易裡持有到回填結束。
-- 資安實測 1.2M 列：期間 flow_events 的 insert 等了 **17.8 秒**。判定的一般 SELECT 也會被擋（實測 **1.54 秒**）。
-- 表從 **269MB 長到 643MB**：大部分來自首次回填重寫整表（到 **576MB**，見 R-C (b)）；之後每次啟動，永久為 NULL 的列（無法換算的 ts）又被 `UPDATE … WHERE ts_ms IS NULL` 重寫一次，只再多約 **67MB**。
-
-**預定修法（三項都要做）**：
-
-1. ALTER 前先查 `information_schema.columns`，欄位已存在就不執行 ALTER（不拿 ACCESS EXCLUSIVE）。
-2. 回填移出 schema 交易，改成分批執行（每批有上限、各自 commit），不再整段持鎖。
-3. 無法換算的列刪除，或另外標記（例如標記欄位），讓回填不再每次重寫它們。
-
-**部署前**：修好之前不得部署到有實際流量的環境；修法合入後再移除本段。
+**首次升級啟動較久**：回填在 `ensureFlowSchema` 內跑完，本實例才 `listen`，會阻擋本實例啟動（要等回填結束才接流量）。後續啟動通常只剩毒列，會很快。
 
 ## R-C：首次升級的鎖、表大小與舊 infinity 列
 
