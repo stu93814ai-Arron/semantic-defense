@@ -22,7 +22,7 @@ export type OutboxRow = {
 };
 export type AlertSender = (row: OutboxRow) => Promise<void>;
 export type AlertLog = { error(obj: object, msg: string): void };
-export type AlertHealth = { pending: number; failed: number; delivered_1h: number; purged?: number };
+export type AlertHealth = { pending: number; failed: number; delivered_1h: number; undelivered: number; last_failed_at: number | null; purged?: number };
 
 export class AlertSendError extends Error {
   constructor(readonly errorClass: string) {
@@ -89,15 +89,22 @@ export async function enqueueAlerts(
 }
 
 export async function alertHealthCounts(db: Queryable, now: number): Promise<AlertHealth> {
-  const r = await db.query<{ pending: string; failed: string; delivered_1h: string }>(
+  const r = await db.query<{ pending: string; failed: string; delivered_1h: string; last_failed_at: string | null }>(
     `SELECT count(*) FILTER (WHERE status = 'pending') AS pending,
             count(*) FILTER (WHERE status = 'failed') AS failed,
-            count(*) FILTER (WHERE status = 'delivered' AND delivered_at > $1) AS delivered_1h
+            count(*) FILTER (WHERE status = 'delivered' AND delivered_at > $1) AS delivered_1h,
+            max(next_attempt_at) FILTER (WHERE status = 'failed') AS last_failed_at
        FROM alert_outbox`,
     [now - 3_600_000],
   );
   const row = r.rows[0]!;
-  return { pending: Number(row.pending), failed: Number(row.failed), delivered_1h: Number(row.delivered_1h) };
+  const pending = Number(row.pending);
+  const failed = Number(row.failed);
+  return {
+    pending, failed, delivered_1h: Number(row.delivered_1h),
+    undelivered: pending + failed,
+    last_failed_at: row.last_failed_at != null ? Number(row.last_failed_at) : null,
+  };
 }
 
 async function claimDue(q: Queryable, now: number, channels: readonly AlertChannel[], limit: number): Promise<OutboxRow[]> {

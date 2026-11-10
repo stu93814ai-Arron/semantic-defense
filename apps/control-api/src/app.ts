@@ -15,7 +15,7 @@ import { registerWhitelistRoutes } from "./whitelist.js";
 import { registerBlacklistRoutes } from "./blacklist.js";
 import { badJsonError, installErrorHandler, safeErr, withSafeReqLog } from "./errors.js";
 import { runJudgeTick, type TickOpts } from "./judge.js";
-import { deliverDueAlerts, enabledAlertChannels, type AlertChannel, type AlertSender } from "./alert-outbox.js";
+import { alertHealthCounts, deliverDueAlerts, enabledAlertChannels, type AlertChannel, type AlertSender } from "./alert-outbox.js";
 import { parseWebhookConfig, webhookSender, type WebhookHooks } from "./alert-webhook.js";
 import { parseSyslogConfig, syslogSender, type SyslogHooks } from "./alert-syslog.js";
 
@@ -134,7 +134,7 @@ function registerSessionRoutes(app: ControlApi, db: Db): void {
   });
 }
 
-function registerRoleRoutes(app: ControlApi): void {
+function registerRoleRoutes(app: ControlApi, db: Db, now: Clock): void {
   const empty = async () => ({ items: [] });
   const op: Role[] = ["operator"];
   const admin: Role[] = ["platform_admin"];
@@ -146,7 +146,7 @@ function registerRoleRoutes(app: ControlApi): void {
   for (const url of ["/api/admin/users", "/api/versions"]) {
     app.get(url, { config: { roles: admin } }, empty);
   }
-  app.get("/api/health", { config: { roles: admin } }, async () => ({ status: "ok" }));
+  app.get("/api/health", { config: { roles: admin } }, async () => ({ status: "ok", alerts: await alertHealthCounts(db, now()) }));
 }
 
 function registerOwnerRoutes(app: ControlApi, db: Db): void {
@@ -277,7 +277,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<ControlApi> 
     app.addHook("preHandler", createAuthPreHandler(db, idleTimeoutMs, now));
     registerLogin(app, db, limiter, now);
     registerSessionRoutes(app, db);
-    registerRoleRoutes(app);
+    registerRoleRoutes(app, db, now);
     registerOwnerRoutes(app, db);
     registerSensorTokenRoutes(app, db, now);
     registerAuditRoute(app, db);
