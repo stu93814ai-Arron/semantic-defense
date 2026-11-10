@@ -82,6 +82,11 @@ ts 的小數秒超過 6 位時，Postgres 解析時會捨入到微秒，JS `Date
 
 上線前須填入 `SD_CRITICAL_ALLOWLIST`（逗號分隔的 CIDR），涵蓋管理平面、EDL 發布端、防火牆管理口與關鍵業務出口。
 
-- 種子列（`created_by = system:install`）不可刪除，也不可設定到期。
-- 若種子列缺失，重啟 control-api 會依當時的設定補回。
-- 從設定移除某個位址後，資料庫中既有的種子列仍保留。
+- 種子 IPv4 前綴須為 /16 或更窄，IPv6 須為 /48 或更窄；更寬的值會讓 control-api 無法啟動，錯誤訊息不含該 CIDR。
+- 種子列（`created_by = system:install`）不可由 API 刪除，也不可設定到期。
+- 若種子列缺失，重啟 control-api 會依當時的設定補回，並寫 `whitelist.create` 稽核（actor 為 `system:install`）；沒有新列則不寫。
+- 從設定移除某個位址後，下次重啟會刪除對應種子列，寫入 `whitelist.delete` 稽核（actor 為 `system:install`），且不恢復先前因該種子撤回的封鎖。設定為空時刪除全部種子列。
+
+## 開啟使用者建立 API 前的追蹤事項
+
+在任何使用者建立 API 開放前須完成：使用者名稱經 NFKC 正規化、trim、轉小寫；整個 `system:` 前綴保留；資料庫 CHECK。
