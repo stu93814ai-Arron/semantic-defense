@@ -1,7 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   FLOW_INDEX_STATEMENT_TIMEOUT, FLOW_SCHEMA_LOCK, FLOW_SCHEMA_LOCK_WAIT_MS,
-  ensureFlowSchema, type FlowDb,
+  ensureFlowSchema, flowIndexTimeoutMs, type FlowDb,
 } from "../src/write.js";
 import { useSchemaDb, type SchemaDb } from "./helpers.js";
 
@@ -62,4 +62,16 @@ describe("try_lock 輪詢總逾時", () => {
        WHERE locktype = 'advisory' AND classid = 0 AND objid = $1 AND granted`, [FLOW_SCHEMA_LOCK])).rows[0]!.n;
     expect(left).toBe("0");
   }, 8_000);
+});
+
+describe("SD_FLOW_INDEX_TIMEOUT_MS 上限", () => {
+  it("2147483647 可接受", () => {
+    process.env.SD_FLOW_INDEX_TIMEOUT_MS = "2147483647";
+    expect(flowIndexTimeoutMs()).toBe(2147483647);
+  });
+
+  it("2147483648 拋錯", () => {
+    process.env.SD_FLOW_INDEX_TIMEOUT_MS = "2147483648";
+    expect(() => flowIndexTimeoutMs()).toThrow(/SD_FLOW_INDEX_TIMEOUT_MS/);
+  });
 });

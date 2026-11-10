@@ -398,7 +398,7 @@ describe("R19：被熔斷擋下的高嚴重命中，熔斷恢復後重掃不得�
 
 describe("auto_suppressed 去重：同一 (ip, reason) 每小時最多一筆，多出來的每個 tick 一行 log 記數量（A 覆核）", () => {
   let lines: string[] = [];
-  const log = { warn: (obj: object, msg: string) => { lines.push(JSON.stringify({ ...obj, msg })); } };
+  const log = { warn: (obj: object, msg: string) => { lines.push(JSON.stringify({ ...obj, msg })); }, error: (obj: object, msg: string) => { lines.push(JSON.stringify({ ...obj, msg })); } };
   const suppressed = async () => (await audits("blacklist.auto_suppressed")).map((a) => a.detail.reason);
   const more = (at: number) => hit({ at, app: "app-2", port0: 7000 });
 

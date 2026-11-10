@@ -11,7 +11,7 @@ let app: ControlApi;
 let lines: string[] = [];
 afterEach(async () => { if (app) await app.close(); });
 
-const log = { warn: (obj: object, msg: string) => { lines.push(JSON.stringify({ ...obj, msg })); } };
+const log = { warn: (obj: object, msg: string) => { lines.push(JSON.stringify({ ...obj, msg })); }, error: (obj: object, msg: string) => { lines.push(JSON.stringify({ ...obj, msg })); } };
 async function boot(opts: { judgeIntervalMs?: number } = {}): Promise<ControlApi> {
   lines = [];
   app = await bootJudgeApp(opts);

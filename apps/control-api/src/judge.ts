@@ -1,7 +1,10 @@
 import { FLOW_WINDOW_MS, judgeFlows, type FlowMetadataEvent, type FlowThresholds } from "@semantic-defense/contracts";
 import { RETENTION_MS, flowEventsReady, type FlowEventRow } from "@semantic-defense/flow-store/read";
 import type { Db, Queryable } from "./db.js";
-import { loadThresholds, type WarnLog } from "./thresholds.js";
+import { loadThresholds } from "./thresholds.js";
+
+/** 判定 tick 的 log：warn 與 error 皆必填（stale_pending 走 error）。 */
+export type TickLog = { warn(obj: object, msg: string): void; error(obj: object, msg: string): void };
 import { accumulateCase, expireOpenCases, raiseCaseMax, upsertCaseHit } from "./cases.js";
 import { hostCidr, loadAllowlist } from "./auto-blacklist.js";
 import { writeAudit } from "./audit.js";
@@ -65,7 +68,7 @@ export const AUTO_LIST_ENABLED_DEFAULT = false;
 /** runJudgeTick 第 4 個參數：掛勾＋熔斷上限 N（buildApp 的 autoBreakerPerHour，預設 50）＋自動上榜總開關。 */
 export type TickOpts = TickHooks & { autoBreakerPerHour?: number; autoListEnabled?: boolean };
 /** 一個 tick 內共用：門檻、白名單（每個 tick 只讀一次；只決定要不要開案）、時間、log、掛勾、本 tick 計數（去重的 hit_while_listed、failed 的 SQLSTATE）。 */
-type TickCtx = { th: FlowThresholds; isAllowlisted: (ip: string) => boolean; now: number; log?: WarnLog; hooks: TickHooks; breakerPerHour: number;
+type TickCtx = { th: FlowThresholds; isAllowlisted: (ip: string) => boolean; now: number; log?: TickLog; hooks: TickHooks; breakerPerHour: number;
   autoList: boolean;
   stats: { suppressed: number; deduped: number; codes: Map<string, number>; nullTs: number; pendingBackfill: number; stalePending: number } };
 
@@ -260,7 +263,7 @@ async function judgeGroupIsolated(q: Queryable, k: GroupKey, ctx: TickCtx): Prom
  * 待回填停點（{pending_backfill}）、超過 lag 上限的待回填（error {stale_pending}）、
  * 跳過的非主機位址組（B1）、失敗回滾的組（B2／B3）、被去重的 hit_while_listed（R5）與 auto_suppressed（A 覆核）。
  */
-function logTickCounts(log: WarnLog | undefined, n: { skipped: number; failed: number }, stats: TickCtx["stats"]): void {
+function logTickCounts(log: TickLog | undefined, n: { skipped: number; failed: number }, stats: TickCtx["stats"]): void {
   if (!log) return;
   const lines: [number, object, string][] = [
     [stats.nullTs, { null_ts: stats.nullTs }, "judge tick skipped rows without ts_ms"],
@@ -271,18 +274,18 @@ function logTickCounts(log: WarnLog | undefined, n: { skipped: number; failed: n
     [stats.deduped, { deduped: stats.deduped }, "judge tick deduped auto_suppressed audits (1 per ip+reason per hour)"],
   ];
   for (const [count, obj, msg] of lines) if (count > 0) log.warn(obj, msg);
-  if (stats.stalePending > 0) log.error?.({ stale_pending: stats.stalePending }, "judge tick skipped stale pending backfill");
+  if (stats.stalePending > 0) log.error({ stale_pending: stats.stalePending }, "judge tick skipped stale pending backfill");
 }
 
 /** 自動上榜設定（總開關、熔斷 N）；開著才在 tick 開頭判熔斷恢復（關時熔斷狀態原樣不動、不寫 auto_breaker_close）。 */
-async function prepareAutoList(q: Queryable, opts: TickOpts, now: number, log?: WarnLog): Promise<{ breakerPerHour: number; autoList: boolean }> {
+async function prepareAutoList(q: Queryable, opts: TickOpts, now: number, log?: TickLog): Promise<{ breakerPerHour: number; autoList: boolean }> {
   const breakerPerHour = opts.autoBreakerPerHour ?? AUTO_BREAKER_PER_HOUR;
   const autoList = opts.autoListEnabled ?? AUTO_LIST_ENABLED_DEFAULT;
   if (autoList) await recoverBreakerIfOpen(q, breakerPerHour, now, log);
   return { breakerPerHour, autoList };
 }
 
-export async function runJudgeTick(db: Db, now: number, log?: WarnLog, opts: TickOpts = {}): Promise<TickResult> {
+export async function runJudgeTick(db: Db, now: number, log?: TickLog, opts: TickOpts = {}): Promise<TickResult> {
   if (!(await flowEventsReady(db))) return NOOP;
   return db.tx(async (q): Promise<TickResult> => {
     const lock = await q.query<{ ok: boolean }>("SELECT pg_try_advisory_xact_lock($1) AS ok", [JUDGE_LOCK]);

@@ -13,7 +13,7 @@ const PENDING_MSG = "judge tick pending backfill";
 const NULL_TS_MSG = "judge tick skipped rows without ts_ms";
 const IP = "203.0.113.21";
 const POISON_TS = "0000-01-01T00:00:00Z";
-const log = { warn: (obj: object, msg: string) => { lines.push(JSON.stringify({ ...obj, msg })); } };
+const log = { warn: (obj: object, msg: string) => { lines.push(JSON.stringify({ ...obj, msg })); }, error: (obj: object, msg: string) => { lines.push(JSON.stringify({ ...obj, msg })); } };
 const logged = () => lines.map((l) => JSON.parse(l) as object);
 const cursor = async () => (await app.db.query<{ received_upto: string }>("SELECT received_upto FROM judge_cursor")).rows;
 const cases = async () => (await app.db.query<{ ip: string }>("SELECT ip FROM blacklist_cases WHERE state = 'open'")).rows;

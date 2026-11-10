@@ -39,8 +39,14 @@ function parsePositiveInt(name: string, raw: string | undefined, fallback: numbe
 
 export const flowSchemaLockWaitMs = (): number =>
   parsePositiveInt("SD_FLOW_SCHEMA_LOCK_WAIT_MS", process.env.SD_FLOW_SCHEMA_LOCK_WAIT_MS, FLOW_SCHEMA_LOCK_WAIT_MS);
-export const flowIndexTimeoutMs = (): number =>
-  parsePositiveInt("SD_FLOW_INDEX_TIMEOUT_MS", process.env.SD_FLOW_INDEX_TIMEOUT_MS, FLOW_INDEX_TIMEOUT_MS);
+/** Postgres statement_timeout 為 32-bit 毫秒，超過此值拒絕（含 2147483648）。 */
+export const FLOW_INDEX_TIMEOUT_MAX_MS = 2_147_483_647;
+
+export const flowIndexTimeoutMs = (): number => {
+  const n = parsePositiveInt("SD_FLOW_INDEX_TIMEOUT_MS", process.env.SD_FLOW_INDEX_TIMEOUT_MS, FLOW_INDEX_TIMEOUT_MS);
+  if (n > FLOW_INDEX_TIMEOUT_MAX_MS) throw new Error("invalid SD_FLOW_INDEX_TIMEOUT_MS");
+  return n;
+};
 
 /** 測試掛勾：不可從產品啟動路徑傳入。 */
 export type FlowSchemaHooks = {
