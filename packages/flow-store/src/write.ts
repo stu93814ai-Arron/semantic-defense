@@ -92,7 +92,7 @@ EXCEPTION WHEN data_exception OR feature_not_supported THEN
 END
 $fn$`;
 
-const REJECTIONS_DDL = `CREATE TABLE IF NOT EXISTS flow_rejections (id BIGSERIAL PRIMARY KEY, sensor_id TEXT NOT NULL, at BIGINT NOT NULL)`;
+const REJECTIONS_DDL = `CREATE TABLE IF NOT EXISTS flow_rejections (id BIGSERIAL PRIMARY KEY, sensor_id TEXT NOT NULL, at BIGINT NOT NULL, reason TEXT NOT NULL)`;
 
 async function columnExists(q: FlowSession, table: string, column: string): Promise<boolean> {
   const r = await q.query(
@@ -137,6 +137,9 @@ async function runDdl(q: FlowSession): Promise<void> {
     }
     await q.query(TS_MS_FN);
     await q.query(REJECTIONS_DDL);
+    if (!(await columnExists(q, "flow_rejections", "reason"))) {
+      await q.query("ALTER TABLE flow_rejections ADD COLUMN reason TEXT NOT NULL DEFAULT 'unbound_app'");
+    }
     await q.query("CREATE INDEX IF NOT EXISTS flow_events_received_at ON flow_events (received_at)");
     await q.query("CREATE INDEX IF NOT EXISTS flow_rejections_at ON flow_rejections (at)");
   });
@@ -274,7 +277,23 @@ export async function insertFlow(db: FlowSession, f: FlowMetadataEvent, sensorId
   return r.rows.length === 1;
 }
 
-/** 記一筆 app_id 未綁定的拒絕；刻意不收 payload。 */
-export async function recordRejection(db: FlowSession, sensorId: string, now: number): Promise<void> {
-  await db.query("INSERT INTO flow_rejections (sensor_id, at) VALUES ($1,$2)", [sensorId, now]);
+/** 拒絕原因常數（A 組領航員裁示；總召 §21:09 R10）。不得放入位址。 */
+export const REJECTION_UNBOUND_APP = "unbound_app";
+export const REJECTION_RESERVED = "reserved";
+export const REJECTION_COUNT_WINDOW_MS = 24 * 60 * 60 * 1000;
+const REJECTION_REASONS = new Set([REJECTION_UNBOUND_APP, REJECTION_RESERVED]);
+
+/** 記一筆拒絕（每請求一列）；reason 僅允許常數，不收 payload。 */
+export async function recordRejection(db: FlowSession, sensorId: string, now: number, reason: string): Promise<void> {
+  if (!REJECTION_REASONS.has(reason)) throw new Error("invalid rejection reason");
+  await db.query("INSERT INTO flow_rejections (sensor_id, at, reason) VALUES ($1,$2,$3)", [sensorId, now, reason]);
+}
+
+/** 指定 reason 在 [now − 24h, now] 的筆數（health 用）。 */
+export async function countRejections(db: FlowSession, now: number, reason: string): Promise<number> {
+  const r = await db.query<{ n: string }>(
+    "SELECT count(*) AS n FROM flow_rejections WHERE reason = $1 AND at >= $2",
+    [reason, now - REJECTION_COUNT_WINDOW_MS],
+  );
+  return Number(r.rows[0]!.n);
 }

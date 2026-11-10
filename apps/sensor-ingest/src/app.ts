@@ -5,7 +5,7 @@ import { parseFlowMetadataEvent } from "@semantic-defense/contracts";
 import { findSensorByToken, ipAllowed, type SensorDb } from "@semantic-defense/sensor-auth";
 import { createAuthFailLimiter } from "./rate-limit.js";
 import { installErrorHandler, withSafeReqLog } from "./errors.js";
-import { RETENTION_MS, ensureFlowSchema, insertFlow, purgeExpired, recordRejection, type FlowDb } from "@semantic-defense/flow-store/write";
+import { RETENTION_MS, REJECTION_UNBOUND_APP, ensureFlowSchema, insertFlow, purgeExpired, recordRejection, type FlowDb } from "@semantic-defense/flow-store/write";
 
 /**
  * sensor-ingest（流量平面）③b：認證面。
@@ -101,7 +101,7 @@ export async function buildIngest(opts: BuildIngestOptions): Promise<FastifyInst
     if (ts - now > MAX_FUTURE_SKEW_MS) return reply.code(400).send({ error: "ts 超前接收時間" });
     if (now - ts > RETENTION_MS) return reply.code(400).send({ error: "ts 早於保留期限" });
     if (!req.allowedAppIds!.includes(parsed.value.app_id)) {
-      await recordRejection(opts.db, req.sensorId!, now);
+      await recordRejection(opts.db, req.sensorId!, now, REJECTION_UNBOUND_APP);
       return reply.code(403).send({ error: "app_id 未綁定此感測器" });
     }
     await purgeExpired(opts.db, now);

@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { FlowMetadataEvent } from "@semantic-defense/contracts";
-import { RETENTION_MS, ensureFlowSchema, insertFlow, purgeExpired, recordRejection, type FlowDb } from "../src/write.js";
+import { RETENTION_MS, REJECTION_COUNT_WINDOW_MS, REJECTION_RESERVED, REJECTION_UNBOUND_APP,
+  countRejections, ensureFlowSchema, insertFlow, purgeExpired, recordRejection, type FlowDb } from "../src/write.js";
 import { useSchemaDb } from "./helpers.js";
 
 /** flow-store 直接呼叫（自 sensor-ingest store.test 搬來的護欄＋insertFlow 直測）。獨立 schema，不與其他測試互相清表。 */
@@ -53,7 +54,7 @@ describe("7 天清除（年齡 ≥ 7d 刪）", () => {
     const keep = flow();
     for (const [f, at] of [[flow(), T0 - 1], [flow(), T0], [keep, T0 + 1]] as const) {
       await insertFlow(db, f, "s-1", at);
-      await recordRejection(db, "s-1", at);
+      await recordRejection(db, "s-1", at, REJECTION_UNBOUND_APP);
     }
     expect(await purgeExpired(db, T0 + RETENTION_MS)).toBe(4);
     expect((await ids()).map((r) => r.flow_id)).toEqual([keep.flow_id]);
@@ -63,19 +64,54 @@ describe("7 天清除（年齡 ≥ 7d 刪）", () => {
 });
 
 describe("flow_rejections 主鍵", () => {
-  it("欄位只有 id（BIGSERIAL PK）、sensor_id、at；不記 payload", async () => {
+  it("欄位為 id（BIGSERIAL PK）、sensor_id、at、reason；不記 payload", async () => {
     const cols = await db.query<{ column_name: string; column_default: string | null }>(
       `SELECT column_name, column_default FROM information_schema.columns
        WHERE table_schema = current_schema() AND table_name = 'flow_rejections' ORDER BY ordinal_position`,
     );
-    expect(cols.rows.map((c) => c.column_name)).toEqual(["id", "sensor_id", "at"]);
+    expect(cols.rows.map((c) => c.column_name)).toEqual(["id", "sensor_id", "at", "reason"]);
     expect(cols.rows[0]!.column_default).toMatch(/^nextval\(/);
   });
 
   it("同一 sensor 同一 ms 被拒兩次 → 兩筆都保留", async () => {
-    await recordRejection(db, "sensor-dup", T0);
-    await recordRejection(db, "sensor-dup", T0);
+    await recordRejection(db, "sensor-dup", T0, REJECTION_UNBOUND_APP);
+    await recordRejection(db, "sensor-dup", T0, REJECTION_UNBOUND_APP);
     const r = await db.query<{ id: string }>("SELECT id FROM flow_rejections WHERE sensor_id = 'sensor-dup'");
     expect(new Set(r.rows.map((x) => x.id)).size).toBe(2);
+  });
+});
+
+describe("flow_rejections.reason（A 組領航員裁示；總召 §21:09 R10）", () => {
+  it("欄位含 reason，不記 payload／位址", async () => {
+    const cols = await db.query<{ column_name: string }>(
+      `SELECT column_name FROM information_schema.columns
+       WHERE table_schema = current_schema() AND table_name = 'flow_rejections' ORDER BY ordinal_position`);
+    expect(cols.rows.map((c) => c.column_name)).toEqual(["id", "sensor_id", "at", "reason"]);
+  });
+
+  it("recordRejection 寫入指定 reason；值不含位址", async () => {
+    await recordRejection(db, "s-1", T0, REJECTION_RESERVED);
+    const r = await db.query<{ sensor_id: string; at: string; reason: string }>(
+      "SELECT sensor_id, at, reason FROM flow_rejections");
+    expect(r.rows).toEqual([{ sensor_id: "s-1", at: String(T0), reason: REJECTION_RESERVED }]);
+    expect(r.rows[0]!.reason).toBe("reserved");
+    expect(r.rows[0]!.reason).not.toMatch(/\d|:/);
+  });
+
+  it("既有表缺 reason 時，ensureFlowSchema 補欄，舊列預設 unbound_app", async () => {
+    await db.query("ALTER TABLE flow_rejections DROP COLUMN reason");
+    await db.query("INSERT INTO flow_rejections (sensor_id, at) VALUES ('s-old', $1)", [T0]);
+    await ensureFlowSchema(db);
+    const r = await db.query<{ sensor_id: string; reason: string }>("SELECT sensor_id, reason FROM flow_rejections");
+    expect(r.rows).toEqual([{ sensor_id: "s-old", reason: REJECTION_UNBOUND_APP }]);
+  });
+
+  it("countRejections 只計窗口內指定 reason（24h）", async () => {
+    expect(REJECTION_COUNT_WINDOW_MS).toBe(24 * 60 * 60 * 1000);
+    await recordRejection(db, "s-1", T0 - REJECTION_COUNT_WINDOW_MS - 1, REJECTION_RESERVED);
+    await recordRejection(db, "s-1", T0 - REJECTION_COUNT_WINDOW_MS, REJECTION_RESERVED);
+    await recordRejection(db, "s-1", T0, REJECTION_RESERVED);
+    await recordRejection(db, "s-1", T0, REJECTION_UNBOUND_APP);
+    expect(await countRejections(db, T0, REJECTION_RESERVED)).toBe(2);
   });
 });
