@@ -5,7 +5,7 @@ import { autoListInTx } from "../src/auto-blacklist.js";
 import {
   ALERT_BACKOFF_CAP_MS, ALERT_CLAIM_LEASE_MS, ALERT_MAX_ATTEMPTS, ALERT_SEND_DEADLINE_MS,
   AlertSendError, alertBackoffMs, alertHealthCounts, clampSendDeadlineMs,
-  assertWebhookSecret, deliverDueAlerts, enqueueAlerts, markFailure, purgeAlertOutbox, type AlertChannel, type OutboxRow,
+  assertWebhookSecret, claimDue, deliverDueAlerts, enqueueAlerts, markDelivered, markFailure, purgeAlertOutbox, type AlertChannel, type OutboxRow,
 } from "../src/alert-outbox.js";
 import { buildApp, seedPhase2Fixtures, type ControlApi } from "./helpers/app.js";
 import { writeAutoBlocklistEntry } from "./helpers/auto-list.js";
@@ -276,5 +276,25 @@ describe("delivered 計數與完成時間", () => {
     expect(await deliverDueAlerts(app.db, NOW, { webhook: send }, undefined, { clock: () => NOW }))
       .toEqual({ delivered: 0, failed: 0, retried: 0 });
     expect((await rows())[0]).toMatchObject({ status: "pending" });
+  });
+});
+
+describe("租約 token 過期後不得用舊 token 標記", () => {
+  it("B 重新 claim 後，A 的過期 token 呼叫 markDelivered／markFailure／用盡重試皆 ignored", async () => {
+    await boot();
+    await app.db.tx((q) => enqueueAlerts(q, { channels: ["webhook"], kind: "auto_list", now: NOW, entryId: "e1", caseId: "c1" }));
+    const aRows = await app.db.tx((q) => claimDue(q, NOW, ["webhook"], 16));
+    const a = aRows[0]!;
+    const bRows = await app.db.tx((q) => claimDue(q, NOW + ALERT_CLAIM_LEASE_MS, ["webhook"], 16));
+    const b = bRows[0]!;
+    expect(b.next_attempt_at).not.toBe(a.next_attempt_at);
+    const before = await rows();
+    expect(await markDelivered(app.db, a, NOW)).toBe("ignored");
+    expect(await markFailure(app.db, a, NOW, "webhook_timeout")).toBe("ignored");
+    const exhausted = { ...a, attempts: ALERT_MAX_ATTEMPTS - 1 };
+    expect(await markFailure(app.db, exhausted, NOW, "webhook_timeout")).toBe("ignored");
+    expect(await rows()).toEqual(before);
+    expect(before[0]).toMatchObject({ id: b.id, status: "pending", next_attempt_at: b.next_attempt_at });
+    expect(await audits("alert.delivery_failed")).toEqual([]);
   });
 });
