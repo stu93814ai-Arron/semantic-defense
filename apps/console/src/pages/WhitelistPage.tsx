@@ -14,8 +14,15 @@ export function WhitelistPage() {
 
   useEffect(() => {
     let cancelled = false;
-    void reviewSource.listWhitelist().then((rows) => {
-      if (!cancelled) setItems(rows);
+    void reviewSource.listWhitelist().then((r) => {
+      if (cancelled) return;
+      if (r.ok) {
+        setItems(r.value);
+        setError(null);
+      } else {
+        setItems([]);
+        setError(r.message);
+      }
     });
     return () => {
       cancelled = true;

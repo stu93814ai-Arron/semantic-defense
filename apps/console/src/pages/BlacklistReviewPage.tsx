@@ -94,8 +94,10 @@ export function BlacklistReviewPage() {
         reviewSource.getThresholds(),
       ]);
       if (cancelled) return;
-      setItems(pending);
+      setItems(pending.ok ? pending.value : []);
       if (th.ok) setThresholds(th.value);
+      if (!pending.ok) setMessage(pending.message);
+      else if (!th.ok) setMessage(th.message);
     })();
     return () => {
       cancelled = true;

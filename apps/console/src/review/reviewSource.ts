@@ -12,12 +12,29 @@ import type { AllowlistCreate, AllowlistUpdate } from "@semantic-defense/contrac
 
 type Mode = "unknown" | "api" | "demo";
 
+function viteEnv(): Record<string, string | undefined> {
+  // 必須寫成 import.meta.env.VITE_* 靜態存取，Vite 才會把 dev／e2e 旗標打進套件。
+  return { VITE_DEMO_FALLBACK: import.meta.env.VITE_DEMO_FALLBACK };
+}
+
+/** 僅當 VITE_DEMO_FALLBACK=1 時，集合資源 404 才回退 demoStore（dev／e2e）。 */
+export function demoFallbackEnabled(
+  env: Record<string, string | undefined> = viteEnv(),
+): boolean {
+  return env.VITE_DEMO_FALLBACK === "1";
+}
+
 let mode: Mode = "unknown";
 let api: AdminApi = createAdminApi();
+let fallbackOn = demoFallbackEnabled();
 
-export function resetReviewSource(next?: AdminApi): void {
+export function resetReviewSource(
+  next?: AdminApi,
+  env?: Record<string, string | undefined>,
+): void {
   mode = "unknown";
   api = next ?? createAdminApi();
+  fallbackOn = demoFallbackEnabled(env ?? viteEnv());
 }
 
 export function reviewSourceIsUnreachable(): boolean {
@@ -30,7 +47,7 @@ function noteErr(err: AdminApiErr): void {
 
 function useDemo(err: AdminApiErr): boolean {
   if (mode === "api") return false;
-  return err.code === "not_found";
+  return fallbackOn && err.code === "not_found";
 }
 
 function nowIso(): string {
@@ -40,19 +57,19 @@ function nowIso(): string {
 async function readList<T>(
   call: () => Promise<AdminApiResult<T[]>>,
   fallback: () => T[],
-): Promise<T[]> {
-  if (mode === "demo") return fallback();
+): Promise<AdminApiResult<T[]>> {
+  if (mode === "demo") return { ok: true, value: fallback() };
   const r = await call();
   if (r.ok) {
     mode = "api";
-    return r.value;
+    return r;
   }
   noteErr(r);
   if (useDemo(r)) {
     mode = "demo";
-    return fallback();
+    return { ok: true, value: fallback() };
   }
-  return fallback();
+  return r;
 }
 
 async function write<T>(
@@ -74,32 +91,35 @@ async function write<T>(
 }
 
 /**
- * 管理面資料源：優先 A 組 API；集合資源 404（例如 e2e 僅有登入面）時回退 demoStore。
+ * 管理面資料源：優先 A 組 API。
+ * 僅當 VITE_DEMO_FALLBACK=1 且為 404 時回退 demoStore（dev／e2e）；其餘錯誤原樣回傳。
  * 待審核准／退回不走 API（批次 4 尚未合併）。
  */
 export const reviewSource = {
   isUnreachable: reviewSourceIsUnreachable,
 
-  async listPending(): Promise<PendingCandidate[]> {
+  async listPending(): Promise<AdminApiResult<PendingCandidate[]>> {
     return readList(() => api.listPending(), () => demo.listPending());
   },
 
-  async listActive(filter: "all" | "auto" | "manual" = "all"): Promise<ListedEntry[]> {
-    if (mode === "demo") return demo.listActive(filter);
+  async listActive(
+    filter: "all" | "auto" | "manual" = "all",
+  ): Promise<AdminApiResult<ListedEntry[]>> {
+    if (mode === "demo") return { ok: true, value: demo.listActive(filter) };
     const r = await api.listBlacklist();
     if (r.ok) {
       mode = "api";
-      return filterListed(r.value, filter, nowIso());
+      return { ok: true, value: filterListed(r.value, filter, nowIso()) };
     }
     noteErr(r);
-    if (useDemo(r) || r.code === "backend_unreachable") {
-      if (useDemo(r)) mode = "demo";
-      return demo.listActive(filter);
+    if (useDemo(r)) {
+      mode = "demo";
+      return { ok: true, value: demo.listActive(filter) };
     }
-    return [];
+    return r;
   },
 
-  async listWhitelist(): Promise<AllowlistItem[]> {
+  async listWhitelist(): Promise<AdminApiResult<AllowlistItem[]>> {
     return readList(() => api.listWhitelist(), () => demo.listAllowlist());
   },
 

@@ -25,6 +25,8 @@ function viteEnv(shortIdle: boolean): { [key: string]: string } {
   );
   delete env.VITE_IDLE_TIMEOUT_MS;
   if (shortIdle) env.VITE_IDLE_TIMEOUT_MS = "50";
+  // e2e 只有登入面 plugin，無管理 API：明確開 demo 回退
+  env.VITE_DEMO_FALLBACK = "1";
   return env;
 }
 

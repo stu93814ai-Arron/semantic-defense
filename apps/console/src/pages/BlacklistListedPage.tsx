@@ -1,7 +1,22 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "../auth";
 import { reviewSource } from "../review/reviewSource";
+import type { AdminApiResult } from "../review/adminApi";
 import type { ListedEntry, SourceFilter } from "../review/types";
+
+function applyList<T>(
+  r: AdminApiResult<T[]>,
+  setItems: (rows: T[]) => void,
+  setMessage: (msg: string | null) => void,
+): void {
+  if (r.ok) {
+    setItems(r.value);
+    setMessage(null);
+  } else {
+    setItems([]);
+    setMessage(r.message);
+  }
+}
 
 export function BlacklistListedPage() {
   const { user } = useAuth();
@@ -13,8 +28,8 @@ export function BlacklistListedPage() {
 
   useEffect(() => {
     let cancelled = false;
-    void reviewSource.listActive(filter).then((rows) => {
-      if (!cancelled) setItems(rows);
+    void reviewSource.listActive(filter).then((r) => {
+      if (!cancelled) applyList(r, setItems, setMessage);
     });
     return () => {
       cancelled = true;
