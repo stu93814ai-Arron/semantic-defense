@@ -19,7 +19,7 @@ type Row = { case_threshold: number; auto_threshold: number };
 const toThresholds = (r: Row | undefined): Thresholds =>
   r ? { case: r.case_threshold, auto: r.auto_threshold } : { ...DEFAULT_THRESHOLDS };
 
-export type WarnLog = { warn(obj: object, msg: string): void };
+export type WarnLog = { warn(obj: object, msg: string): void; error?(obj: object, msg: string): void };
 
 /**
  * 讀目前生效門檻（fail-closed）：無列 → 預設；列值不符目前上下限（舊表舊 CHECK 留下的值）→ 退回預設 0.50／0.90 並 log.warn。

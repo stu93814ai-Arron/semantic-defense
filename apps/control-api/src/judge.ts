@@ -15,7 +15,8 @@ import { AUTO_BREAKER_PER_HOUR, recoverBreakerIfOpen } from "./auto-breaker.js";
  * - 掃描：新列 received_at ∈ (cursor, now]，每批上限 JUDGE_BATCH；cursor 只推到這批實際看到的最大 received_at
  *   （received_at 是 sensor-ingest 的時鐘，不能跳到 control-api 的 now）；沒有新列就不動。
  *   另掃 (cursor − 60s, cursor] 的重疊，涵蓋接收時間較早但較晚 commit 的列。
- * - 分窗只用 ts_ms（ts slice）：ts_ms NULL 的列不分組、只計數（log {null_ts}），cursor 照常前進，毒列不會卡住佇列。
+ * - 分窗只用 ts_ms（ts slice）：ts_ms NULL 的列不分組。毒列（flow_ts_ms 亦 NULL）只計數（log {null_ts}），cursor 照常前進。
+ *   待回填（可轉換的 NULL）在 lag 上限內 cursor 停在該列之前（{pending_backfill}）；超過上限則略過並計入 {stale_pending}（error）。
  * - 每組從 flow_events 重讀整組再算：confidence 用全部 flow；ontime_confidence 只用準時 flow（全部遲到 → NULL）。
  *   遲到＝received_at − ts_ms > 5 分鐘。confidence ≥ case 才存命中（case_hits 絕對值 upsert，重掃冪等）；
  *   命中第一次寫入時才累加待審（hit_count +1、max 取大），所以重掃不會重複累加；
@@ -31,6 +32,13 @@ import { AUTO_BREAKER_PER_HOUR, recoverBreakerIfOpen } from "./auto-breaker.js";
 export const JUDGE_LOCK = 872_364_203;
 export const JUDGE_OVERLAP_MS = 60_000;
 export const JUDGE_BATCH = 5000;
+/**
+ * 待回填列可落後「最新 received_at」的上限（10 分鐘）。超過則視為 stale_pending，略過並讓 cursor 前進（與毒列相同）。
+ * 基準是表內 max(received_at)（received_at <= now），不是 wall-clock now：首次回填期間歷史列的 received_at
+ * 可能已是數小時／數天前，若跟 now 比會全部被當成過期而永久略過，重現 4(b)。跟最新 received_at 比，
+ * 才能區分「回填正在追歷史流」（pending 與最新列接近）與「回填已結束後才出現的舊 NULL 卡住較新流量」。
+ */
+export const PENDING_BACKFILL_MAX_LAG_MS = 10 * 60_000;
 export const LATE_MS = 5 * 60_000;
 export type TickResult = { ran: boolean; groups: number; hits: number };
 const NOOP: TickResult = { ran: false, groups: 0, hits: 0 };
@@ -39,7 +47,8 @@ type GroupKey = { sensor_id: string; app_id: string; src_ip: string; win: number
 /**
  * 分組鍵欄位：窗由 ts_ms 算（ingest 以 Date.parse 寫入／啟動時 SQL 同值回填，與 judgeFlows 一致）；新列另帶 received_at 推 cursor。
  * ts_ms NULL：毒列（flow_ts_ms 亦 NULL）不分組、計入 stats.nullTs，cursor 照常前進；
- * 待回填（flow_ts_ms 非 NULL）則 cursor 停在該列之前，計入 stats.pendingBackfill（R-B）。flow_ts_ms 只用於停點，不分組。
+ * 待回填（flow_ts_ms 非 NULL）在 PENDING_BACKFILL_MAX_LAG_MS 內 cursor 停在該列之前，計入 stats.pendingBackfill；
+ * 超過上限則略過、計入 stats.stalePending，cursor 前進（B1）。flow_ts_ms 只用於停點，不分組。
  */
 type KeyRow = Pick<FlowEventRow, "sensor_id" | "app_id" | "src_ip" | "ts_ms">;
 type ScanRow = KeyRow & Pick<FlowEventRow, "received_at"> & { convertible_ms: string | null };
@@ -58,10 +67,38 @@ export type TickOpts = TickHooks & { autoBreakerPerHour?: number; autoListEnable
 /** 一個 tick 內共用：門檻、白名單（每個 tick 只讀一次；只決定要不要開案）、時間、log、掛勾、本 tick 計數（去重的 hit_while_listed、failed 的 SQLSTATE）。 */
 type TickCtx = { th: FlowThresholds; isAllowlisted: (ip: string) => boolean; now: number; log?: WarnLog; hooks: TickHooks; breakerPerHour: number;
   autoList: boolean;
-  stats: { suppressed: number; deduped: number; codes: Map<string, number>; nullTs: number; pendingBackfill: number } };
+  stats: { suppressed: number; deduped: number; codes: Map<string, number>; nullTs: number; pendingBackfill: number; stalePending: number } };
 
 /** 待回填：ts_ms 仍 NULL 但 flow_ts_ms(ts) 算得出值。只用來決定 cursor 停點，絕不用來分組。 */
 const isPendingBackfill = (r: ScanRow): boolean => r.ts_ms === null && r.convertible_ms != null;
+/** 待回填且落後 newest received_at 超過上限：略過，不再卡住 cursor。 */
+const isStalePending = (r: ScanRow, newestAt: number): boolean =>
+  isPendingBackfill(r) && newestAt - Number(r.received_at) > PENDING_BACKFILL_MAX_LAG_MS;
+
+type PendingSplit = { stopAt: number; pendingAt: number | null; pendingBackfill: number; stalePending: number };
+
+/** 依 lag 上限拆待回填列：上限內停 cursor；超過的計入 stalePending（已略過），cursor 可越過。 */
+function splitPending(fresh: ScanRow[], newestAt: number): PendingSplit {
+  const out: PendingSplit = { stopAt: -1, pendingAt: null, pendingBackfill: 0, stalePending: 0 };
+  for (const [i, r] of fresh.entries()) {
+    if (!isPendingBackfill(r)) continue;
+    if (out.pendingAt !== null) {
+      if (!isStalePending(r, newestAt)) out.pendingBackfill += 1;
+      continue;
+    }
+    if (isStalePending(r, newestAt)) { out.stalePending += 1; continue; }
+    out.stopAt = i;
+    out.pendingAt = Number(r.received_at);
+    out.pendingBackfill += 1;
+  }
+  return out;
+}
+
+async function newestReceivedAt(q: Queryable, now: number): Promise<number> {
+  const r = await q.query<{ max: string | null }>(
+    "SELECT max(received_at) AS max FROM flow_events WHERE received_at <= $1", [now]);
+  return r.rows[0]?.max == null ? now : Number(r.rows[0].max);
+}
 
 /** cursor 停在最早一筆待回填列的 received_at 之前（含同一時間點的列都不可越過）。 */
 function cursorUpto(fresh: ScanRow[], pendingAt: number | null): number | null {
@@ -71,7 +108,7 @@ function cursorUpto(fresh: ScanRow[], pendingAt: number | null): number | null {
 }
 
 /** upto：這批實際看到的最大 received_at（沒有新列或停在待回填之前 → null，cursor 不動）。不用 control-api 的 now，ingest 時鐘較慢時才不會漏列。 */
-async function scanGroups(q: Queryable, cursor: number, now: number): Promise<{ keys: GroupKey[]; upto: number | null; nullTs: number; pendingBackfill: number }> {
+async function scanGroups(q: Queryable, cursor: number, now: number): Promise<{ keys: GroupKey[]; upto: number | null; nullTs: number; pendingBackfill: number; stalePending: number }> {
   const fresh = (await q.query<ScanRow>(
     `SELECT sensor_id, app_id, src_ip, ts_ms, received_at,
             CASE WHEN ts_ms IS NULL THEN flow_ts_ms(ts) END AS convertible_ms
@@ -82,18 +119,20 @@ async function scanGroups(q: Queryable, cursor: number, now: number): Promise<{ 
   const overlap = (await q.query<KeyRow>(
     `SELECT sensor_id, app_id, src_ip, ts_ms FROM flow_events
      WHERE received_at > $1 AND received_at <= $2 AND ts_ms IS NOT NULL`, [cursor - JUDGE_OVERLAP_MS, cursor])).rows;
-  const stopAt = fresh.findIndex(isPendingBackfill);
-  const pending = fresh.find(isPendingBackfill);
-  const visible = pending === undefined ? fresh : fresh.slice(0, stopAt);
-  const pendingBackfill = pending === undefined ? 0 : fresh.filter(isPendingBackfill).length;
+  const split = splitPending(fresh, await newestReceivedAt(q, now));
+  const visible = split.stopAt === -1 ? fresh : fresh.slice(0, split.stopAt);
   const keys = new Map<string, GroupKey>();
-  let nullTs = 0;
-  for (const r of [...overlap, ...visible]) {
-    if (r.ts_ms === null) { nullTs += 1; continue; }
+  const addKey = (r: KeyRow): void => {
     const win = Math.floor(Number(r.ts_ms) / FLOW_WINDOW_MS) * FLOW_WINDOW_MS;
     keys.set(JSON.stringify([r.sensor_id, r.app_id, r.src_ip, win]), { sensor_id: r.sensor_id, app_id: r.app_id, src_ip: r.src_ip, win });
+  };
+  let nullTs = 0;
+  for (const r of overlap) addKey(r);
+  for (const r of visible) {
+    if (r.ts_ms === null) { if (!isPendingBackfill(r)) nullTs += 1; continue; }
+    addKey(r);
   }
-  return { keys: [...keys.values()], upto: cursorUpto(fresh, pending === undefined ? null : Number(pending.received_at)), nullTs, pendingBackfill };
+  return { keys: [...keys.values()], upto: cursorUpto(fresh, split.pendingAt), nullTs, pendingBackfill: split.pendingBackfill, stalePending: split.stalePending };
 }
 
 const toFlow = (r: FlowEventRow): FlowMetadataEvent => ({
@@ -218,6 +257,7 @@ async function judgeGroupIsolated(q: Queryable, k: GroupKey, ctx: TickCtx): Prom
 
 /**
  * 每個 tick 各一行，只記數量／SQLSTATE、不記 IP／ts／錯誤訊息：ts_ms NULL 不分組的列（ts slice，Q6 只記 {null_ts}）、
+ * 待回填停點（{pending_backfill}）、超過 lag 上限的待回填（error {stale_pending}）、
  * 跳過的非主機位址組（B1）、失敗回滾的組（B2／B3）、被去重的 hit_while_listed（R5）與 auto_suppressed（A 覆核）。
  */
 function logTickCounts(log: WarnLog | undefined, n: { skipped: number; failed: number }, stats: TickCtx["stats"]): void {
@@ -231,6 +271,7 @@ function logTickCounts(log: WarnLog | undefined, n: { skipped: number; failed: n
     [stats.deduped, { deduped: stats.deduped }, "judge tick deduped auto_suppressed audits (1 per ip+reason per hour)"],
   ];
   for (const [count, obj, msg] of lines) if (count > 0) log.warn(obj, msg);
+  if (stats.stalePending > 0) log.error?.({ stale_pending: stats.stalePending }, "judge tick skipped stale pending backfill");
 }
 
 /** 自動上榜設定（總開關、熔斷 N）；開著才在 tick 開頭判熔斷恢復（關時熔斷狀態原樣不動、不寫 auto_breaker_close）。 */
@@ -250,8 +291,8 @@ export async function runJudgeTick(db: Db, now: number, log?: WarnLog, opts: Tic
     await expireOpenCases(q, now);
     const { breakerPerHour, autoList } = await prepareAutoList(q, opts, now, log);
     const cur = (await q.query<{ received_upto: string }>("SELECT received_upto FROM judge_cursor WHERE id")).rows[0];
-    const { keys, upto, nullTs, pendingBackfill } = await scanGroups(q, Number(cur?.received_upto ?? 0), now);
-    const ctx: TickCtx = { th, isAllowlisted: await loadAllowlist(q, now), now, log, hooks: opts, breakerPerHour, autoList, stats: { suppressed: 0, deduped: 0, codes: new Map(), nullTs, pendingBackfill } };
+    const { keys, upto, nullTs, pendingBackfill, stalePending } = await scanGroups(q, Number(cur?.received_upto ?? 0), now);
+    const ctx: TickCtx = { th, isAllowlisted: await loadAllowlist(q, now), now, log, hooks: opts, breakerPerHour, autoList, stats: { suppressed: 0, deduped: 0, codes: new Map(), nullTs, pendingBackfill, stalePending } };
     const n = { hit: 0, miss: 0, skipped: 0, failed: 0 };
     for (const k of keys) n[await judgeGroupIsolated(q, k, ctx)] += 1;
     logTickCounts(log, n, ctx.stats);
