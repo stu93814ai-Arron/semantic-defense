@@ -282,7 +282,7 @@ function logTickCounts(log: TickLog | undefined, n: { skipped: number; failed: n
 async function prepareAutoList(q: Queryable, opts: TickOpts, now: number, log?: TickLog): Promise<{ breakerPerHour: number; autoList: boolean }> {
   const breakerPerHour = opts.autoBreakerPerHour ?? AUTO_BREAKER_PER_HOUR;
   const autoList = opts.autoListEnabled ?? AUTO_LIST_ENABLED_DEFAULT;
-  if (autoList) await recoverBreakerIfOpen(q, breakerPerHour, now, log);
+  if (autoList) await recoverBreakerIfOpen(q, breakerPerHour, now, log, opts.alertChannels ?? []);
   return { breakerPerHour, autoList };
 }
 

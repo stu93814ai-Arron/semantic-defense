@@ -6,7 +6,7 @@ import { writeAudit } from "./audit.js";
 import { enqueueAlerts, type AlertChannel } from "./alert-outbox.js";
 import { loadThresholds, type WarnLog } from "./thresholds.js";
 import { insertActiveBlocklistEntry } from "./blocklist-store.js";
-import { breakerTripped, lockAllowlistShare, lockAuto } from "./auto-breaker.js";
+import { breakerTripped, lockAllowlistShare, lockAuto, maybeEnqueueVolume } from "./auto-breaker.js";
 import { isGlobalUnicast } from "./net-scope.js";
 
 /**
@@ -97,6 +97,11 @@ async function lockShareThen(q: Queryable, then?: () => Promise<void>): Promise<
  * tick 早先讀的白名單只用來決定要不要開案，不能當上榜依據（A 組領航員裁定 11-09）。
  * opts.log：門檻 fail-closed 時的 warn 去處（呼叫端傳 tick／app 的 logger）。
  */
+async function maybeVolume(q: Queryable, opts: AutoListOpts, now: number): Promise<void> {
+  if (!opts.gates) return;
+  await maybeEnqueueVolume(q, opts.gates.breakerPerHour, now, opts.alertChannels ?? []);
+}
+
 async function recordAutoList(q: Queryable, entry: { entry_id: string; ip: string; confidence: number; case_id: string; expires_at: string }, now: number, channels: readonly AlertChannel[] | undefined): Promise<void> {
   const auditId = await writeAudit(q, { action: "blacklist.auto_list", actor: "system:auto", sensor_id: null, at: now,
     detail: { entry_id: entry.entry_id, ip: entry.ip, confidence: entry.confidence, case_id: entry.case_id, expires_at: entry.expires_at } });
@@ -117,7 +122,7 @@ export async function autoListInTx(q: Queryable, input: AutoListInput, now: numb
     if (revokedAt !== null) return { status: "cooldown", revoked_at: revokedAt };
   }
   await lockAuto(q);
-  if (opts.gates && (await breakerTripped(q, opts.gates.breakerPerHour, now, opts.log))) return { status: "breaker" };
+  if (opts.gates && (await breakerTripped(q, opts.gates.breakerPerHour, now, opts.log, opts.alertChannels))) return { status: "breaker" };
   const draft = BlocklistEntrySchema.parse({
     entry_id: randomUUID(), ip, source: "auto", confidence: input.confidence, case_id: input.case_id,
     created_at: new Date(now).toISOString(), expires_at: new Date(now + AUTO_LIST_TTL_MS).toISOString(),
@@ -129,5 +134,6 @@ export async function autoListInTx(q: Queryable, input: AutoListInput, now: numb
   }, now);
   if (!entry) return { status: "already_listed" };
   await recordAutoList(q, entry, now, opts.alertChannels);
+  await maybeVolume(q, opts, now);
   return { status: "listed", entry };
 }

@@ -93,6 +93,7 @@ const SCHEMA_STATEMENTS = [
   "CREATE INDEX IF NOT EXISTS blocklist_auto_created ON blocklist_entries (created_at) WHERE source = 'auto'",
   "CREATE TABLE IF NOT EXISTS auto_breaker (id BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (id), opened_at BIGINT NULL)",
   "INSERT INTO auto_breaker (id) VALUES (TRUE) ON CONFLICT (id) DO NOTHING",
+  "ALTER TABLE auto_breaker ADD COLUMN IF NOT EXISTS volume_held BOOLEAN NOT NULL DEFAULT FALSE",
   // 成案流程 commit 6（計畫 §5）：待審與命中明細。註：IF NOT EXISTS 不會改舊表；本階段不做 migration。
   `CREATE TABLE IF NOT EXISTS blacklist_cases (
   case_id UUID PRIMARY KEY,

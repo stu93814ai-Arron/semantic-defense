@@ -22,6 +22,7 @@ export async function seedPhase2Fixtures(app: SeedApp): Promise<void> {
     await app.db.exec(
       "TRUNCATE TABLE alert_outbox, audit_events, thresholds, allowlist_entries, blocklist_entries, blacklist_cases, case_hits, judge_cursor, sensor_tokens, sessions, apps, users, login_failures RESTART IDENTITY CASCADE",
     );
+    await app.db.query("UPDATE auto_breaker SET opened_at = NULL, volume_held = FALSE");
     const users: [string, string, Role, string?, string?][] = [
       ["operator1", "pass-operator-1", "operator"],
       ["owner1", "pass-owner-1", "app_owner", "app-alpha", "app-alpha-note"],
