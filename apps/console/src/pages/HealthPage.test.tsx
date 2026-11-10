@@ -44,7 +44,7 @@ describe("HealthPage（告警計數；待 B 組領航員核准）", () => {
 });
 
 describe("HealthPage 錯誤與時間格式（待 B 組領航員核准）", () => {
-  it("403 顯示錯誤狀態，不顯示空狀態", async () => {
+  it("403 顯示「權限不足」，不顯示空狀態或連線錯誤", async () => {
     mockedGet.mockResolvedValue({
       status: 403,
       data: {
@@ -53,10 +53,18 @@ describe("HealthPage 錯誤與時間格式（待 B 組領航員核准）", () =>
       },
     });
     render(<HealthPage />);
-    await waitFor(() => expect(screen.getByTestId("backend-unreachable")).toBeTruthy());
-    expect(screen.getByTestId("backend-unreachable").textContent).toMatch(/無法連線|錯誤|無法載入/);
+    await waitFor(() => expect(screen.getByText("權限不足")).toBeTruthy());
     expect(screen.queryByTestId("empty-state")).toBeNull();
+    expect(screen.queryByTestId("backend-unreachable")).toBeNull();
     expect(screen.queryByText("載入中…")).toBeNull();
+  });
+
+  it("401 顯示「未登入」，不顯示空狀態或連線錯誤", async () => {
+    mockedGet.mockResolvedValue({ status: 401, data: null });
+    render(<HealthPage />);
+    await waitFor(() => expect(screen.getByText("未登入")).toBeTruthy());
+    expect(screen.queryByTestId("empty-state")).toBeNull();
+    expect(screen.queryByTestId("backend-unreachable")).toBeNull();
   });
 
   it("500 顯示錯誤狀態，不顯示空狀態", async () => {
