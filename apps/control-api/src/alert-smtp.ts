@@ -9,7 +9,7 @@ const LOCAL = /^[A-Za-z0-9._%+-]+$/;
 const DOMAIN = /^[A-Za-z0-9.-]+$/;
 
 export type SmtpPin = { address: string; family: 4 | 6 };
-export type SmtpHooks = { ca?: string; lookup?: LookupFn; timeoutMs?: number; signal?: AbortSignal };
+export type SmtpHooks = { ca?: string; lookup?: LookupFn; timeoutMs?: number; signal?: AbortSignal; connect?: typeof net.connect };
 export type SmtpConfig = {
   host: string; port: number; from: string; to: string;
   username?: string; password?: string;
@@ -128,22 +128,30 @@ function throwIfAborted(signal: AbortSignal | undefined, errorClass: string): vo
   if (signal?.aborted) throw new AlertSendError(errorClass);
 }
 
-function connectPinned(pin: SmtpPin, port: number, signal?: AbortSignal): Promise<net.Socket> {
+function connectPinned(pin: SmtpPin, port: number, hooks: SmtpHooks): Promise<net.Socket> {
   return new Promise((resolve, reject) => {
-    const socket = net.connect({ host: pin.address, port, family: pin.family });
-    const fail = (e: unknown) => { socket.destroy(); reject(e); };
+    const open = hooks.connect ?? net.connect;
+    const socket = open({ host: pin.address, port, family: pin.family });
+    const fail = (e: unknown) => { socket.setTimeout(0); socket.destroy(); reject(e); };
     const onAbort = () => fail(new AlertSendError("smtp_timeout"));
-    if (signal?.aborted) { onAbort(); return; }
-    signal?.addEventListener("abort", onAbort, { once: true });
-    socket.once("connect", () => { signal?.removeEventListener("abort", onAbort); resolve(socket); });
-    socket.once("error", (e) => { signal?.removeEventListener("abort", onAbort); fail(e); });
+    socket.setTimeout(hooks.timeoutMs ?? SMTP_TIMEOUT_MS);
+    socket.once("timeout", onAbort);
+    if (hooks.signal?.aborted) { onAbort(); return; }
+    hooks.signal?.addEventListener("abort", onAbort, { once: true });
+    socket.once("connect", () => {
+      socket.setTimeout(0);
+      socket.removeListener("timeout", onAbort);
+      hooks.signal?.removeEventListener("abort", onAbort);
+      resolve(socket);
+    });
+    socket.once("error", (e) => { hooks.signal?.removeEventListener("abort", onAbort); fail(e); });
   });
 }
 
 async function dispatch(cfg: SmtpConfig, row: OutboxRow, hooks: SmtpHooks): Promise<void> {
   const pin = await pinHost(cfg.host, cfg.allow, hooks.lookup ?? defaultLookup, "ssrf");
   throwIfAborted(hooks.signal, "smtp_timeout");
-  const socket = await connectPinned(pin, cfg.port, hooks.signal);
+  const socket = await connectPinned(pin, cfg.port, hooks);
   const onAbort = () => { socket.destroy(); };
   hooks.signal?.addEventListener("abort", onAbort, { once: true });
   const transport = nodemailer.createTransport({ ...smtpTransportOptions(cfg, pin, hooks), connection: socket });

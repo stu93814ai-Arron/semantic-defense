@@ -3,7 +3,7 @@ import net from "node:net";
 import tls from "node:tls";
 import { AlertSendError, type OutboxRow } from "../src/alert-outbox.js";
 import {
-  formatMail, parseSmtpConfig, sendMail, smtpTransportOptions,
+  formatMail, parseSmtpConfig, sendMail, smtpTransportOptions, SMTP_TIMEOUT_MS,
 } from "../src/alert-smtp.js";
 import { makeSelfSigned } from "./helpers/test-tls.js";
 
@@ -230,5 +230,25 @@ describe("sendMail（本機 fake SMTP）", () => {
     const raw = s.data();
     expect(raw).toContain("\r\n..end\r\n");
     expect(raw.endsWith("\r\n.\r\n")).toBe(true);
+  });
+});
+
+describe("connectPinned 連線逾時（A 組領航員裁示）", () => {
+  it("掛起的 socket 在 timeoutMs 內以 smtp_timeout 失敗並 destroy，預設 5s", async () => {
+    expect(SMTP_TIMEOUT_MS).toBe(5_000);
+    const cfg = parseSmtpConfig({ ...baseEnv(9), SD_ALERT_SMTP_ALLOW_PLAINTEXT: "1" })!;
+    let sock: net.Socket | undefined;
+    const start = Date.now();
+    try {
+      await sendMail(cfg, row(), {
+        lookup, timeoutMs: 80,
+        connect: () => { sock = new net.Socket(); return sock; },
+      });
+      throw new Error("no-throw");
+    } catch (e) {
+      expect((e as AlertSendError).errorClass).toBe("smtp_timeout");
+    }
+    expect(Date.now() - start).toBeLessThan(1_000);
+    expect(sock?.destroyed).toBe(true);
   });
 });
