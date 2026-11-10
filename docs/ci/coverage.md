@@ -3,7 +3,7 @@
 門檻：lines／branches／functions／statements 各 ≥70%（v8），定義於 `vitest.config.ts`。
 
 ## control-api（A 組 11-09）
-`apps/control-api/src/**/*.ts` 全部納入（成案、判定 tick、自動上榜、熔斷、白名單、稽核…）。原本只有 `auth.ts`／`authz.ts` 等授權檔；那幾條保留不刪（移除須經整合守門員）。
+`apps/control-api/src/**/*.ts` 全部納入（成案、判定 tick、自動上榜、熔斷、白名單、稽核…）。原本另列的 `auth.ts`／`authz.ts` 已被同一 glob 涵蓋，已於 2026-11-10 19:05 經軟體大總召核准後自清單移除。
 納入前後（同一 commit 基底、1248 筆測試）：lines 95.04%（710/747）→ 96.49%（1240/1285）、branches 88.2% → 89.9%、functions 96.74% → 97.15%、statements 91.63% → 94.11%。
 
 ## console（PM 裁示）
