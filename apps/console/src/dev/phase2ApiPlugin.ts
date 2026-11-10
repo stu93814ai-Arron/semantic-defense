@@ -280,7 +280,7 @@ function handleAdminGet(url: string, session: Session, res: ServerResponse): boo
     return true;
   }
   if (url === "/api/health") {
-    if (requireRole(session, "platform_admin", res)) json(res, 200, { status: "ok" });
+    if (requireRole(session, "platform_admin", res)) json(res, 200, { status: "ok", alerts: { pending: 0, failed: 0, delivered_1h: 0, undelivered: 0, last_failed_at: null } });
     return true;
   }
   return false;

@@ -8,6 +8,7 @@ import { EmptyDataPage } from "./pages/EmptyDataPage";
 import { LoginPage } from "./pages/LoginPage";
 import { NoPermissionPage } from "./pages/NoPermissionPage";
 import { WhitelistPage } from "./pages/WhitelistPage";
+import { HealthPage } from "./pages/HealthPage";
 import { ThemeSwitch } from "./theme/ThemeSwitch";
 import { apiGet } from "./api";
 import {
@@ -136,7 +137,7 @@ export function App() {
           <Route path="/constraints" element={<ProtectedRoute hint="尚無生效限制" />} />
           <Route path="/audit" element={<ProtectedRoute hint="尚無稽核紀錄" />} />
           <Route path="/versions" element={<ProtectedRoute hint="尚無版本資料" />} />
-          <Route path="/health" element={<ProtectedRoute hint="尚無健康資料" />} />
+          <Route path="/health" element={<ProtectedRoute><HealthPage /></ProtectedRoute>} />
           <Route path="*" element={<NoPermissionPage />} />
         </Route>
       </Routes>
