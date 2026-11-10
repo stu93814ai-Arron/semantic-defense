@@ -63,7 +63,7 @@ export const AUTO_COOLDOWN_MS = 2 * 60 * 60 * 1000;
  * gates：E3.A 觸發才有的閘門（冷卻＋熔斷共用一個選項；A 組領航員裁定 11-09 第 4 點）。
  * 判定 tick 開（帶 breakerPerHour）；測試用的 §7 包裝（test/helpers/auto-list.ts）關，§7 原行為不變。
  */
-export type AutoListOpts = { log?: WarnLog; gates?: false | { breakerPerHour: number } };
+export type AutoListOpts = { log?: WarnLog; gates?: false | { breakerPerHour: number }; afterShare?: () => Promise<void> };
 
 async function lastRevokedWithin(q: Queryable, ip: string, now: number): Promise<number | null> {
   const r = await q.query<{ revoked_at: string }>(
@@ -84,6 +84,13 @@ function scopeOf(raw: string): { ip: string } | { reject: AutoListResult } {
   return isGlobalUnicast(ip) ? { ip } : { reject: { status: "not_public" } };
 }
 
+
+/** SHARE 之後可選測試掛勾（tick 的 afterAllowlistShare）；不影響鎖順序。 */
+async function lockShareThen(q: Queryable, then?: () => Promise<void>): Promise<void> {
+  await lockAllowlistShare(q);
+  if (then !== undefined) await then();
+}
+
 /**
  * tx 內版本（計畫 §7；判定 tick 在自己的 tx 裡呼叫）。白名單在這裡以 SHARE 鎖重新檢查：
  * tick 早先讀的白名單只用來決定要不要開案，不能當上榜依據（A 組領航員裁定 11-09）。
@@ -94,7 +101,7 @@ export async function autoListInTx(q: Queryable, input: AutoListInput, now: numb
   if ("reject" in scoped) return scoped.reject;
   const { ip } = scoped;
   // 順序（A 組領航員裁定 11-09 第 2 點）：白名單（SHARE 鎖）→ below_auto → 冷卻 → AUTO_LOCK → 熔斷 → 寫入（冷卻、熔斷見 commit 10、11）
-  await lockAllowlistShare(q);
+  await lockShareThen(q, opts.afterShare);
   if (await allowlisted(q, ip, now)) return { status: "allowlisted" };
   const { auto } = await loadThresholds(q, opts.log);
   if (!(input.confidence >= auto)) return { status: "below_auto_threshold" };

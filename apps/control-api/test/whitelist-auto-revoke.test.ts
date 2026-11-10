@@ -8,7 +8,7 @@ import { cookieHeader } from "./helpers/session.js";
 import { DAY, MIN, T0, bootJudgeApp, flowEvent } from "./helpers/judge.js";
 import { runJudgeTick } from "../src/judge.js";
 import {
-  LOCK_TEST_TIMEOUT_MS, holdShareAndAutoLock, lockGuardedUrl, waitShareWaiter,
+  LOCK_TEST_TIMEOUT_MS, lockGuardedUrl, waitShareWaiter,
 } from "./helpers/locks.js";
 
 /** 新增白名單時，同一交易撤回被 CIDR 完全包含的生效封鎖（auto 與 manual）。 */
@@ -166,7 +166,7 @@ describe("新增白名單與判定 tick 並行", () => {
   const autoListN = async () => Number((await app.db.query<{ n: string }>(
     "SELECT count(*) AS n FROM audit_events WHERE action = 'blacklist.auto_list'")).rows[0]!.n);
 
-  it("tick 上榜前先完成新增 → IP 未封鎖、無 auto_list，不發生死結", async () => {
+  it("beforeAutoList 先完成新增 → IP 未封鎖、無 auto_list，不發生死結", async () => {
     app = await bootJudgeApp({ databaseUrl: lockGuardedUrl() });
     const admin = await prime();
     let status = 0;
@@ -179,14 +179,20 @@ describe("新增白名單與判定 tick 並行", () => {
     expect(await autoListN()).toBe(0);
   }, LOCK_TEST_TIMEOUT_MS);
 
-  it("tick 持有 SHARE 與 AUTO_LOCK 時新增會等鎖，放鎖後完成且不發生死結", async () => {
+  it("tick 已持有 SHARE 時新增會等鎖，放鎖後撤回剛上榜的列且不發生死結", async () => {
     app = await bootJudgeApp({ databaseUrl: lockGuardedUrl() });
-    const admin = await cookie("admin1", "pass-admin-1");
-    const hold = await holdShareAndAutoLock();
-    const pending = postWl(admin, "64.0.113.0/24");
-    const waiter = await waitShareWaiter(app.db, 3000, "RowExclusiveLock");
-    await hold.commit();
+    const admin = await prime();
+    let waiter: number | null = null;
+    let pending: ReturnType<typeof postWl> | undefined;
+    await runJudgeTick(app.db, T0, undefined, {
+      autoListEnabled: true,
+      afterAllowlistShare: async () => {
+        pending = postWl(admin, "64.0.113.0/24");
+        waiter = await waitShareWaiter(app.db, 3000, "RowExclusiveLock");
+      },
+    });
     expect(waiter).not.toBeNull();
-    expect((await pending).statusCode).toBe(201);
+    expect((await pending!).statusCode).toBe(201);
+    expect(await active()).toEqual([]);
   }, LOCK_TEST_TIMEOUT_MS);
 });

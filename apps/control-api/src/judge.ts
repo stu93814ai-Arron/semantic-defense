@@ -43,10 +43,10 @@ type GroupKey = { sensor_id: string; app_id: string; src_ip: string; win: number
 type KeyRow = Pick<FlowEventRow, "sensor_id" | "app_id" | "src_ip" | "ts_ms">;
 type ScanRow = KeyRow & Pick<FlowEventRow, "received_at">;
 /**
- * runJudgeTick 的測試掛勾。beforeAutoList：時序注入點（讀完白名單之後、autoListInTx 之前），
- * 只能經 runJudgeTick 第 4 個參數傳入；buildApp 的排程不傳（A 組領航員裁定 11-09）。
+ * runJudgeTick 的測試掛勾。beforeAutoList：時序注入點（讀完白名單之後、autoListInTx 之前）；
+ * afterAllowlistShare：autoListInTx 取得 SHARE 之後。只能經 runJudgeTick 第 4 個參數傳入；buildApp 的排程不傳（A 組領航員裁定 11-09）。
  */
-export type TickHooks = { beforeAutoList?: () => Promise<void> };
+export type TickHooks = { beforeAutoList?: () => Promise<void>; afterAllowlistShare?: () => Promise<void> };
 /**
  * 自動上榜總開關的預設值（唯一來源）：關。關時 tick 完全不做自動上榜——不評估 E3.A、不判熔斷恢復、
  * 不寫 auto_list／auto_suppressed／auto_breaker_*，案件只留在待審。buildApp 的 autoListEnabled 與測試明確開啟。
@@ -140,7 +140,7 @@ async function routeHit(q: Queryable, k: GroupKey, ctx: TickCtx, h: StoredHit): 
   else await raiseCaseMax(q, k.src_ip, h.confidence, now);
   if (await e3a()) {
     await hooks.beforeAutoList?.();
-    if (await autoListCase(q, ip, now, { log, gates: { breakerPerHour } })) ctx.stats.deduped += 1;
+    if (await autoListCase(q, ip, now, { log, gates: { breakerPerHour }, afterShare: hooks.afterAllowlistShare })) ctx.stats.deduped += 1;
   }
 }
 
