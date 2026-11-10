@@ -50,7 +50,7 @@ describe("ts_ms 遷移（舊表補欄＋回填）", () => {
     expect(await tsMs()).toEqual([[VALID, Date.parse(VALID)]]);
   });
 
-  it("並行 ensureFlowSchema（新表、舊表各 10 個 × 5 輪）全部成功（advisory xact lock 串行化）", async () => {
+  it("並行 ensureFlowSchema（新表、舊表各 10 個 × 5 輪）全部成功（session advisory lock 串行化）", async () => {
     const burst = () => Promise.all(Array.from({ length: 10 }, () => ensureFlowSchema(db)));
     for (let round = 0; round < 5; round += 1) {
       for (const sql of RESET) await h.exec(sql);

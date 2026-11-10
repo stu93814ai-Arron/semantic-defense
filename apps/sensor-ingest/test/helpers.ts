@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { randomBytes, randomUUID } from "node:crypto";
 import pg from "pg";
 import { sha256Hex, type SensorDb } from "@semantic-defense/sensor-auth";
+import { runWithPoolSession, type FlowDb, type FlowSession } from "@semantic-defense/flow-store/write";
 import { buildIngest as buildIngestImpl, type BuildIngestOptions } from "../src/app.js";
 
 /** 測試預設 logger:false（CI log 不灌 request log）；要驗 log 的測試自行注入 `logger: { stream }`。 */
@@ -14,7 +15,7 @@ export const buildIngest = (opts: BuildIngestOptions) => buildIngestImpl({ logge
 /** 獨立 schema，避免與 control-api 測試共用 Postgres 時互相 TRUNCATE。DDL 與 control-api 的 sensor_tokens 欄位一致（無 FK）。 */
 const SCHEMA = "sensor_ingest_test";
 
-export async function openTestDb(): Promise<SensorDb & { close(): Promise<void>; reset(): Promise<void> }> {
+export async function openTestDb(): Promise<SensorDb & FlowDb & { close(): Promise<void>; reset(): Promise<void> }> {
   const url = process.env.DATABASE_URL;
   if (!url) throw new Error("DATABASE_URL 未設定：請以 `node scripts/with-pg.mjs …` 執行");
   const boot = new pg.Client({ connectionString: url });
@@ -28,6 +29,7 @@ export async function openTestDb(): Promise<SensorDb & { close(): Promise<void>;
     created_at BIGINT NOT NULL, revoked_at BIGINT NULL, allowed_cidrs TEXT[] NOT NULL, allowed_app_ids TEXT[] NOT NULL)`);
   return {
     query: async <T>(sql: string, params?: unknown[]) => ({ rows: (await pool.query(sql, params)).rows as T[] }),
+    withSession: <T>(fn: (q: FlowSession) => Promise<T>) => runWithPoolSession(pool, fn),
     reset: async () => { await pool.query("DROP TABLE IF EXISTS flow_rejections"); await pool.query("TRUNCATE sensor_tokens"); await pool.query("DROP TABLE IF EXISTS flow_events"); },
     close: async () => { await pool.end(); },
   };

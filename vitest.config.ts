@@ -25,8 +25,11 @@ export default defineConfig({
   test: {
     passWithNoTests: false,
     projects: [
-      { extends: true, test: { name: "node", environment: "node", exclude: E2E, testTimeout: 60_000, hookTimeout: 60_000, // 與 apps/control-api/vitest.config.ts 一致（Postgres 啟動）
+      { extends: true, test: { name: "node", environment: "node", exclude: [...E2E, "packages/flow-store/**"], testTimeout: 60_000, hookTimeout: 60_000, // 與 apps/control-api/vitest.config.ts 一致（Postgres 啟動）
         include: ["packages/*/{src,test}/**/*.test.ts", "scripts/test/**/*.test.ts"] } },
+      // flow-store 的 CREATE INDEX CONCURRENTLY 會等資料庫內所有交易；檔案間不並行以免與持鎖測試死結
+      { extends: true, test: { name: "flow-store", environment: "node", exclude: E2E, testTimeout: 60_000, hookTimeout: 60_000,
+        fileParallelism: false, maxWorkers: 1, include: ["packages/flow-store/{src,test}/**/*.test.ts"] } },
       // control-api 測試共用同一個拋棄式 Postgres（DATABASE_URL），檔案間不並行以免互相污染
       { extends: true, test: { name: "control-api", environment: "node", exclude: E2E, testTimeout: 60_000, hookTimeout: 60_000,
         fileParallelism: false, include: ["apps/control-api/{src,test}/**/*.test.ts"] } },

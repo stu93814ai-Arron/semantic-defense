@@ -1,7 +1,7 @@
 import type { FlowMetadataEvent } from "@semantic-defense/contracts";
-import { RETENTION_MS, type FlowDb } from "./shared.js";
+import { RETENTION_MS, type FlowDb, type FlowSession } from "./shared.js";
 
-export { RETENTION_MS, type FlowDb };
+export { RETENTION_MS, type FlowDb, type FlowSession };
 
 /**
  * flow-store 寫入入口（@semantic-defense/flow-store/write；只給 sensor-ingest）。自 sensor-ingest store.ts 搬出，行為不變。
@@ -13,50 +13,194 @@ export { RETENTION_MS, type FlowDb };
  * - 保留 7 天：年齡 ≥ RETENTION_MS（now - received_at／at >= 7d）即刪（含 flow_rejections）。
  */
 
-/** 遷移串行化：sensor-ingest 多實例同時啟動時，建表／補欄／回填一次只跑一個（pg_advisory_xact_lock，交易結束自動釋放）。 */
+/** 遷移串行化：多實例同時啟動時，建表／補欄／回填一次只跑一個（session 級 pg_advisory_lock，finally 釋放）。 */
 export const FLOW_SCHEMA_LOCK = 872_364_210;
+/** DDL 短交易等鎖上限；逾時即失敗並 throw，避免啟動掛死。 */
+export const FLOW_DDL_LOCK_TIMEOUT = "5s";
+/** 回填每批列數；每批獨立短交易，只拿列鎖。 */
+export const FLOW_BACKFILL_BATCH = 1000;
+/** CREATE／DROP INDEX CONCURRENTLY 不能用 lock_timeout，改用 statement_timeout；逾時即失敗並 throw。 */
+export const FLOW_INDEX_STATEMENT_TIMEOUT = "10min";
+
+/** 測試掛勾：不可從產品啟動路徑傳入。 */
+export type FlowSchemaHooks = {
+  /** 一批回填已 UPDATE（持有列鎖、尚未 COMMIT）。測試用來並行 INSERT／判定 SELECT。 */
+  afterBackfillBatchLock?: () => Promise<void>;
+};
 
 /**
- * 一個多語句 simple query＝一個隱含交易（不寫 BEGIN／COMMIT：中途出錯整串回滾，不會把 pool 連線留在 aborted 交易）。
- * ts_ms（ts slice，計畫 Q1–Q8）：ts 的 epoch ms，由 insertFlow 以 JS Date.parse 寫入；判定 tick 只讀 ts_ms、不再對 ts 做 ::timestamptz。
- * - flow_ts_ms：SQL 端同值換算（floor 到 ms），只吞 data_exception（class 22：0000 年、offset ±23:59…）與 feature_not_supported（0A000：infinity／-infinity，R-A）回 NULL，其他錯誤照拋；
- *   ::timestamptz 依 TimeZone 設定，故 STABLE 不標 IMMUTABLE。
- * - 回填：每次啟動都跑 WHERE ts_ms IS NULL（舊列、滾動升級期間舊版 ingest 寫的列；Q2／Q4）。這是 flow_events 全表掃描，
- *   且整段持有 FLOW_SCHEMA_LOCK——見 docs R15 部署前檢查。
- * - flow_events_group_ms：判定 tick 依 (sensor, app, src_ip) 等值＋ts_ms 範圍重讀整組；完整索引（非 partial，Q7）。
+ * 在 pool 的同一條連線上執行 fn（給 ingest／測試把 session lock、CONCURRENTLY、回填綁在一起）。
+ * 不引入 pg 型別，只要有 connect／query／release。
  */
-const SCHEMA_SQL = `
-SELECT pg_advisory_xact_lock(${FLOW_SCHEMA_LOCK});
-CREATE TABLE IF NOT EXISTS flow_events (
+export async function runWithPoolSession<T>(
+  pool: { connect(): Promise<{ query(sql: string, params?: unknown[]): Promise<{ rows: unknown[] }>; release(): void }> },
+  fn: (q: FlowSession) => Promise<T>,
+): Promise<T> {
+  const client = await pool.connect();
+  try {
+    return await fn({
+      query: async <R>(sql: string, params?: unknown[]) => ({ rows: (await client.query(sql, params)).rows as R[] }),
+    });
+  } finally {
+    client.release();
+  }
+}
+
+const onSession = <T>(db: FlowDb, fn: (q: FlowSession) => Promise<T>): Promise<T> =>
+  db.withSession ? db.withSession(fn) : fn(db);
+
+const EVENTS_DDL = `CREATE TABLE IF NOT EXISTS flow_events (
   flow_id TEXT NOT NULL, app_id TEXT NOT NULL, ts TEXT NOT NULL,
   src_ip TEXT NOT NULL, dst_ip TEXT NOT NULL, src_port INTEGER NOT NULL, dst_port INTEGER NOT NULL,
   protocol TEXT NOT NULL, bytes_in BIGINT NOT NULL, bytes_out BIGINT NOT NULL,
   packets BIGINT NOT NULL, duration_ms BIGINT NOT NULL,
   sensor_id TEXT NOT NULL, received_at BIGINT NOT NULL, ts_ms BIGINT NULL,
   PRIMARY KEY (sensor_id, flow_id)
-);
-ALTER TABLE flow_events ADD COLUMN IF NOT EXISTS ts_ms BIGINT NULL;
-CREATE OR REPLACE FUNCTION flow_ts_ms(t TEXT) RETURNS BIGINT LANGUAGE plpgsql STABLE AS $fn$
+)`;
+
+const TS_MS_FN = `CREATE OR REPLACE FUNCTION flow_ts_ms(t TEXT) RETURNS BIGINT LANGUAGE plpgsql STABLE AS $fn$
 BEGIN
   RETURN floor(extract(epoch FROM t::timestamptz) * 1000)::bigint;
 EXCEPTION WHEN data_exception OR feature_not_supported THEN
   RETURN NULL;
 END
-$fn$;
-UPDATE flow_events SET ts_ms = flow_ts_ms(ts) WHERE ts_ms IS NULL;
-CREATE INDEX IF NOT EXISTS flow_events_received_at ON flow_events (received_at);
--- 舊索引 (sensor_id, app_id, src_ip, ts)：判定改讀 ts_ms 後沒有查詢依 ts 文字過濾／排序（Q3 grep），移除
-DROP INDEX IF EXISTS flow_events_group;
-CREATE INDEX IF NOT EXISTS flow_events_group_ms ON flow_events (sensor_id, app_id, src_ip, ts_ms);
--- app_id 未綁定的拒絕紀錄：只記 id（代理 PK）＋sensor_id＋時間，不記 payload；與 flow_events 同 7 天清除。
--- 註：IF NOT EXISTS 不會改既有舊表（無 id）的結構。
-CREATE TABLE IF NOT EXISTS flow_rejections (id BIGSERIAL PRIMARY KEY, sensor_id TEXT NOT NULL, at BIGINT NOT NULL);
-CREATE INDEX IF NOT EXISTS flow_rejections_at ON flow_rejections (at);
-`;
+$fn$`;
 
-/** sensor-ingest 啟動時呼叫（control-api 不建表、不建索引）；可重複、可並行。 */
-export async function ensureFlowSchema(db: FlowDb): Promise<void> {
-  await db.query(SCHEMA_SQL);
+const REJECTIONS_DDL = `CREATE TABLE IF NOT EXISTS flow_rejections (id BIGSERIAL PRIMARY KEY, sensor_id TEXT NOT NULL, at BIGINT NOT NULL)`;
+
+async function columnExists(q: FlowSession, table: string, column: string): Promise<boolean> {
+  const r = await q.query(
+    `SELECT 1 FROM information_schema.columns
+     WHERE table_schema = current_schema() AND table_name = $1 AND column_name = $2`,
+    [table, column],
+  );
+  return r.rows.length > 0;
+}
+
+async function indexInvalid(q: FlowSession, name: string): Promise<boolean> {
+  const r = await q.query<{ invalid: boolean }>(
+    `SELECT NOT i.indisvalid AS invalid
+     FROM pg_class c
+     JOIN pg_index i ON i.indexrelid = c.oid
+     JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE c.relname = $1 AND n.nspname = current_schema()`,
+    [name],
+  );
+  return r.rows[0]?.invalid === true;
+}
+
+
+async function inShortTx<T>(q: FlowSession, fn: () => Promise<T>): Promise<T> {
+  await q.query("BEGIN");
+  try {
+    const out = await fn();
+    await q.query("COMMIT");
+    return out;
+  } catch (err) {
+    try { await q.query("ROLLBACK"); } catch { /* 仍拋原錯 */ }
+    throw err;
+  }
+}
+
+async function runDdl(q: FlowSession): Promise<void> {
+  await inShortTx(q, async () => {
+    await q.query("SET LOCAL lock_timeout = '5s'");
+    await q.query(EVENTS_DDL);
+    if (!(await columnExists(q, "flow_events", "ts_ms"))) {
+      await q.query("ALTER TABLE flow_events ADD COLUMN ts_ms BIGINT NULL");
+    }
+    await q.query(TS_MS_FN);
+    await q.query(REJECTIONS_DDL);
+    await q.query("CREATE INDEX IF NOT EXISTS flow_events_received_at ON flow_events (received_at)");
+    await q.query("CREATE INDEX IF NOT EXISTS flow_rejections_at ON flow_rejections (at)");
+  });
+}
+
+async function ensureGroupIndexes(q: FlowSession): Promise<void> {
+  await q.query("SET statement_timeout = '10min'");
+  try {
+    await q.query("DROP INDEX CONCURRENTLY IF EXISTS flow_events_group");
+    if (await indexInvalid(q, "flow_events_group_ms")) {
+      await q.query("DROP INDEX CONCURRENTLY IF EXISTS flow_events_group_ms");
+    }
+    await q.query("CREATE INDEX CONCURRENTLY IF NOT EXISTS flow_events_group_ms ON flow_events (sensor_id, app_id, src_ip, ts_ms)");
+  } finally {
+    await q.query("RESET statement_timeout");
+  }
+}
+
+type BatchCursor = { received_at: number; sensor_id: string; flow_id: string };
+
+type BatchRow = { sensor_id: string; flow_id: string; received_at: string };
+
+async function loadBackfillRows(q: FlowSession, cursor: BatchCursor | null): Promise<BatchRow[]> {
+  return (await q.query<BatchRow>(
+    `SELECT sensor_id, flow_id, received_at FROM flow_events
+     WHERE ts_ms IS NULL AND ($1::bigint IS NULL OR (received_at, sensor_id, flow_id) > ($1, $2, $3))
+     ORDER BY received_at, sensor_id, flow_id
+     LIMIT ${FLOW_BACKFILL_BATCH}
+     FOR UPDATE`,
+    [cursor?.received_at ?? null, cursor?.sensor_id ?? "", cursor?.flow_id ?? ""],
+  )).rows;
+}
+
+async function fillConvertible(q: FlowSession, rows: BatchRow[]): Promise<void> {
+  await q.query(
+    `UPDATE flow_events AS e SET ts_ms = flow_ts_ms(e.ts)
+     FROM unnest($1::text[], $2::text[]) AS v(sensor_id, flow_id)
+     WHERE e.sensor_id = v.sensor_id AND e.flow_id = v.flow_id
+       AND flow_ts_ms(e.ts) IS NOT NULL`,
+    [rows.map((r) => r.sensor_id), rows.map((r) => r.flow_id)],
+  );
+}
+
+async function backfillBatch(q: FlowSession, cursor: BatchCursor | null, hooks?: FlowSchemaHooks): Promise<BatchCursor | "done"> {
+  return inShortTx(q, async () => {
+    const rows = await loadBackfillRows(q, cursor);
+    const last = rows.at(-1);
+    if (!last) return "done";
+    await fillConvertible(q, rows);
+    await hooks?.afterBackfillBatchLock?.();
+    return { received_at: Number(last.received_at), sensor_id: last.sensor_id, flow_id: last.flow_id };
+  });
+}
+
+async function backfillTsMs(q: FlowSession, hooks?: FlowSchemaHooks): Promise<void> {
+  let cursor: BatchCursor | null = null;
+  for (;;) {
+    const next = await backfillBatch(q, cursor, hooks);
+    if (next === "done") return;
+    cursor = next;
+  }
+}
+
+/**
+ * sensor-ingest 啟動時呼叫（control-api 不建表、不建索引）；可重複、可並行。
+ * 回填在本函式內跑完才返回，因此 sensor-ingest 的 listen 會等到回填結束（阻擋本實例啟動）。
+ * 理由：聽埠前欄位、函式、索引與回填都已一致，不必另開背景連線或處理背景失敗；
+ * 其他已在跑的 ingest INSERT 與判定 SELECT 只碰到列鎖，可繼續工作。
+ */
+
+/** 用 try_lock 輪詢，避免他實例堵在 pg_advisory_lock 的開著的 statement 上，與 CONCURRENTLY 互相等待。 */
+async function acquireSchemaLock(q: FlowSession): Promise<void> {
+  for (;;) {
+    const r = await q.query<{ ok: boolean }>("SELECT pg_try_advisory_lock($1) AS ok", [FLOW_SCHEMA_LOCK]);
+    if (r.rows[0]?.ok === true) return;
+    await new Promise<void>((ok) => { setTimeout(ok, 50); });
+  }
+}
+
+export async function ensureFlowSchema(db: FlowDb, opts?: { hooks?: FlowSchemaHooks }): Promise<void> {
+  await onSession(db, async (q) => {
+    await acquireSchemaLock(q);
+    try {
+      await runDdl(q);
+      await ensureGroupIndexes(q);
+      await backfillTsMs(q, opts?.hooks);
+    } finally {
+      await q.query("SELECT pg_advisory_unlock($1)", [FLOW_SCHEMA_LOCK]);
+    }
+  });
 }
 
 /** 刪除年齡 ≥ 7 天的 flow_events／flow_rejections，回兩表刪除總筆數。 */

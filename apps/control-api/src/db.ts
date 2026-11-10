@@ -11,6 +11,8 @@ export type Db = {
   close(): Promise<void>;
   /** 交易：同一 client 上 BEGIN → fn → COMMIT；fn 拋錯則 ROLLBACK 後原樣拋出；最後一律 release。 */
   tx<T>(fn: (q: Queryable) => Promise<T>): Promise<T>;
+  /** 同一條連線上執行（給 flow-store ensureFlowSchema 的 session lock／CONCURRENTLY）。 */
+  withSession<T>(fn: (q: Queryable) => Promise<T>): Promise<T>;
 };
 
 /** 只能查詢的介面（Db 本身或交易中的 client）；稽核等寫入函式吃這個，才能放進 tx。 */
@@ -163,6 +165,16 @@ function asDb(pool: pg.Pool): Db {
       await pool.end();
     },
     tx: <T>(fn: (q: Queryable) => Promise<T>) => runTx(pool, fn),
+    withSession: async <T>(fn: (q: Queryable) => Promise<T>): Promise<T> => {
+      const client = await pool.connect();
+      try {
+        return await fn({
+          query: async <R>(sql: string, params?: unknown[]) => ({ rows: (await client.query(sql, params)).rows as R[] }),
+        });
+      } finally {
+        client.release();
+      }
+    },
   };
 }
 
