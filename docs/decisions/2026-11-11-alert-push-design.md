@@ -55,21 +55,21 @@ Invalid host, port, URL, transport, email address, HMAC length, or a non-boolean
 
 Source: existing `audit_events` rows with `action = 'blacklist.auto_list'` (written in the same judge tx as the blocklist insert; `detail` today is `{entry_id, ip, confidence, case_id, expires_at}`). `GET /api/audit` (platform_admin) remains the human-readable view and is unchanged.
 
-Delivery is **at-least-once** (TCP/TLS syslog and the other channels). Sending never runs inside `runJudgeTick`'s transaction (`JUDGE_LOCK` / `AUTO_LOCK`). In that same tx, after `writeAudit`, enqueue one `alert_outbox` row per enabled channel (migration: new table `alert_outbox`, not a column on `audit_events`). If that tx rolls back, no outbox row remains. Columns: `id`, `audit_id`, `channel`, `kind` (`auto_list` / `volume` / `breaker_open`), `payload`, `attempts`, `next_attempt_at`, `status` (`pending` / `delivered` / `failed`), `error_class`, `created_at`.
+Delivery is **at-least-once** (TCP/TLS syslog and the other channels). Sending never runs inside `runJudgeTick`'s transaction (`JUDGE_LOCK` / `AUTO_LOCK`). In that same tx, after `writeAudit`, enqueue one `alert_outbox` row per enabled channel (migration: new table `alert_outbox`, not a column on `audit_events`). If that tx rolls back, no outbox row remains. Columns: `id`, `audit_id`, `channel`, `kind` (`auto_list` / `volume` / `breaker_open`), `payload`, `attempts`, `next_attempt_at`, `status` (`pending` / `delivered` / `failed`), `error_class`, `created_at`, `failed_at` (set when a row turns `failed`; existing failed rows are backfilled from `next_attempt_at`).
 
-The `payload` column stores only the minimal fields, with no URL and no key: `{delivery_id, kind, entry_id, case_id}` for `auto_list`, and `{delivery_id, kind}` for `volume` / `breaker_open`. `delivery_id` is the outbox row id. No IP or CIDR. The admin looks up the rest in the console. Receivers dedupe on `delivery_id`. A cursor-only scan of `audit_events` would skip retries after a crash that advanced the cursor, so the outbox is the work queue.
+The `payload` column stores only the minimal fields, with no URL and no key: `{delivery_id, kind, entry_id, case_id}` for `auto_list`, and `{delivery_id, kind, at}` for `volume` / `breaker_open` (`at` is the enqueue timestamp). `delivery_id` is the outbox row id. No IP or CIDR. The admin looks up the rest in the console. Receivers dedupe on `delivery_id`. A cursor-only scan of `audit_events` would skip retries after a crash that advanced the cursor, so the outbox is the work queue.
 
 A delivery timer in `buildApp` (separate from the judge interval) claims due rows as follows: in a short tx, `SELECT` with `FOR UPDATE SKIP LOCKED`, push `next_attempt_at` forward as the lease, and commit. Send outside any tx. Update the status in another short tx. Never hold a lock while waiting on the network. Several control-api instances can run in parallel without a second advisory lock. A crash after a successful send but before the status update is retried once the lease expires, with the same `delivery_id`. Volume and breaker-open alerts take priority over ordinary `auto_list` alerts, even when many `auto_list` rows are retrying. `already_listed` does not write a second `blacklist.auto_list`, so enqueue is naturally once per listing.
 
-Failed rows are retained 30 days, then purged. A total row cap (default 10000, adjustable) drops the oldest rows when exceeded; log only counts, and reflect the purge in health.
+Failed rows are retained 30 days, then purged. A total row cap (default 10000, adjustable) drops the oldest rows when exceeded; log only counts, write one `alert.purged` audit row with `{count}` only, and expose `purged` on health as the sum of those audit counts over the last 24 hours (survives a restart).
 
 ## 3. Retry and errors
 
-Eight attempts. Exponential backoff starting at 1s, factor 2, capped at 15 minutes between attempts. After the final failure: set `status=failed`, store `attempts` and an `error_class` only (`smtp_auth`, `smtp_timeout`, `tls`, `webhook_status`, `webhook_timeout`, `webhook_ssrf`, `dns`, `syslog_timeout`, and so on). No host, URL, credential, IP, response body, or SMTP/syslog text.
+Eight attempts. Exponential backoff starting at 1s, factor 2, capped at 15 minutes between attempts. After the final failure: set `status=failed`, set `failed_at`, store `attempts` and an `error_class` only (`smtp_auth`, `smtp_timeout`, `tls`, `webhook_status`, `webhook_timeout`, `webhook_ssrf`, `dns`, `syslog_timeout`, and so on). No host, URL, credential, IP, response body, or SMTP/syslog text.
 
 Net, tls, and SMTP response errors are converted to `error_class` at the send-module boundary. Raw errors never reach logs, audit, or the outbox, including via `safeErr`. Write one `alert.delivery_failed` audit row with `{delivery_id, channel, kind, error_class, attempts}`. When retries run out, also write one error log line containing only counts.
 
-`GET /api/health` (already platform_admin, today `{status:"ok"}`) gains counts only: `{pending, failed, delivered_1h}`, plus undelivered counts and the last failure time. Exhausted retries are visible in those counters. The body must not contain a URL, host, or raw error text.
+`GET /api/health` (already platform_admin, today `{status:"ok"}`) gains counts only: `{pending, failed, delivered_1h}`, plus undelivered counts, `last_failed_at` (max `failed_at`, not `next_attempt_at`), and `purged` (audit sum, last 24 hours). Exhausted retries are visible in those counters. The body must not contain a URL, host, or raw error text.
 
 ## 4. Volume alert
 
@@ -91,7 +91,7 @@ HMAC is required (header `X-SD-Alert-Signature: t=<unix_ms>,v1=<hex>`, HMAC-SHA2
 
 ### Syslog
 
-RFC 5424 over TCP or TLS only. If the transport is UDP, `buildApp` throws. TCP/TLS framing is RFC 6587 octet-counting, which counts bytes, not characters. TLS verifies the certificate and sets `servername`; a self-signed certificate or a hostname mismatch fails. Escape `"`, `\`, and `]` in SD-PARAM values. HOSTNAME and APP-NAME are PRINTUSASCII only. Strip CR, LF, and NUL from MSG. Response errors are never echoed; only `error_class` is recorded.
+RFC 5424 over TCP or TLS only. If the transport is UDP, `buildApp` throws. TCP/TLS framing is RFC 6587 octet-counting, which counts bytes, not characters. TLS verifies the certificate and sets `servername`; a self-signed certificate or a hostname mismatch fails. Escape `"`, `\`, and `]` in SD-PARAM values. TIMESTAMP is a real RFC 3339 UTC time (`Date.toISOString()`). PROCID and MSGID stay NILVALUE (`-`). HOSTNAME and APP-NAME are PRINTUSASCII only. Strip CR, LF, and NUL from MSG. Response errors are never echoed; only `error_class` is recorded.
 
 SMTP and syslog hosts use the same resolve-all-records, embedded-v4, per-channel allow-CIDR, and IP-pin rules as the webhook (TLS SNI stays the original hostname).
 
@@ -101,7 +101,7 @@ The hand-written SMTP plan is dropped. Use nodemailer pinned to exactly `10.5.0`
 
 Set `requireTLS: true` and `tls.servername`. Never set `tls.rejectUnauthorized` to false; certificate verification stays on. STARTTLS and implicit TLS both verify the certificate and set `servername`. A self-signed certificate or a hostname mismatch fails. A server that does not advertise STARTTLS fails; there is no plaintext downgrade unless the explicit opt-in below is set. Turn off `logger` and `debug`. Do not set `proxy`.
 
-Plaintext is refused unless `SD_ALERT_SMTP_ALLOW_PLAINTEXT=1`. In that mode set `ignoreTLS`, never supply auth, never send AUTH, make `buildApp` throw if a username or a password is set, and log a startup warn.
+`SD_ALERT_SMTP_ALLOW_PLAINTEXT` and `SD_ALERT_EMAIL_IMPLICIT_TLS` throw at startup for any value other than unset or exactly `1`. Plaintext is refused unless `SD_ALERT_SMTP_ALLOW_PLAINTEXT=1`. In that mode set `ignoreTLS`, never supply auth, never send AUTH, make `buildApp` throw if a username or a password is set, and log a startup warn.
 
 Build the subject and body only from fixed fields, using a character whitelist. Values that contain CR, LF, NUL, or a character outside the whitelist are rejected or stripped so they cannot create a new header line. Dot-stuffing and SMTP reply parsing are left to the package and confirmed with local fake-server integration tests. SMTP response errors are converted to `error_class` at the send-module boundary and are never echoed.
 

@@ -66,17 +66,17 @@ ts 的小數秒超過 6 位時，Postgres 解析時會捨入到微秒，JS `Date
 
 ## 告警推送（環境變數與外部監控）
 
-上線後必須把 control-api 的 `GET /api/health`（`platform_admin`，內含告警未送達筆數與最後失敗時間）接到外部監控，不得只靠本機 log。即使暫時未啟用任何通道，也要先接好監控，以免日後開啟通道時沒有告警。
+上線後必須把 control-api 的 `GET /api/health`（`platform_admin`，內含告警未送達筆數、`last_failed_at`（`max(failed_at)`，不是 `next_attempt_at`）與近 24 小時 `purged`（讀自 `alert.purged` 稽核，重啟後仍在））接到外部監控，不得只靠本機 log。即使暫時未啟用任何通道，也要先接好監控，以免日後開啟通道時沒有告警。
 
 通道彼此獨立：該通道的啟用變數未設或 trim 後為空則關閉；一旦啟用，必備變數缺失或無效時 control-api 拒絕啟動（錯誤不含 URL、主機、憑證或位址）。私網覆寫只能用該通道的 CIDR 清單，不得使用全局開關。
 
 | 通道 | 啟用（未設＝關） | 啟用時必備 | 可選 |
 |---|---|---|---|
-| Email | `SD_ALERT_EMAIL_TO` | `SD_ALERT_EMAIL_SMTP_HOST`、`SD_ALERT_EMAIL_FROM` | `SD_ALERT_EMAIL_SMTP_PORT`（預設 587）、`SD_ALERT_EMAIL_USERNAME`、`SD_ALERT_EMAIL_PASSWORD`、`SD_ALERT_EMAIL_IMPLICIT_TLS`（`1`＝隱式 TLS）、`SD_ALERT_SMTP_ALLOW_PLAINTEXT`（必須為 `1` 才允許明文，此時禁止帳密）、`SD_ALERT_SMTP_ALLOW_CIDRS` |
+| Email | `SD_ALERT_EMAIL_TO` | `SD_ALERT_EMAIL_SMTP_HOST`、`SD_ALERT_EMAIL_FROM` | `SD_ALERT_EMAIL_SMTP_PORT`（預設 587）、`SD_ALERT_EMAIL_USERNAME`、`SD_ALERT_EMAIL_PASSWORD`、`SD_ALERT_EMAIL_IMPLICIT_TLS`（僅接受未設或 `1`；`1`＝隱式 TLS）、`SD_ALERT_SMTP_ALLOW_PLAINTEXT`（僅接受未設或 `1`；必須為 `1` 才允許明文，此時禁止帳密）、`SD_ALERT_SMTP_ALLOW_CIDRS` |
 | Webhook | `SD_ALERT_WEBHOOK_URL`（僅 https、禁止 userinfo；整段 URL 視為密鑰） | `SD_ALERT_WEBHOOK_HMAC_SECRET`（至少 32 bytes） | `SD_ALERT_WEBHOOK_ALLOW_CIDRS` |
 | Syslog | `SD_ALERT_SYSLOG_HOST` | `SD_ALERT_SYSLOG_PORT`、`SD_ALERT_SYSLOG_TRANSPORT`（僅 `tcp` 或 `tls`；`udp` 啟動即 throw） | `SD_ALERT_SYSLOG_ALLOW_CIDRS`、`SD_ALERT_SYSLOG_HOSTNAME`、`SD_ALERT_SYSLOG_APP_NAME` |
 
-`SD_ALERT_EMAIL_TO` 與 `SD_ALERT_EMAIL_FROM` 必須是不含顯示名稱的嚴格 ASCII 位址；含 CR、LF、NUL、非 ASCII 或多個 `@` 時啟動即 throw。憑證、SMTP 密碼與 webhook URL／HMAC 不得寫入 log、稽核、outbox 或錯誤物件。
+`SD_ALERT_EMAIL_TO` 與 `SD_ALERT_EMAIL_FROM` 必須是不含顯示名稱的嚴格 ASCII 位址；含 CR、LF、NUL、非 ASCII 或多個 `@` 時啟動即 throw。`SD_ALERT_SMTP_ALLOW_PLAINTEXT` 與 `SD_ALERT_EMAIL_IMPLICIT_TLS` 除未設或恰好為 `1` 外，啟動即 throw。Syslog TIMESTAMP 為 RFC 3339 UTC，PROCID／MSGID 為 `-`。volume／breaker 告警 payload 為 `{delivery_id, kind, at}`。憑證、SMTP 密碼與 webhook URL／HMAC 不得寫入 log、稽核、outbox 或錯誤物件。
 
 ## A 組領航員裁示（告警推送測試清單 §2 與 §9）
 
