@@ -4,7 +4,7 @@ import pg from "pg";
 import { autoListInTx } from "../src/auto-blacklist.js";
 import {
   ALERT_BACKOFF_CAP_MS, ALERT_MAX_ATTEMPTS, AlertSendError, alertBackoffMs, alertHealthCounts,
-  assertWebhookSecret, deliverDueAlerts, enqueueAlerts, type AlertChannel, type OutboxRow,
+  assertWebhookSecret, deliverDueAlerts, enqueueAlerts, purgeAlertOutbox, type AlertChannel, type OutboxRow,
 } from "../src/alert-outbox.js";
 import { buildApp, seedPhase2Fixtures, type ControlApi } from "./helpers/app.js";
 import { writeAutoBlocklistEntry } from "./helpers/auto-list.js";
@@ -199,4 +199,26 @@ describe("發送迴圈：單筆整體期限", () => {
     expect(byCh.syslog).toMatchObject({ status: "delivered" });
     expect(byCh.webhook).toMatchObject({ status: "pending", attempts: 1, error_class: "webhook_timeout" });
   }, 8_000);
+});
+
+describe("purge 不得刪 pending", () => {
+  it("pending 超過上限且部分早於 30 天，purge 後筆數不變", async () => {
+    await boot();
+    const old = NOW - 31 * 24 * 60 * 60_000;
+    await app.db.query(
+      `INSERT INTO alert_outbox (channel, kind, payload, attempts, next_attempt_at, status, created_at)
+       VALUES ('webhook','auto_list','{"kind":"auto_list","delivery_id":"p1"}',0,$1,'pending',$2),
+              ('webhook','auto_list','{"kind":"auto_list","delivery_id":"p2"}',0,$1,'pending',$2),
+              ('webhook','auto_list','{"kind":"auto_list","delivery_id":"p3"}',0,$1,'pending',$1),
+              ('webhook','auto_list','{"kind":"auto_list","delivery_id":"p4"}',0,$1,'pending',$1),
+              ('email','auto_list','{"kind":"auto_list","delivery_id":"p5"}',0,$1,'pending',$2)`,
+      [NOW, old],
+    );
+    const count = async () => Number((await app.db.query<{ n: string }>("SELECT count(*) AS n FROM alert_outbox WHERE status = 'pending'")).rows[0]!.n);
+    const before = await count();
+    expect(before).toBeGreaterThan(2);
+    const deleted = await purgeAlertOutbox(app.db, NOW, 2);
+    expect(await count()).toBe(before);
+    expect(deleted).toBe(0);
+  });
 });
