@@ -21,6 +21,26 @@ export const FLOW_DDL_LOCK_TIMEOUT = "5s";
 export const FLOW_BACKFILL_BATCH = 1000;
 /** CREATE／DROP INDEX CONCURRENTLY 不能用 lock_timeout，改用 statement_timeout；逾時即失敗並 throw。 */
 export const FLOW_INDEX_STATEMENT_TIMEOUT = "10min";
+/** CONCURRENTLY statement_timeout 預設毫秒（可用 SD_FLOW_INDEX_TIMEOUT_MS 覆寫）。 */
+export const FLOW_INDEX_TIMEOUT_MS = 10 * 60_000;
+/** try_lock 輪詢總等待上限預設（可用 SD_FLOW_SCHEMA_LOCK_WAIT_MS 覆寫）。 */
+export const FLOW_SCHEMA_LOCK_WAIT_MS = 30 * 60_000;
+/** 等待 schema lock 時，每隔這段時間 warn 一次（只記已等待毫秒）。 */
+export const FLOW_SCHEMA_LOCK_WARN_EVERY_MS = 30_000;
+
+/** 讀取正整數環境變數；未設或空白用 fallback。無效值（非正整數）立即拋錯。 */
+function parsePositiveInt(name: string, raw: string | undefined, fallback: number): number {
+  if (raw === undefined || raw.trim() === "") return fallback;
+  if (!/^[0-9]+$/.test(raw.trim())) throw new Error(`invalid ${name}`);
+  const n = Number(raw.trim());
+  if (!Number.isSafeInteger(n) || n <= 0) throw new Error(`invalid ${name}`);
+  return n;
+}
+
+export const flowSchemaLockWaitMs = (): number =>
+  parsePositiveInt("SD_FLOW_SCHEMA_LOCK_WAIT_MS", process.env.SD_FLOW_SCHEMA_LOCK_WAIT_MS, FLOW_SCHEMA_LOCK_WAIT_MS);
+export const flowIndexTimeoutMs = (): number =>
+  parsePositiveInt("SD_FLOW_INDEX_TIMEOUT_MS", process.env.SD_FLOW_INDEX_TIMEOUT_MS, FLOW_INDEX_TIMEOUT_MS);
 
 /** 測試掛勾：不可從產品啟動路徑傳入。 */
 export type FlowSchemaHooks = {
@@ -117,7 +137,7 @@ async function runDdl(q: FlowSession): Promise<void> {
 }
 
 async function ensureGroupIndexes(q: FlowSession): Promise<void> {
-  await q.query("SET statement_timeout = '10min'");
+  await q.query(`SET statement_timeout = ${flowIndexTimeoutMs()}`);
   try {
     await q.query("DROP INDEX CONCURRENTLY IF EXISTS flow_events_group");
     if (await indexInvalid(q, "flow_events_group_ms")) {
@@ -182,19 +202,31 @@ async function backfillTsMs(q: FlowSession, hooks?: FlowSchemaHooks): Promise<vo
  */
 
 /** 用 try_lock 輪詢，避免他實例堵在 pg_advisory_lock 的開著的 statement 上，與 CONCURRENTLY 互相等待。
- * 輪詢不設上限可接受：持有者連線斷開時，Postgres 會自動釋放 session 級 advisory lock。
+ * 總等待上限為 SD_FLOW_SCHEMA_LOCK_WAIT_MS（預設 30 分鐘），逾時即 throw；持有者連線斷開時
+ * Postgres 仍會自動釋放 session 級 advisory lock。等待期間每 30 秒 warn 一次，物件只含 waited_ms。
  */
-async function acquireSchemaLock(q: FlowSession): Promise<void> {
+async function acquireSchemaLock(q: FlowSession, log?: { warn(obj: object, msg: string): void }): Promise<void> {
+  const limit = flowSchemaLockWaitMs();
+  const started = Date.now();
+  let warnedAt = started;
   for (;;) {
     const r = await q.query<{ ok: boolean }>("SELECT pg_try_advisory_lock($1) AS ok", [FLOW_SCHEMA_LOCK]);
     if (r.rows[0]?.ok === true) return;
+    const waited = Date.now() - started;
+    if (waited >= limit) throw new Error("flow schema lock wait timed out");
+    if (Date.now() - warnedAt >= FLOW_SCHEMA_LOCK_WARN_EVERY_MS) {
+      log?.warn({ waited_ms: waited }, "flow schema lock wait");
+      warnedAt = Date.now();
+    }
     await new Promise<void>((ok) => { setTimeout(ok, 50); });
   }
 }
 
-export async function ensureFlowSchema(db: FlowDb, opts?: { hooks?: FlowSchemaHooks }): Promise<void> {
+export async function ensureFlowSchema(db: FlowDb, opts?: { hooks?: FlowSchemaHooks; log?: { warn(obj: object, msg: string): void } }): Promise<void> {
+  flowSchemaLockWaitMs();
+  flowIndexTimeoutMs();
   await onSession(db, async (q) => {
-    await acquireSchemaLock(q);
+    await acquireSchemaLock(q, opts?.log);
     try {
       await runDdl(q);
       await ensureGroupIndexes(q);

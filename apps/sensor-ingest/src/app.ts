@@ -80,7 +80,7 @@ export async function buildIngest(opts: BuildIngestOptions): Promise<FastifyInst
     : Fastify({ trustProxy: false, bodyLimit: BODY_LIMIT, logger })) as unknown as FastifyInstance;
   installErrorHandler(app);
   const clock = opts.now ?? Date.now;
-  await ensureFlowSchema(opts.db);
+  await ensureFlowSchema(opts.db, { log: app.log });
   const limiter = createAuthFailLimiter({ maxKeys: opts.authFailMaxKeys });
   const guard = makeGuard(opts.db, opts.requireHttps ?? true, clock, limiter);
 
