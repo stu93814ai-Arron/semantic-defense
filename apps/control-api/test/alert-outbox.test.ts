@@ -118,13 +118,13 @@ describe("發送迴圈：租約、重試、優先、清除", () => {
     const send = async () => { throw new AlertSendError("syslog_timeout"); };
     let t = NOW;
     for (let i = 1; i < ALERT_MAX_ATTEMPTS; i++) {
-      expect(await deliverDueAlerts(app.db, t, { syslog: send }, log)).toEqual({ delivered: 0, failed: 0, retried: 1 });
+      expect(await deliverDueAlerts(app.db, t, { syslog: send }, log, { clock: () => t })).toEqual({ delivered: 0, failed: 0, retried: 1 });
       const [r] = await rows();
       expect(r).toMatchObject({ status: "pending", attempts: i, error_class: "syslog_timeout" });
       expect(Number(r!.next_attempt_at)).toBe(t + alertBackoffMs(i));
       t = Number(r!.next_attempt_at);
     }
-    expect(await deliverDueAlerts(app.db, t, { syslog: send }, log)).toEqual({ delivered: 0, failed: 1, retried: 0 });
+    expect(await deliverDueAlerts(app.db, t, { syslog: send }, log, { clock: () => t })).toEqual({ delivered: 0, failed: 1, retried: 0 });
     const [final] = await rows();
     expect(final).toMatchObject({ status: "failed", attempts: ALERT_MAX_ATTEMPTS, error_class: "syslog_timeout" });
     const failed = await audits("alert.delivery_failed");
@@ -265,6 +265,26 @@ describe("delivered 計數與完成時間", () => {
     expect(r.status).toBe("delivered");
     expect(Number(r.delivered_at)).toBe(NOW + 5_000);
     expect(Number(r.delivered_at)).not.toBe(NOW);
+  });
+
+  it("markFailure 的 next_attempt_at 與 failed_at 用該列當下 clock，不是批次開始 now", async () => {
+    await boot();
+    await app.db.tx((q) => enqueueAlerts(q, { channels: ["webhook"], kind: "auto_list", now: NOW, entryId: "e1", caseId: "c1" }));
+    let t = NOW;
+    const send = async () => { t = NOW + 5_000; throw new AlertSendError("webhook_timeout"); };
+    expect(await deliverDueAlerts(app.db, NOW, { webhook: send }, undefined, { clock: () => t }))
+      .toEqual({ delivered: 0, failed: 0, retried: 1 });
+    const r = (await rows())[0]!;
+    expect(Number(r.next_attempt_at)).toBe(NOW + 5_000 + alertBackoffMs(1));
+    expect(Number(r.next_attempt_at)).not.toBe(NOW + alertBackoffMs(1));
+    await app.db.query("UPDATE alert_outbox SET attempts = $1", [ALERT_MAX_ATTEMPTS - 1]);
+    t = NOW;
+    expect(await deliverDueAlerts(app.db, NOW + 60_000, { webhook: send }, undefined, { clock: () => t }))
+      .toEqual({ delivered: 0, failed: 1, retried: 0 });
+    const done = (await app.db.query<{ failed_at: string; status: string }>("SELECT failed_at, status FROM alert_outbox")).rows[0]!;
+    expect(done.status).toBe("failed");
+    expect(Number(done.failed_at)).toBe(NOW + 5_000);
+    expect(Number(done.failed_at)).not.toBe(NOW);
   });
 
   it("markDelivered 未更新列時 out.delivered 不計入", async () => {

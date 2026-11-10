@@ -260,7 +260,7 @@ async function deliverClaimedRow(
     const marked = await db.tx((q) => markDelivered(q, row, clock()));
     if (marked === "delivered") out.delivered += 1;
   } catch (err) {
-    const result = await db.tx((q) => markFailure(q, row, now, errorClassOf(err), log));
+    const result = await db.tx((q) => markFailure(q, row, clock(), errorClassOf(err), log));
     if (result === "failed") out.failed += 1;
     else if (result === "retried") out.retried += 1;
   }
