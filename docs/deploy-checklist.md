@@ -4,7 +4,7 @@
 
 ## R9
 
-**啟動時已用 CONCURRENTLY 建立 `flow_events_group_ms`**：`ensureFlowSchema` 會自動 `CREATE INDEX CONCURRENTLY`（`statement_timeout` 預設 10 分鐘，可用環境變數 `SD_FLOW_INDEX_TIMEOUT_MS`（毫秒、正整數）覆寫；無效值在啟動時拋錯）。一般不必再手動建索引。
+**啟動時已用 CONCURRENTLY 建立 `flow_events_group_ms`**：`ensureFlowSchema` 會自動 `CREATE INDEX CONCURRENTLY`（`statement_timeout` 預設 10 分鐘，可用環境變數 `SD_FLOW_INDEX_TIMEOUT_MS`（毫秒、正整數，上限 2147483647）覆寫；無效值或超過上限在啟動時拋錯）。一般不必再手動建索引。
 
 若啟動失敗或逾時：檢查是否留下 INVALID 索引，先 `DROP INDEX CONCURRENTLY flow_events_group_ms`（不得在交易內），再重試或再啟動一次。
 
@@ -32,13 +32,13 @@ SELECT count(*) AS total, count(*) FILTER (WHERE ts_ms IS NULL) AS null_ts FROM 
 
 ## R-B（已解決）：啟動遷移不再以 ACCESS EXCLUSIVE 鎖住整段回填
 
-**已合入**：欄位已存在則跳過 ALTER；DDL 短交易設 `lock_timeout` 5s（逾時即失敗）；先以 `CREATE INDEX CONCURRENTLY` 建立 `flow_events_group_ms`（`statement_timeout` 預設 10min，可用 `SD_FLOW_INDEX_TIMEOUT_MS` 覆寫；若有 INVALID 索引會先 `DROP INDEX CONCURRENTLY`），再 `DROP INDEX CONCURRENTLY` 舊 `flow_events_group`；回填分批且毒列不重寫。回填期間其他實例的 INSERT 與判定 SELECT 只碰到列鎖。多實例同時啟動時，`try_lock` 輪詢等待 `SD_FLOW_SCHEMA_LOCK_WAIT_MS`（預設 30 分鐘，逾時即失敗）；等待期間每 30 秒 `log.warn` 一次，物件只含 `waited_ms`。判定對超過 10 分鐘 lag 的待回填列計 `{stale_pending}` 並放行 cursor（見 R15）。
+**已合入**：欄位已存在則跳過 ALTER；DDL 短交易設 `lock_timeout` 5s（逾時即失敗）；先以 `CREATE INDEX CONCURRENTLY` 建立 `flow_events_group_ms`（`statement_timeout` 預設 10min，可用 `SD_FLOW_INDEX_TIMEOUT_MS` 覆寫（上限 2147483647；超過或無效值在啟動時拋錯）；若有 INVALID 索引會先 `DROP INDEX CONCURRENTLY`），再 `DROP INDEX CONCURRENTLY` 舊 `flow_events_group`；回填分批且毒列不重寫。回填期間其他實例的 INSERT 與判定 SELECT 只碰到列鎖。多實例同時啟動時，`try_lock` 輪詢等待 `SD_FLOW_SCHEMA_LOCK_WAIT_MS`（預設 30 分鐘，逾時即失敗）；等待期間每 30 秒 `log.warn` 一次，物件只含 `waited_ms`。判定對超過 10 分鐘 lag 的待回填列計 `{stale_pending}` 並放行 cursor（見 R15）。
 
 **首次升級啟動較久**：回填在 `ensureFlowSchema` 內跑完，本實例才 `listen`，會阻擋本實例啟動（要等回填結束才接流量）。後續啟動通常只剩毒列，會很快。
 
 ## R-C：首次升級的鎖、表大小與舊 infinity 列
 
-(a) **舊索引 `flow_events_group` 啟動時在新建 `flow_events_group_ms` 之後，才用 `DROP INDEX CONCURRENTLY` 移除**（`statement_timeout` 預設 10 分鐘，與建新索引相同，可用 `SD_FLOW_INDEX_TIMEOUT_MS` 覆寫）。一般不必再手動刪。若失敗或逾時，再執行 `DROP INDEX CONCURRENTLY IF EXISTS flow_events_group`（不得在交易內）並重試。
+(a) **舊索引 `flow_events_group` 啟動時在新建 `flow_events_group_ms` 之後，才用 `DROP INDEX CONCURRENTLY` 移除**（`statement_timeout` 預設 10 分鐘，與建新索引相同，可用 `SD_FLOW_INDEX_TIMEOUT_MS` 覆寫，上限 2147483647；超過或無效值在啟動時拋錯）。一般不必再手動刪。若失敗或逾時，再執行 `DROP INDEX CONCURRENTLY IF EXISTS flow_events_group`（不得在交易內）並重試。
 
 (b) **首次回填會重寫整張表**：每一列都更新一次 `ts_ms`。預期表大小約翻倍（直到 VACUUM 回收），並產生大量 WAL。部署前確認磁碟與複寫／備份的 WAL 空間足夠。
 
