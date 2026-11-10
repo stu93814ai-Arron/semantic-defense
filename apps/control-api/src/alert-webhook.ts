@@ -132,7 +132,7 @@ function postPinned(cfg: WebhookConfig, body: string, header: string, pin: { add
   return new Promise<void>((resolve, reject) => {
     const fail = (e: unknown) => reject(e);
     const req = https.request({
-      host: pin.address,
+      host: cfg.hrefHost,
       port: cfg.port,
       path: cfg.path,
       method: "POST",
@@ -142,11 +142,12 @@ function postPinned(cfg: WebhookConfig, body: string, header: string, pin: { add
       agent,
       timeout: remain,
       lookup: ((_h, opts, cb) => {
+        const all = typeof opts === "object" && opts !== null && "all" in opts && Boolean((opts as { all?: boolean }).all);
         const done = typeof opts === "function" ? opts : cb;
-        done(null, pin.address, pin.family);
+        if (all) (done as (e: null, a: Array<{ address: string; family: 4 | 6 }>) => void)(null, [pin]);
+        else (done as (e: null, a: string, f: 4 | 6) => void)(null, pin.address, pin.family);
       }) as https.RequestOptions["lookup"],
       headers: {
-        host: cfg.hrefHost,
         "content-type": "application/json",
         "content-length": Buffer.byteLength(body),
         "x-sd-alert-signature": header,

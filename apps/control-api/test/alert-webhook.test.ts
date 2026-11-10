@@ -1,6 +1,8 @@
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { createHmac } from "node:crypto";
 import { createServer } from "node:http";
+import https from "node:https";
+import net from "node:net";
 import { AlertSendError, type OutboxRow } from "../src/alert-outbox.js";
 import { parseWebhookConfig, sendWebhook, type WebhookHooks } from "../src/alert-webhook.js";
 import { makeSelfSigned, listenTls } from "./helpers/test-tls.js";
@@ -117,5 +119,53 @@ describe("sendWebhook（本機 TLS fake server）", () => {
       parseWebhookConfig({ SD_ALERT_WEBHOOK_URL: "https://10.0.0.1/hook", SD_ALERT_WEBHOOK_HMAC_SECRET: SECRET })!,
       r, { lookup: lookup("10.0.0.1"), ca: tls.ca },
     )).rejects.toMatchObject({ errorClass: "webhook_ssrf" });
+  });
+
+});
+
+
+describe("sendWebhook 釘住連線與 Host（本機 127.0.0.1／127.0.0.2）", () => {
+  const tls = makeSelfSigned(CN);
+  const closes: Array<() => Promise<void> | void> = [];
+  afterEach(async () => { while (closes.length) await closes.pop()!(); });
+  afterAll(() => { tls.dispose(); });
+
+  it("hooks lookup 先釘住 Y、其後重綁到 X 時，連線只到釘住的位址，且 Host 由 host 選項設為原主機名", async () => {
+    const pinAddr = "127.0.0.1";
+    const dnsAddr = "127.0.0.2";
+    const seen: string[] = [];
+    let pinHits = 0;
+    const s = await listenTls(tls, (req, res) => {
+      pinHits += 1;
+      seen.push(String(req.headers.host));
+      res.writeHead(204).end();
+    }, pinAddr);
+    closes.push(s.close);
+
+    let dnsHits = 0;
+    const decoy = net.createServer((sock) => { dnsHits += 1; sock.end(); });
+    await new Promise<void>((ok) => { decoy.listen(s.port, dnsAddr, ok); });
+    closes.push(() => new Promise((ok) => decoy.close(() => ok())));
+
+    let calls = 0;
+    const rebind = async () => {
+      calls += 1;
+      return [{ address: calls === 1 ? pinAddr : dnsAddr, family: 4 as const }];
+    };
+    const spy = vi.spyOn(https, "request");
+    let opts: https.RequestOptions | undefined;
+    try {
+      await sendWebhook(cfg(s.port), row(), { ca: tls.ca, lookup: rebind });
+    } finally {
+      opts = spy.mock.calls[0]?.[0] as https.RequestOptions | undefined;
+      spy.mockRestore();
+    }
+    expect(opts?.host).toBe(CN);
+    expect(opts?.servername).toBe(CN);
+    expect(JSON.stringify(opts?.headers ?? {})).not.toMatch(/"host":/i);
+    expect(pinHits).toBe(1);
+    expect(dnsHits).toBe(0);
+    expect(seen[0]).toBe(`${CN}:${s.port}`);
+    expect(JSON.stringify(seen)).not.toMatch(/127\.0\.0\./);
   });
 });
