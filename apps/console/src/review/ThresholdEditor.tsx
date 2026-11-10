@@ -8,7 +8,7 @@ export type ThresholdSaveResult =
 
 type Props = {
   value: Thresholds;
-  onSave: (next: Thresholds) => ThresholdSaveResult;
+  onSave: (next: Thresholds) => ThresholdSaveResult | Promise<ThresholdSaveResult>;
 };
 
 /**
@@ -27,7 +27,7 @@ export function ThresholdEditor({ value, onSave }: Props) {
     setAutoStr(String(value.auto));
   }, [value.case, value.auto]);
 
-  function onSubmit(e: FormEvent) {
+  async function onSubmit(e: FormEvent) {
     e.preventDefault();
     const next = {
       case: Number(caseStr),
@@ -39,7 +39,7 @@ export function ThresholdEditor({ value, onSave }: Props) {
       setError(v.message);
       return;
     }
-    const r = onSave(v.value);
+    const r = await onSave(v.value);
     if (!r.ok) {
       setNotice(null);
       setError(r.message);

@@ -1,13 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useAuth } from "../auth";
-import {
-  getThresholds,
-  isBackendUnreachable,
-  isPendingExpired,
-  listPending,
-  reviewApprove,
-  reviewReject,
-} from "../review/demoStore";
+import { isPendingExpired } from "../review/demoStore";
+import { formatPendingHits } from "../review/pendingHits";
+import { reviewSource } from "../review/reviewSource";
+import { DEFAULT_THRESHOLDS } from "../review/thresholds";
 import { ThresholdReadonly } from "../review/ThresholdReadonly";
 import {
   REJECT_REASONS,
@@ -37,6 +33,7 @@ function PendingRow(props: {
       <p>
         {item.ip}（信心 {item.confidence}）
       </p>
+      <p data-testid={`hits-${item.case_id}`}>{formatPendingHits(item)}</p>
       {expired ? (
         <p data-testid={`expired-${item.case_id}`} role="status">
           already_expired：此項目已到期
@@ -83,39 +80,46 @@ export function BlacklistReviewPage() {
   const { user } = useAuth();
   const [tick, setTick] = useState(0);
   const [message, setMessage] = useState<string | null>(null);
-  const [reasons, setReasons] = useState<Map<string, RejectReason>>(
-    () => new Map(),
-  );
-  void tick;
-
-  const unreachable = isBackendUnreachable();
-  const items = listPending();
+  const [items, setItems] = useState<PendingCandidate[]>([]);
+  const [thresholds, setThresholds] = useState(DEFAULT_THRESHOLDS);
+  const [reasons, setReasons] = useState<Map<string, RejectReason>>(() => new Map());
+  const unreachable = reviewSource.isUnreachable();
   const now = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const [pending, th] = await Promise.all([
+        reviewSource.listPending(),
+        reviewSource.getThresholds(),
+      ]);
+      if (cancelled) return;
+      setItems(pending);
+      if (th.ok) setThresholds(th.value);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [tick]);
 
   function refresh() {
     setTick((n) => n + 1);
   }
 
-  function onApprove(caseId: string) {
+  async function onApprove(caseId: string) {
     if (!user) return;
-    const r = reviewApprove(caseId, user.username);
+    const r = await reviewSource.approve(caseId, user.username);
     setMessage(r.ok ? "已核准" : r.message);
     refresh();
   }
 
-  function onReject(caseId: string) {
+  async function onReject(caseId: string) {
     if (!user) return;
     const reason = reasonFor(reasons, caseId);
-    const r = reviewReject(caseId, user.username, reason);
+    const r = await reviewSource.reject(caseId, user.username, reason);
     setMessage(r.ok ? `已退回（${reason}）` : r.message);
     refresh();
   }
-
-  function onReason(caseId: string, reason: RejectReason) {
-    setReasons((prev) => new Map(prev).set(caseId, reason));
-  }
-
-  const thresholds = getThresholds();
 
   return (
     <main>
@@ -136,21 +140,44 @@ export function BlacklistReviewPage() {
           <p>尚無待審黑名單</p>
         </div>
       ) : null}
-      {!unreachable && items.length > 0 ? (
-        <ul data-testid="blacklist-pending-list">
-          {items.map((item) => (
-            <PendingRow
-              key={item.case_id}
-              item={item}
-              now={now}
-              reason={reasonFor(reasons, item.case_id)}
-              onReason={onReason}
-              onApprove={onApprove}
-              onReject={onReject}
-            />
-          ))}
-        </ul>
-      ) : null}
+      <PendingList
+        items={items}
+        hidden={unreachable}
+        now={now}
+        reasons={reasons}
+        onReason={(caseId, reason) =>
+          setReasons((prev) => new Map(prev).set(caseId, reason))
+        }
+        onApprove={(id) => void onApprove(id)}
+        onReject={(id) => void onReject(id)}
+      />
     </main>
+  );
+}
+
+function PendingList(props: {
+  items: PendingCandidate[];
+  hidden: boolean;
+  now: string;
+  reasons: ReadonlyMap<string, RejectReason>;
+  onReason: (caseId: string, reason: RejectReason) => void;
+  onApprove: (caseId: string) => void;
+  onReject: (caseId: string) => void;
+}) {
+  if (props.hidden || props.items.length === 0) return null;
+  return (
+    <ul data-testid="blacklist-pending-list">
+      {props.items.map((item) => (
+        <PendingRow
+          key={item.case_id}
+          item={item}
+          now={props.now}
+          reason={reasonFor(props.reasons, item.case_id)}
+          onReason={props.onReason}
+          onApprove={props.onApprove}
+          onReject={props.onReject}
+        />
+      ))}
+    </ul>
   );
 }

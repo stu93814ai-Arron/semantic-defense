@@ -1,20 +1,30 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useAuth } from "../auth";
-import { listActive, reviewWithdraw } from "../review/demoStore";
-import type { SourceFilter } from "../review/types";
+import { reviewSource } from "../review/reviewSource";
+import type { ListedEntry, SourceFilter } from "../review/types";
 
 export function BlacklistListedPage() {
   const { user } = useAuth();
   const [filter, setFilter] = useState<SourceFilter>("all");
   const [tick, setTick] = useState(0);
   const [message, setMessage] = useState<string | null>(null);
-  void tick;
-  const items = listActive(filter);
+  const [items, setItems] = useState<ListedEntry[]>([]);
+  const unreachable = reviewSource.isUnreachable();
 
-  function onWithdraw(id: string) {
+  useEffect(() => {
+    let cancelled = false;
+    void reviewSource.listActive(filter).then((rows) => {
+      if (!cancelled) setItems(rows);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [tick, filter]);
+
+  async function onWithdraw(id: string) {
     if (!user) return;
-    const r = reviewWithdraw(id, user.username);
-    setMessage(r.ok ? "已撤回" : r.message);
+    const r = await reviewSource.withdraw(id, user.username);
+    setMessage(r.ok ? "已撤回" : (r.message ?? "撤回失敗"));
     setTick((n) => n + 1);
   }
 
@@ -36,11 +46,17 @@ export function BlacklistListedPage() {
         ))}
       </div>
       {message ? <p role="status">{message}</p> : null}
-      {items.length === 0 ? (
+      {unreachable ? (
+        <div data-testid="backend-unreachable" className="card" role="alert">
+          <p>後端無法連線，請稍後再試</p>
+        </div>
+      ) : null}
+      {!unreachable && items.length === 0 ? (
         <div data-testid="empty-state" className="card">
           <p>尚無已上榜黑名單</p>
         </div>
-      ) : (
+      ) : null}
+      {!unreachable && items.length > 0 ? (
         <ul data-testid="blacklist-listed">
           {items.map((item) => (
             <li key={item.entry_id} className="card">
@@ -51,14 +67,14 @@ export function BlacklistListedPage() {
                 type="button"
                 className="btn btn-primary"
                 data-testid={`withdraw-${item.entry_id}`}
-                onClick={() => onWithdraw(item.entry_id)}
+                onClick={() => void onWithdraw(item.entry_id)}
               >
                 撤回
               </button>
             </li>
           ))}
         </ul>
-      )}
+      ) : null}
     </main>
   );
 }

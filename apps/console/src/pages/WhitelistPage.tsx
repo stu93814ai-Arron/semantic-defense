@@ -1,11 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useAuth } from "../auth";
-import {
-  listAllowlist,
-  reviewAddAllowlist,
-  reviewRemoveAllowlist,
-  reviewUpdateAllowlist,
-} from "../review/demoStore";
+import { reviewSource } from "../review/reviewSource";
 import type { AllowlistItem } from "../review/types";
 import { WhitelistThresholdSection } from "../review/WhitelistThresholdSection";
 
@@ -15,19 +10,31 @@ export function WhitelistPage() {
   const [reason, setReason] = useState("");
   const [tick, setTick] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  void tick;
-  const items = listAllowlist();
+  const [items, setItems] = useState<AllowlistItem[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void reviewSource.listWhitelist().then((rows) => {
+      if (!cancelled) setItems(rows);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [tick]);
 
   function refresh() {
     setTick((n) => n + 1);
   }
 
-  function onSubmit(e: FormEvent) {
+  async function onSubmit(e: FormEvent) {
     e.preventDefault();
     if (!user) return;
-    const r = reviewAddAllowlist({ cidr, reason }, user.username);
+    const r = await reviewSource.createWhitelist(
+      { cidr, reason, expires_at: null },
+      user.username,
+    );
     if (!r.ok) {
-      setError(r.message);
+      setError(r.message ?? "新增失敗");
       return;
     }
     setError(null);
@@ -49,7 +56,7 @@ export function WhitelistPage() {
         error={error}
         onCidr={setCidr}
         onReason={setReason}
-        onSubmit={onSubmit}
+        onSubmit={(e) => void onSubmit(e)}
       />
       <AllowlistList
         items={items}
@@ -134,25 +141,25 @@ function AllowlistRow(props: {
     setReason(item.reason);
   }, [item.reason]);
 
-  function onUpdate(e: FormEvent) {
+  async function onUpdate(e: FormEvent) {
     e.preventDefault();
     if (!actorId) return;
-    const r = reviewUpdateAllowlist(
+    const r = await reviewSource.updateWhitelist(
       item.entry_id,
       { reason, expires_at: item.expires_at },
       actorId,
     );
     if (!r.ok) {
-      setError(r.message);
+      setError(r.message ?? "更新失敗");
       return;
     }
     setError(null);
     onChanged();
   }
 
-  function onRemove() {
+  async function onRemove() {
     if (!actorId) return;
-    reviewRemoveAllowlist(item.entry_id, actorId);
+    await reviewSource.deleteWhitelist(item.entry_id, actorId);
     onChanged();
   }
 
@@ -181,7 +188,7 @@ function AllowlistRow(props: {
           type="button"
           className="btn"
           data-testid={`whitelist-remove-${item.entry_id}`}
-          onClick={onRemove}
+          onClick={() => void onRemove()}
         >
           刪除
         </button>
