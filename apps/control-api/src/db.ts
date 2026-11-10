@@ -1,4 +1,5 @@
 import pg from "pg";
+import { CRITICAL_ALLOWLIST_ACTOR, CRITICAL_ALLOWLIST_REASON, parseCriticalAllowlist } from "./critical-allowlist.js";
 
 /** 可換驅動的精簡查詢介面；生產與測試皆走 Postgres（via databaseUrl／DATABASE_URL）。 */
 export type Db = {
@@ -60,6 +61,8 @@ const SCHEMA_STATEMENTS = [
   created_at BIGINT NOT NULL,
   expires_at BIGINT NULL CHECK (expires_at IS NULL OR expires_at > created_at)
 )`,
+  // 安裝種子：同一 CIDR 只允許一筆 created_by=system:install（供 ON CONFLICT DO NOTHING）。
+  "CREATE UNIQUE INDEX IF NOT EXISTS allowlist_install_cidr ON allowlist_entries (cidr) WHERE created_by = 'system:install'",
   `CREATE TABLE IF NOT EXISTS blocklist_entries (
   entry_id UUID PRIMARY KEY,
   ip TEXT NOT NULL,
@@ -192,12 +195,26 @@ export async function runTx<T>(pool: TxPool, fn: (q: Queryable) => Promise<T>): 
   }
 }
 
+async function seedCriticalAllowlist(client: pg.PoolClient): Promise<void> {
+  const cidrs = parseCriticalAllowlist(process.env.SD_CRITICAL_ALLOWLIST);
+  const at = Date.now();
+  for (const cidr of cidrs) {
+    await client.query(
+      `INSERT INTO allowlist_entries (entry_id, cidr, reason, created_by, created_at, expires_at)
+       VALUES (gen_random_uuid(), $1, $2, $3, $4, NULL)
+       ON CONFLICT (cidr) WHERE created_by = 'system:install' DO NOTHING`,
+      [cidr, CRITICAL_ALLOWLIST_REASON, CRITICAL_ALLOWLIST_ACTOR, at],
+    );
+  }
+}
+
 async function migrate(client: pg.PoolClient): Promise<void> {
   await client.query("SELECT pg_advisory_lock($1)", [SCHEMA_LOCK]);
   try {
     for (const sql of SCHEMA_STATEMENTS) {
       await client.query(sql);
     }
+    await seedCriticalAllowlist(client);
   } finally {
     await client.query("SELECT pg_advisory_unlock($1)", [SCHEMA_LOCK]);
   }
@@ -209,8 +226,11 @@ export async function openDb(databaseUrl: string): Promise<Db> {
   const client = await pool.connect();
   try {
     await migrate(client);
-  } finally {
+  } catch (err) {
     client.release();
+    await pool.end();
+    throw err;
   }
+  client.release();
   return asDb(pool);
 }

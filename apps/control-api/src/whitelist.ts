@@ -6,6 +6,7 @@ import {
 import type { Db } from "./db.js";
 import { writeAudit } from "./audit.js";
 import type { Role } from "./auth.js";
+import { CRITICAL_ALLOWLIST_ACTOR } from "./critical-allowlist.js";
 
 /**
  * ③a 白名單 CRUD（MONITOR §3 白名單項目、§7a：僅 platform_admin）。
@@ -59,6 +60,7 @@ export function registerWhitelistRoutes(app: FastifyInstance, db: Db, now: () =>
     const out = await db.tx(async (q) => {
       const cur = (await q.query<Row>(`SELECT ${COLS} FROM allowlist_entries WHERE entry_id = $1 FOR UPDATE`, [id])).rows[0];
       if (!cur) return 404 as const;
+      if (cur.created_by === CRITICAL_ALLOWLIST_ACTOR && expiresMs(p.data.expires_at) !== null) return 409 as const;
       if (!validExpiry(Number(cur.created_at), expiresMs(p.data.expires_at))) return 400 as const;
       const r = await q.query<Row>(
         `UPDATE allowlist_entries SET reason = $2, expires_at = $3 WHERE entry_id = $1 RETURNING ${COLS}`,
@@ -71,19 +73,24 @@ export function registerWhitelistRoutes(app: FastifyInstance, db: Db, now: () =>
     });
     if (out === 404) return reply.code(404).send({ error: "查無白名單項目" });
     if (out === 400) return reply.code(400).send({ error: "請求格式錯誤" });
+    if (out === 409) return reply.code(409).send({ error: "安裝種子不可刪除或設定到期" });
     return out;
   });
 
   app.delete<Params>(P.whitelistEntry, { config: { roles: ADMIN } }, async (req, reply) => {
     const id = req.params.entryId;
     if (!UUID_RE.test(id)) return reply.code(404).send({ error: "查無白名單項目" });
-    const ok = await db.tx(async (q) => {
-      const r = await q.query<Row>(`DELETE FROM allowlist_entries WHERE entry_id = $1 RETURNING ${COLS}`, [id]);
-      if (!r.rows[0]) return false;
+    const out = await db.tx(async (q) => {
+      const cur = (await q.query<Row>(`SELECT ${COLS} FROM allowlist_entries WHERE entry_id = $1 FOR UPDATE`, [id])).rows[0];
+      if (!cur) return 404 as const;
+      if (cur.created_by === CRITICAL_ALLOWLIST_ACTOR) return 409 as const;
+      await q.query(`DELETE FROM allowlist_entries WHERE entry_id = $1`, [id]);
       await writeAudit(q, { action: "whitelist.delete", actor: req.user!.username, sensor_id: null, at: now(),
-        detail: { ...toEntry(r.rows[0]) } });
-      return true;
+        detail: { ...toEntry(cur) } });
+      return 204 as const;
     });
-    return ok ? reply.code(204).send() : reply.code(404).send({ error: "查無白名單項目" });
+    if (out === 404) return reply.code(404).send({ error: "查無白名單項目" });
+    if (out === 409) return reply.code(409).send({ error: "安裝種子不可刪除或設定到期" });
+    return reply.code(204).send();
   });
 }
