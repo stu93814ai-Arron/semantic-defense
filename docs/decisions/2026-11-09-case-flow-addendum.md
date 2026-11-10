@@ -20,3 +20,6 @@ This is the PM's ruling and was not confirmed by the user.
 
 ## 23:21 User decision (relayed by the PM)
 - R-D is accepted: when legacy rows are backfilled, a ts with 7 or more fractional digits may round to a value 1ms off from JS. This affects only legacy data, never new writes.
+
+## 2026-11-11 A 組領航員裁示（未經使用者確認）
+The eight implementation rulings for R10 (fields, exact prefixes, 400 body, `flow_rejections.reason`, check order, `hostCidr` only, remaining B5, `isReservedForIngest`) are recorded in `2026-11-11-r10-reserved.md`. They fall within the §21:09 R10 ruling above.
