@@ -130,7 +130,15 @@ export function createWebhookAgent(ca?: string): https.Agent {
 function postPinned(cfg: WebhookConfig, body: string, header: string, pin: { address: string; family: 4 | 6 }, hooks: WebhookHooks, remain: number): Promise<void> {
   const agent = createWebhookAgent(hooks.ca);
   return new Promise<void>((resolve, reject) => {
-    const fail = (e: unknown) => reject(e);
+    let settled = false;
+    const wall: { id?: ReturnType<typeof setTimeout> } = {};
+    const finish = (err?: unknown) => {
+      if (settled) return;
+      settled = true;
+      if (wall.id !== undefined) clearTimeout(wall.id);
+      if (err !== undefined) reject(err);
+      else resolve();
+    };
     const req = https.request({
       host: cfg.hrefHost,
       port: cfg.port,
@@ -152,9 +160,13 @@ function postPinned(cfg: WebhookConfig, body: string, header: string, pin: { add
         "content-length": Buffer.byteLength(body),
         "x-sd-alert-signature": header,
       },
-    }, (res) => readResponse(res, () => resolve(), fail));
-    req.setTimeout(remain, () => { req.destroy(); fail(new AlertSendError("webhook_timeout")); });
-    req.on("error", fail);
+    }, (res) => readResponse(res, () => finish(), finish));
+    wall.id = setTimeout(() => {
+      finish(new AlertSendError("webhook_timeout"));
+      req.destroy();
+    }, remain);
+    req.setTimeout(remain, () => { req.destroy(); finish(new AlertSendError("webhook_timeout")); });
+    req.on("error", finish);
     req.end(body);
   }).finally(() => { if (agent !== https.globalAgent) agent.destroy(); });
 }

@@ -169,3 +169,41 @@ describe("sendWebhook 釘住連線與 Host（本機 127.0.0.1／127.0.0.2）", (
     expect(JSON.stringify(seen)).not.toMatch(/127\.0\.0\./);
   });
 });
+
+describe("sendWebhook 整體期限（慢速 drip）", () => {
+  const tls = makeSelfSigned(CN);
+  const closes: Array<() => Promise<void>> = [];
+  afterEach(async () => { while (closes.length) await closes.pop()!(); });
+  afterAll(() => { tls.dispose(); });
+
+  async function drip(intervalMs: number, bytes: number) {
+    const s = await listenTls(tls, (req, res) => {
+      res.writeHead(200);
+      let n = 0;
+      const tick = setInterval(() => {
+        n += 1;
+        res.write("x");
+        if (n >= bytes) { clearInterval(tick); res.end(); }
+      }, intervalMs);
+      req.on("close", () => clearInterval(tick));
+    });
+    closes.push(s.close);
+    return s;
+  }
+
+  it("真實 5s 期限：先回 200 再每秒 1 byte，須在 5.5s 內以 webhook_timeout 結束", async () => {
+    const s = await drip(1_000, 9);
+    const t0 = Date.now();
+    const err = await sendWebhook(cfg(s.port), row(), { ca: tls.ca, lookup: lookup() }).then(() => undefined, (e: unknown) => e);
+    expect(Date.now() - t0).toBeLessThanOrEqual(5_500);
+    expect(err).toMatchObject({ errorClass: "webhook_timeout" });
+  }, 15_000);
+
+  it("可注入較短期限：持續 drip 重置閒置逾時，仍須在期限內以 webhook_timeout 結束", async () => {
+    const s = await drip(50, 30);
+    const t0 = Date.now();
+    const err = await sendWebhook(cfg(s.port), row(), { ca: tls.ca, lookup: lookup(), timeoutMs: 300 }).then(() => undefined, (e: unknown) => e);
+    expect(Date.now() - t0).toBeLessThanOrEqual(800);
+    expect(err).toMatchObject({ errorClass: "webhook_timeout" });
+  }, 8_000);
+});
