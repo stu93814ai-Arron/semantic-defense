@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { AlertSendError, deliverDueAlerts, enqueueAlerts } from "../src/alert-outbox.js";
-import { ALERT_MAX_ATTEMPTS } from "../src/alert-outbox.js";
+import { AlertSendError, ALERT_FAILED_RETENTION_MS, ALERT_MAX_ATTEMPTS, deliverDueAlerts, enqueueAlerts, purgeAlertOutbox } from "../src/alert-outbox.js";
 import { buildApp, seedPhase2Fixtures, type ControlApi } from "./helpers/app.js";
 import { requireLoginCookie } from "./helpers/boot-fixtures.js";
 import { cookieHeader } from "./helpers/session.js";
@@ -60,5 +59,38 @@ describe("GET /api/health 告警計數", () => {
     const got = await health();
     expect(got.alerts.last_failed_at).toBe(failedAt);
     expect(got.alerts.last_failed_at).not.toBe(bumped);
+  });
+
+  it("purge 寫一筆 count-only 的 alert.purged，health 讀近 24 小時且重啟後仍在", async () => {
+    await boot();
+    const day = 24 * 60 * 60_000;
+    const stale = NOW - ALERT_FAILED_RETENTION_MS - 1;
+    await app.db.query(
+      `INSERT INTO alert_outbox (channel, kind, payload, attempts, next_attempt_at, status, error_class, created_at, delivered_at)
+       VALUES ('webhook','auto_list','{"kind":"auto_list","delivery_id":"1"}',8,$1,'failed','x',$2,NULL),
+              ('email','auto_list','{"kind":"auto_list","delivery_id":"2"}',1,$1,'delivered',NULL,$3,$3)`,
+      [NOW, stale, stale],
+    );
+    await app.db.query(
+      "INSERT INTO audit_events (action, actor, sensor_id, at, detail) VALUES ('alert.purged','system:auto',NULL,$1,'{\"count\":99}')",
+      [NOW - day - 1],
+    );
+    expect((await health()).alerts.purged).toBe(0);
+    expect(await purgeAlertOutbox(app.db, NOW)).toBe(2);
+    const mid = await health();
+    expect(mid.alerts.purged).toBe(2);
+    const audits = (await app.db.query<{ action: string; detail: Record<string, unknown> }>(
+      "SELECT action, detail FROM audit_events WHERE action = 'alert.purged' AND at >= $1",
+      [NOW],
+    )).rows;
+    expect(audits).toHaveLength(1);
+    expect(audits[0]!.detail).toEqual({ count: 2 });
+    expect(Object.keys(audits[0]!.detail).sort()).toEqual(["count"]);
+    expect(JSON.stringify(audits)).not.toMatch(/https?:|password|64\.0\./i);
+    const url = requireDatabaseUrl();
+    await app.close();
+    app = await buildApp({ idleTimeoutMs: 60_000, databaseUrl: url, now: () => NOW });
+    const after = await health();
+    expect(after.alerts.purged).toBe(2);
   });
 });

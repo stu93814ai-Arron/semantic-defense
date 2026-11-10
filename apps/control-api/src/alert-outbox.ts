@@ -98,6 +98,12 @@ export async function alertHealthCounts(db: Queryable, now: number): Promise<Ale
        FROM alert_outbox`,
     [now - 3_600_000],
   );
+  const purged = await db.query<{ n: string }>(
+    `SELECT coalesce(sum((detail->>'count')::int), 0) AS n
+       FROM audit_events
+      WHERE action = 'alert.purged' AND at > $1`,
+    [now - 24 * 60 * 60_000],
+  );
   const row = r.rows[0]!;
   const pending = Number(row.pending);
   const failed = Number(row.failed);
@@ -105,6 +111,7 @@ export async function alertHealthCounts(db: Queryable, now: number): Promise<Ale
     pending, failed, delivered_1h: Number(row.delivered_1h),
     undelivered: pending + failed,
     last_failed_at: row.last_failed_at != null ? Number(row.last_failed_at) : null,
+    purged: Number(purged.rows[0]!.n),
   };
 }
 
@@ -181,7 +188,13 @@ export async function purgeAlertOutbox(
     );
     n += Number(cap.rows[0]!.n);
   }
-  if (n > 0) log?.error({ purged: n }, "alert outbox purged");
+  if (n > 0) {
+    await writeAudit(db, {
+      action: "alert.purged", actor: "system:auto", sensor_id: null, at: now,
+      detail: { count: n },
+    });
+    log?.error({ purged: n }, "alert outbox purged");
+  }
   return n;
 }
 
