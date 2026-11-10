@@ -11,7 +11,7 @@ export type SyslogConfig = {
   host: string; port: number; transport: SyslogTransport;
   hostname: string; appName: string; allow: import("node:net").BlockList;
 };
-export type SyslogHooks = { ca?: string; lookup?: LookupFn; timeoutMs?: number };
+export type SyslogHooks = { ca?: string; lookup?: LookupFn; timeoutMs?: number; now?: () => number };
 
 function throwInvalid(flag: string): never {
   throw new Error(`${flag} is invalid`);
@@ -55,13 +55,14 @@ export function stripSyslogMsg(value: string): string {
   return value.replace(/[\r\n\0]/g, "");
 }
 
-/** RFC 5424 訊息（不含 octet-counting 前綴）。TIMESTAMP／PROCID／MSGID 用 NILVALUE。 */
-export function formatSyslog5424(cfg: SyslogConfig, row: OutboxRow): Buffer {
+/** RFC 5424 訊息（不含 octet-counting 前綴）。TIMESTAMP 為 RFC 3339 UTC；PROCID／MSGID 為 NILVALUE。 */
+export function formatSyslog5424(cfg: SyslogConfig, row: OutboxRow, now: number = Date.now()): Buffer {
+  const ts = new Date(now).toISOString();
   const delivery = escapeSdParam(String(row.payload.delivery_id ?? row.id));
   const kind = escapeSdParam(row.kind);
   const msg = stripSyslogMsg(JSON.stringify(row.payload));
   const sd = `[alert delivery_id="${delivery}" kind="${kind}"]`;
-  return Buffer.from(`<133>1 - ${cfg.hostname} ${cfg.appName} - - ${sd} ${msg}`, "utf8");
+  return Buffer.from(`<133>1 ${ts} ${cfg.hostname} ${cfg.appName} - - ${sd} ${msg}`, "utf8");
 }
 
 export function octetFrame(msg: Buffer): Buffer {
@@ -114,7 +115,7 @@ async function postSyslog(cfg: SyslogConfig, row: OutboxRow, hooks: SyslogHooks)
   const pin = await pinHost(cfg.host, cfg.allow, hooks.lookup ?? defaultLookup, "ssrf");
   const remain = budget - (Date.now() - started);
   if (remain <= 0) throw new AlertSendError("syslog_timeout");
-  const frame = octetFrame(formatSyslog5424(cfg, row));
+  const frame = octetFrame(formatSyslog5424(cfg, row, hooks.now?.() ?? Date.now()));
   const sock = await connectTcp(pin.address, cfg.port, pin.family, remain);
   const out = cfg.transport === "tls" ? await wrapTls(sock, cfg.host, remain, hooks.ca) : sock;
   await writeAndClose(out, frame, remain);

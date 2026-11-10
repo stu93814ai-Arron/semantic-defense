@@ -46,8 +46,11 @@ describe("RFC 5424 與 octet-counting", () => {
     expect(stripSyslogMsg("x\r\n\0y")).toBe("xy");
     const cfg = parseSyslogConfig(envFor(1))!;
     const r = row({ entry_id: "é你好", delivery_id: 'id]"\\' });
-    const msg = formatSyslog5424(cfg, r);
+    const ts = "2026-11-11T00:00:00.000Z";
+    const msg = formatSyslog5424(cfg, r, Date.parse(ts));
     const text = msg.toString("utf8");
+    expect(text.startsWith(`<133>1 ${ts} `)).toBe(true);
+    expect(text).toContain(" - semantic-defense - - [alert ");
     expect(text).toContain('delivery_id="id\\]\\"\\\\"');
     expect(text).not.toMatch(/\r|\n|\0/);
     expect(text).toContain("é你好");
@@ -75,7 +78,9 @@ describe("sendSyslog（本機 fake server）", () => {
     const body = got.subarray(sp + 1);
     expect(Number(got.subarray(0, sp).toString())).toBe(body.length);
     expect(body.toString("utf8")).not.toMatch(/\r|\n|\0/);
-    expect(body.toString("utf8")).toContain("<133>1 -");
+    expect(body.toString("utf8")).toMatch(/<133>1 \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z /);
+    expect(body.toString("utf8")).toContain(" - semantic-defense - - [alert ");
+    expect(body.toString("utf8")).not.toMatch(/<133>1 - /);
   });
 
   it("TLS 自簽或主機名不符為 tls；錯誤不含回應原文", async () => {
