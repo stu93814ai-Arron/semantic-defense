@@ -5,6 +5,7 @@ import {
 } from "@semantic-defense/contracts";
 import type { Db } from "./db.js";
 import { writeAudit } from "./audit.js";
+import { revokeContainedBlocks } from "./revoke-contained.js";
 import type { Role } from "./auth.js";
 import { CRITICAL_ALLOWLIST_ACTOR } from "./critical-allowlist.js";
 
@@ -13,6 +14,7 @@ import { CRITICAL_ALLOWLIST_ACTOR } from "./critical-allowlist.js";
  * - 時間以 epoch ms 存；回應轉 RFC3339。entry_id／created_by（username）／created_at 由伺服端填。
  * - expires_at 非 null 時須 > created_at，否則 400。
  * - 每筆寫入與稽核（whitelist.create／update／delete）同一 Db.tx；稽核失敗則不生效。
+ * - 新增時同一交易撤回被該 CIDR 完全包含（ip::inet <<= cidr）且仍生效的黑名單（auto 與 manual），每筆寫 blacklist.revoke。
  */
 const ADMIN: Role[] = ["platform_admin"];
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -46,6 +48,7 @@ export function registerWhitelistRoutes(app: FastifyInstance, db: Db, now: () =>
         [randomUUID(), p.data.cidr, p.data.reason, actor, at, expiresMs(p.data.expires_at)],
       );
       const e = toEntry(r.rows[0]!);
+      await revokeContainedBlocks(q, { cidr: e.cidr, allowlistEntryId: e.entry_id, actor, at });
       await writeAudit(q, { action: "whitelist.create", actor, sensor_id: null, at, detail: { ...e } });
       return e;
     });

@@ -217,7 +217,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<ControlApi> 
   const idleTimeoutMs = opts.idleTimeoutMs ?? 30 * 60_000;
   const rl = opts.loginRateLimit ?? { maxFailures: 5, windowMs: 60_000 };
   const now = opts.now ?? Date.now;
-  const db = await openDb(resolveDatabaseUrl(opts.databaseUrl));
+  const db = await openDb(resolveDatabaseUrl(opts.databaseUrl), { now });
   const limiter = new LoginLimiter(db, rl.maxFailures, rl.windowMs, now);
   const app = Fastify({ trustProxy: opts.trustProxy ?? false, logger: withSafeReqLog(opts.logger) });
   installErrorHandler(app);

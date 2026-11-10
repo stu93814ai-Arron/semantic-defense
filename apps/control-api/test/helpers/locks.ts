@@ -1,5 +1,6 @@
 import pg from "pg";
 import type { Queryable } from "../../src/db.js";
+import { AUTO_LOCK } from "../../src/auto-breaker.js";
 import { requireDatabaseUrl } from "./pg.js";
 
 /**
@@ -26,10 +27,10 @@ export async function holdAllowlistInsert(cidr: string, createdAt: number): Prom
 }
 
 /** 輪詢 pg_locks：有 backend 在等 allowlist_entries 的 ShareLock → 回它的 pid；逾時回 null。 */
-export async function waitShareWaiter(db: Queryable, timeoutMs = 3000): Promise<number | null> {
+export async function waitShareWaiter(db: Queryable, timeoutMs = 3000, mode = "ShareLock"): Promise<number | null> {
   for (const end = Date.now() + timeoutMs; Date.now() < end; await new Promise((r) => setTimeout(r, 20))) {
     const r = await db.query<{ pid: number }>(
-      "SELECT pid FROM pg_locks WHERE relation = 'allowlist_entries'::regclass AND mode = 'ShareLock' AND NOT granted");
+      "SELECT pid FROM pg_locks WHERE relation = 'allowlist_entries'::regclass AND mode = $1 AND NOT granted", [mode]);
     if (r.rows[0]) return r.rows[0].pid;
   }
   return null;
@@ -40,4 +41,14 @@ export async function holdsAdvisory(db: Queryable, pid: number, key: number): Pr
   const r = await db.query("SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND objid = $1 AND objsubid = 1 AND pid = $2 AND granted",
     [key, pid]);
   return r.rows.length > 0;
+}
+
+/** 第二條連線：BEGIN 後先 SHARE 再拿 AUTO_LOCK（模擬判定 tick 持鎖），commit() 才放。 */
+export async function holdShareAndAutoLock(): Promise<{ commit: () => Promise<void> }> {
+  const c = new pg.Client({ connectionString: lockGuardedUrl() });
+  await c.connect();
+  await c.query("BEGIN");
+  await c.query("LOCK TABLE allowlist_entries IN SHARE MODE");
+  await c.query("SELECT pg_advisory_xact_lock($1)", [AUTO_LOCK]);
+  return { commit: async () => { await c.query("COMMIT"); await c.end(); } };
 }

@@ -144,3 +144,95 @@ describe("安裝種子不可改", () => {
     expect(after).toEqual([row]);
   });
 });
+
+
+const BLOCK_CREATED = NOW - 60_000;
+const BLOCK_DAY = 24 * 3600_000;
+
+async function clearLists(): Promise<void> {
+  delete process.env.SD_CRITICAL_ALLOWLIST;
+  const db = await openDb(requireDatabaseUrl());
+  await db.exec("TRUNCATE TABLE allowlist_entries, blocklist_entries, audit_events CASCADE");
+  await db.close();
+}
+
+async function addBlock(ip: string, source: "auto" | "manual"): Promise<string> {
+  delete process.env.SD_CRITICAL_ALLOWLIST;
+  const db = await openDb(requireDatabaseUrl());
+  const id = randomUUID();
+  await db.query(
+    `INSERT INTO blocklist_entries
+      (entry_id, ip, source, confidence, case_id, created_at, expires_at, approved_by, approved_at, revoked_at, ended_at)
+     VALUES ($1,$2,$3,0.95,$4,$5,$6,$7,$5,NULL,NULL)`,
+    [id, ip, source, randomUUID(), BLOCK_CREATED, BLOCK_CREATED + BLOCK_DAY, source === "auto" ? "system:auto" : "admin1"],
+  );
+  await db.close();
+  return id;
+}
+
+const listedBlocks = async () =>
+  (await app!.db.query<{ entry_id: string; ip: string; revoked_at: string | null }>(
+    "SELECT entry_id, ip, revoked_at FROM blocklist_entries ORDER BY ip")).rows;
+const revokeAudits = async () =>
+  (await app!.db.query<{ actor: string; at: string; detail: Record<string, unknown> }>(
+    "SELECT actor, at, detail FROM audit_events WHERE action = 'blacklist.revoke' ORDER BY id")).rows;
+
+describe("安裝種子撤回既有封鎖", () => {
+  it("啟動前已存在的生效封鎖（auto 與 manual）會被撤回，稽核 actor 為 system:install", async () => {
+    await clearLists();
+    const autoId = await addBlock("64.0.113.7/32", "auto");
+    const manId = await addBlock("64.0.113.8/32", "manual");
+    await boot(V4);
+    const seedId = (await seeds())[0]!.entry_id;
+    const rows = await listedBlocks();
+    expect(rows.find((r) => r.entry_id === autoId)?.revoked_at).toBe(String(NOW));
+    expect(rows.find((r) => r.entry_id === manId)?.revoked_at).toBe(String(NOW));
+    const audits = await revokeAudits();
+    expect(audits).toHaveLength(2);
+    expect(audits.every((a) => a.actor === "system:install" && Number(a.at) === NOW)).toBe(true);
+    expect(audits.map((a) => a.detail).sort((x, y) => String(x.ip).localeCompare(String(y.ip)))).toEqual([
+      { entry_id: autoId, ip: "64.0.113.7/32", source: "auto", case_id: expect.any(String), allowlist_entry_id: seedId },
+      { entry_id: manId, ip: "64.0.113.8/32", source: "manual", case_id: expect.any(String), allowlist_entry_id: seedId },
+    ]);
+  });
+
+  it("第二次啟動沒有新的撤回則不寫稽核；其後才新增的封鎖會在再啟動時撤回（沿用既有種子 id）", async () => {
+    await clearLists();
+    const firstId = await addBlock("64.0.113.7/32", "auto");
+    await boot(V4);
+    const seedId = (await seeds())[0]!.entry_id;
+    expect((await revokeAudits()).map((a) => a.detail.entry_id)).toEqual([firstId]);
+    await app!.close();
+    app = undefined;
+    await boot(V4);
+    expect((await revokeAudits()).map((a) => a.detail.entry_id)).toEqual([firstId]);
+    const laterId = randomUUID();
+    await app!.db.query(
+      `INSERT INTO blocklist_entries
+        (entry_id, ip, source, confidence, case_id, created_at, expires_at, approved_by, approved_at, revoked_at, ended_at)
+       VALUES ($1,'64.0.113.9/32','auto',0.95,$2,$3,$4,'system:auto',$3,NULL,NULL)`,
+      [laterId, randomUUID(), BLOCK_CREATED, BLOCK_CREATED + BLOCK_DAY],
+    );
+    await app!.close();
+    app = undefined;
+    await boot(V4);
+    const after = await revokeAudits();
+    expect(after.map((a) => a.detail.entry_id)).toEqual([firstId, laterId]);
+    expect(after[1]).toMatchObject({
+      actor: "system:install", at: String(NOW),
+      detail: { entry_id: laterId, ip: "64.0.113.9/32", source: "auto", allowlist_entry_id: seedId },
+    });
+    expect((await seeds())[0]!.entry_id).toBe(seedId);
+  });
+
+  it("緊鄰 CIDR 外側的位址不會被撤回", async () => {
+    await clearLists();
+    const inside = await addBlock("64.0.113.1/32", "auto");
+    const outside = await addBlock("64.0.113.128/32", "manual");
+    await boot("64.0.113.0/25");
+    const rows = await listedBlocks();
+    expect(rows.find((r) => r.entry_id === inside)?.revoked_at).toBe(String(NOW));
+    expect(rows.find((r) => r.entry_id === outside)?.revoked_at).toBeNull();
+    expect((await revokeAudits()).map((a) => a.detail.entry_id)).toEqual([inside]);
+  });
+});

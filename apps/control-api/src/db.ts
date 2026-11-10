@@ -1,5 +1,6 @@
 import pg from "pg";
 import { CRITICAL_ALLOWLIST_ACTOR, CRITICAL_ALLOWLIST_REASON, parseCriticalAllowlist } from "./critical-allowlist.js";
+import { revokeContainedBlocks } from "./revoke-contained.js";
 
 /** 可換驅動的精簡查詢介面；生產與測試皆走 Postgres（via databaseUrl／DATABASE_URL）。 */
 export type Db = {
@@ -195,37 +196,55 @@ export async function runTx<T>(pool: TxPool, fn: (q: Queryable) => Promise<T>): 
   }
 }
 
-async function seedCriticalAllowlist(client: pg.PoolClient): Promise<void> {
+async function seedCriticalAllowlist(client: pg.PoolClient, now: () => number): Promise<void> {
   const cidrs = parseCriticalAllowlist(process.env.SD_CRITICAL_ALLOWLIST);
-  const at = Date.now();
+  const at = now();
+  const q: Queryable = {
+    query: async <R>(sql: string, params?: unknown[]) => ({ rows: (await client.query(sql, params)).rows as R[] }),
+  };
   for (const cidr of cidrs) {
-    await client.query(
-      `INSERT INTO allowlist_entries (entry_id, cidr, reason, created_by, created_at, expires_at)
-       VALUES (gen_random_uuid(), $1, $2, $3, $4, NULL)
-       ON CONFLICT (cidr) WHERE created_by = 'system:install' DO NOTHING`,
-      [cidr, CRITICAL_ALLOWLIST_REASON, CRITICAL_ALLOWLIST_ACTOR, at],
-    );
+    await client.query("BEGIN");
+    try {
+      const inserted = await client.query<{ entry_id: string }>(
+        `INSERT INTO allowlist_entries (entry_id, cidr, reason, created_by, created_at, expires_at)
+         VALUES (gen_random_uuid(), $1, $2, $3, $4, NULL)
+         ON CONFLICT (cidr) WHERE created_by = 'system:install' DO NOTHING
+         RETURNING entry_id`,
+        [cidr, CRITICAL_ALLOWLIST_REASON, CRITICAL_ALLOWLIST_ACTOR, at],
+      );
+      const entryId = inserted.rows[0]?.entry_id
+        ?? (await client.query<{ entry_id: string }>(
+          "SELECT entry_id FROM allowlist_entries WHERE cidr = $1 AND created_by = $2",
+          [cidr, CRITICAL_ALLOWLIST_ACTOR],
+        )).rows[0]?.entry_id;
+      if (!entryId) throw new Error("critical allowlist seed row missing");
+      await revokeContainedBlocks(q, { cidr, allowlistEntryId: entryId, actor: CRITICAL_ALLOWLIST_ACTOR, at });
+      await client.query("COMMIT");
+    } catch (err) {
+      try { await client.query("ROLLBACK"); } catch { /* 與 asTx 相同：ROLLBACK 失敗仍拋原錯 */ }
+      throw err;
+    }
   }
 }
 
-async function migrate(client: pg.PoolClient): Promise<void> {
+async function migrate(client: pg.PoolClient, now: () => number): Promise<void> {
   await client.query("SELECT pg_advisory_lock($1)", [SCHEMA_LOCK]);
   try {
     for (const sql of SCHEMA_STATEMENTS) {
       await client.query(sql);
     }
-    await seedCriticalAllowlist(client);
+    await seedCriticalAllowlist(client, now);
   } finally {
     await client.query("SELECT pg_advisory_unlock($1)", [SCHEMA_LOCK]);
   }
 }
 
 /** 以連線字串開 Postgres、套用 schema。連線字串僅來自參數／環境，不寫死密鑰。 */
-export async function openDb(databaseUrl: string): Promise<Db> {
+export async function openDb(databaseUrl: string, opts?: { now?: () => number }): Promise<Db> {
   const pool = new pg.Pool({ connectionString: databaseUrl });
   const client = await pool.connect();
   try {
-    await migrate(client);
+    await migrate(client, opts?.now ?? Date.now);
   } catch (err) {
     client.release();
     await pool.end();
