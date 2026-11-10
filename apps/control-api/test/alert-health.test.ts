@@ -42,4 +42,23 @@ describe("GET /api/health 告警計數", () => {
     expect(got.alerts.last_failed_at).toEqual(expect.any(Number));
     expect(JSON.stringify(got)).not.toMatch(/https?:|webhook_timeout|password|64\.0\./i);
   });
+
+  it("last_failed_at 讀 max(failed_at)，不讀 next_attempt_at", async () => {
+    await boot();
+    await app.db.tx((q) => enqueueAlerts(q, { channels: ["webhook"], kind: "auto_list", now: NOW, entryId: "e", caseId: "c" }));
+    const send = async () => { throw new AlertSendError("webhook_timeout"); };
+    let t = NOW;
+    for (let i = 0; i < ALERT_MAX_ATTEMPTS; i++) {
+      await deliverDueAlerts(app.db, t, { webhook: send });
+      const next = (await app.db.query<{ next_attempt_at: string }>("SELECT next_attempt_at FROM alert_outbox")).rows[0];
+      t = next ? Number(next.next_attempt_at) : t + 60_000;
+    }
+    const failedAt = (await health()).alerts.last_failed_at;
+    expect(failedAt).toEqual(expect.any(Number));
+    const bumped = Number(failedAt) + 86_400_000;
+    await app.db.query("UPDATE alert_outbox SET next_attempt_at = $1", [bumped]);
+    const got = await health();
+    expect(got.alerts.last_failed_at).toBe(failedAt);
+    expect(got.alerts.last_failed_at).not.toBe(bumped);
+  });
 });

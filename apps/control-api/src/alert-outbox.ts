@@ -94,7 +94,7 @@ export async function alertHealthCounts(db: Queryable, now: number): Promise<Ale
     `SELECT count(*) FILTER (WHERE status = 'pending') AS pending,
             count(*) FILTER (WHERE status = 'failed') AS failed,
             count(*) FILTER (WHERE status = 'delivered' AND delivered_at > $1) AS delivered_1h,
-            max(next_attempt_at) FILTER (WHERE status = 'failed') AS last_failed_at
+            max(failed_at) FILTER (WHERE status = 'failed') AS last_failed_at
        FROM alert_outbox`,
     [now - 3_600_000],
   );
@@ -138,7 +138,7 @@ async function markFailure(q: Queryable, row: OutboxRow, now: number, errorClass
   const attempts = row.attempts + 1;
   if (attempts >= ALERT_MAX_ATTEMPTS) {
     await q.query(
-      "UPDATE alert_outbox SET status = 'failed', attempts = $2, error_class = $3, next_attempt_at = $4 WHERE id = $1",
+      "UPDATE alert_outbox SET status = 'failed', attempts = $2, error_class = $3, next_attempt_at = $4, failed_at = $4 WHERE id = $1",
       [row.id, attempts, errorClass, now],
     );
     await writeAudit(q, {

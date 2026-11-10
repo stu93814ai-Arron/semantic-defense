@@ -151,9 +151,12 @@ const SCHEMA_STATEMENTS = [
   error_class TEXT NULL,
   created_at BIGINT NOT NULL,
   delivered_at BIGINT NULL,
+  failed_at BIGINT NULL,
   CHECK ((status = 'delivered') = (delivered_at IS NOT NULL))
 )`,
   "CREATE INDEX IF NOT EXISTS alert_outbox_due ON alert_outbox (next_attempt_at, kind) WHERE status = 'pending'",
+  "ALTER TABLE alert_outbox ADD COLUMN IF NOT EXISTS failed_at BIGINT NULL",
+  "UPDATE alert_outbox SET failed_at = next_attempt_at WHERE status = 'failed' AND failed_at IS NULL",
 ];
 
 /** 固定鍵：跨連線序列化 schema 遷移。 */
