@@ -77,3 +77,11 @@ DROP INDEX CONCURRENTLY IF EXISTS flow_events_group;
 ## R-D：小數 ≥7 位時 SQL 與 JS 可能差 1ms（已由使用者接受（2026-11-09 23:21，由 PM 轉達））
 
 ts 的小數秒超過 6 位時，Postgres 解析時會捨入到微秒，JS `Date.parse` 則直接截到毫秒，兩者可能差 1ms。這只影響由 SQL 回填的舊列（新列由 ingest 用 JS 寫入），已由使用者接受（2026-11-09 23:21，由 PM 轉達），不另處理。
+
+## 安裝時關鍵基礎設施白名單（SD_CRITICAL_ALLOWLIST）
+
+上線前須填入 `SD_CRITICAL_ALLOWLIST`（逗號分隔的 CIDR），涵蓋管理平面、EDL 發布端、防火牆管理口與關鍵業務出口。
+
+- 種子列（`created_by = system:install`）不可刪除，也不可設定到期。
+- 若種子列缺失，重啟 control-api 會依當時的設定補回。
+- 從設定移除某個位址後，資料庫中既有的種子列仍保留。
