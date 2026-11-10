@@ -11,6 +11,8 @@ const NON_PUBLIC_V4: ReadonlyArray<readonly [string, number]> = [
 ];
 const NON_PUBLIC_V6: ReadonlyArray<readonly [string, number]> = [
   ["::", 128], ["::1", 128], ["fe80::", 10], ["fec0::", 10], ["fc00::", 7], ["ff00::", 8], ["2001:db8::", 32],
+  // R1 其餘範圍（A 組領航員裁示，置於 R10 切片）
+  ["::", 96], ["::ffff:0:0:0", 96], ["100::", 64], ["2001:2::", 48], ["3fff::", 20],
 ];
 
 const NON_PUBLIC = new BlockList();
