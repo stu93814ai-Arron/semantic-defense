@@ -33,7 +33,7 @@ describe("sensor-ingest ③b 認證（requireHttps:false 以 inject 驗認證邏
     expect(out.statusCode).toBe(403);
     const ok = await app.inject({ method: "GET", url: "/v1/health", headers: auth(t), remoteAddress: IN });
     expect(ok.statusCode).toBe(200);
-    expect(ok.json()).toEqual({ ok: true, sensor_id: t.slice(5, 41) });
+    expect(ok.json()).toEqual({ ok: true, sensor_id: t.slice(5, 41), reserved_rejected_24h: 0 });
     await app.close();
   });
 

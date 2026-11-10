@@ -1,11 +1,11 @@
 import Fastify, {
   type FastifyInstance, type FastifyReply, type FastifyRequest, type FastifyServerOptions,
 } from "fastify";
-import { parseFlowMetadataEvent } from "@semantic-defense/contracts";
+import { isReservedForIngest, parseFlowMetadataEvent } from "@semantic-defense/contracts";
 import { findSensorByToken, ipAllowed, type SensorDb } from "@semantic-defense/sensor-auth";
 import { createAuthFailLimiter } from "./rate-limit.js";
 import { installErrorHandler, withSafeReqLog } from "./errors.js";
-import { RETENTION_MS, REJECTION_UNBOUND_APP, ensureFlowSchema, insertFlow, purgeExpired, recordRejection, type FlowDb } from "@semantic-defense/flow-store/write";
+import { RETENTION_MS, REJECTION_RESERVED, REJECTION_UNBOUND_APP, countRejections, ensureFlowSchema, insertFlow, purgeExpired, recordRejection, type FlowDb } from "@semantic-defense/flow-store/write";
 
 /**
  * sensor-ingest（流量平面）③b：認證面。
@@ -86,7 +86,10 @@ export async function buildIngest(opts: BuildIngestOptions): Promise<FastifyInst
 
   app.setNotFoundHandler((_req, reply) => reply.code(404).send({ error: "查無此路徑" }));
 
-  app.get("/v1/health", { onRequest: guard }, async (req) => ({ ok: true, sensor_id: req.sensorId }));
+  app.get("/v1/health", { onRequest: guard }, async (req) => ({
+    ok: true, sensor_id: req.sensorId,
+    reserved_rejected_24h: await countRejections(opts.db, clock(), REJECTION_RESERVED),
+  }));
 
   app.post("/v1/flows", { onRequest: guard }, async (req, reply) => {
     if (hasSelfReportedSensorId(req.body)) {
@@ -100,6 +103,12 @@ export async function buildIngest(opts: BuildIngestOptions): Promise<FastifyInst
     const ts = Date.parse(parsed.value.ts);
     if (ts - now > MAX_FUTURE_SKEW_MS) return reply.code(400).send({ error: "ts 超前接收時間" });
     if (now - ts > RETENTION_MS) return reply.code(400).send({ error: "ts 早於保留期限" });
+    // 順序（A 組領航員裁示；總召 §21:09 R10）：認證之後（未認證絕不寫 flow_rejections）→ 契約格式 → 與 ts 上下限同段 → app_id 403 之前。
+    if (isReservedForIngest(parsed.value.src_ip) || isReservedForIngest(parsed.value.dst_ip)) {
+      await recordRejection(opts.db, req.sensorId!, now, REJECTION_RESERVED);
+      req.log.info({ reserved: 1 }, "ingest rejected reserved address");
+      return reply.code(400).send({ error: "位址為保留或文件範圍" });
+    }
     if (!req.allowedAppIds!.includes(parsed.value.app_id)) {
       await recordRejection(opts.db, req.sensorId!, now, REJECTION_UNBOUND_APP);
       return reply.code(403).send({ error: "app_id 未綁定此感測器" });
