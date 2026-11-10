@@ -18,6 +18,7 @@ import { runJudgeTick, type TickOpts } from "./judge.js";
 import { alertHealthCounts, deliverDueAlerts, enabledAlertChannels, type AlertChannel, type AlertSender } from "./alert-outbox.js";
 import { parseWebhookConfig, webhookSender, type WebhookHooks } from "./alert-webhook.js";
 import { parseSyslogConfig, syslogSender, type SyslogHooks } from "./alert-syslog.js";
+import { parseSmtpConfig, smtpSender, type SmtpHooks } from "./alert-smtp.js";
 
 export type BuildAppOptions = {
   idleTimeoutMs?: number;
@@ -49,6 +50,7 @@ export type BuildAppOptions = {
   /** 測試用：webhook 的 CA／lookup／時鐘。 */
   webhookHooks?: WebhookHooks;
   syslogHooks?: SyslogHooks;
+  smtpHooks?: SmtpHooks;
 };
 
 export type ControlApi = FastifyInstance;
@@ -248,6 +250,8 @@ function defaultSenders(opts: BuildAppOptions): Partial<Record<AlertChannel, Ale
   if (webhook && !senders.webhook) senders.webhook = webhookSender(webhook, opts.webhookHooks ?? {});
   const syslog = parseSyslogConfig(process.env);
   if (syslog && !senders.syslog) senders.syslog = syslogSender(syslog, opts.syslogHooks ?? {});
+  const smtp = parseSmtpConfig(process.env);
+  if (smtp && !senders.email) senders.email = smtpSender(smtp, opts.smtpHooks ?? {});
   return senders;
 }
 
@@ -262,10 +266,12 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<ControlApi> 
   assertBreakerLimit(opts.autoBreakerPerHour);
   parseWebhookConfig(process.env);
   parseSyslogConfig(process.env);
+  const smtp = parseSmtpConfig(process.env);
   const idleTimeoutMs = opts.idleTimeoutMs ?? 30 * 60_000;
   const rl = opts.loginRateLimit ?? { maxFailures: 5, windowMs: 60_000 };
   const now = opts.now ?? Date.now;
   const app = Fastify({ trustProxy: opts.trustProxy ?? false, logger: withSafeReqLog(opts.logger) });
+  if (smtp?.allowPlaintext) app.log.warn({ smtp_plaintext: true }, "smtp plaintext allowed");
   try {
     const db = await openDb(resolveDatabaseUrl(opts.databaseUrl), { now, log: app.log });
     const limiter = new LoginLimiter(db, rl.maxFailures, rl.windowMs, now);
