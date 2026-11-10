@@ -30,20 +30,24 @@ describe("索引順序：先建新、再刪舊", () => {
 });
 
 describe("CONCURRENTLY 結束後 RESET statement_timeout", () => {
-  it("同一 session 上 SHOW statement_timeout 回到進入 ensureFlowSchema 前的值", async () => {
-    const shown: string[] = [];
+  it("先 SET 7s，結束後 SHOW 等於 pg_settings.reset_val（不是留下的 10min）", async () => {
+    // RESET 還原的是 session 起始預設值（reset_val），不是呼叫前剛 SET 的 7s。
+    // 先 SET 7s 是為了讓連線進入 ensureFlowSchema 前不是殘留的 10min，否則 before===after 什麼都證明不了。
+    const shown: { after: string; resetVal: string } = { after: "", resetVal: "" };
     const wrap: FlowDb = {
       query: (sql, params) => db.query(sql, params),
       withSession: (fn) => db.withSession(async (q) => {
-        const before = (await q.query<{ statement_timeout: string }>("SHOW statement_timeout")).rows[0]!.statement_timeout;
+        await q.query("SET statement_timeout = '7s'");
+        const mid = (await q.query<{ statement_timeout: string }>("SHOW statement_timeout")).rows[0]!.statement_timeout;
+        expect(mid).toBe("7s");
+        shown.resetVal = (await q.query<{ reset_val: string }>(
+          "SELECT reset_val FROM pg_settings WHERE name = 'statement_timeout'")).rows[0]!.reset_val;
         const out = await fn(q);
-        const after = (await q.query<{ statement_timeout: string }>("SHOW statement_timeout")).rows[0]!.statement_timeout;
-        shown.push(before, after);
+        shown.after = (await q.query<{ statement_timeout: string }>("SHOW statement_timeout")).rows[0]!.statement_timeout;
         return out;
       }),
     };
     await ensureFlowSchema(wrap);
-    expect(shown).toHaveLength(2);
-    expect(shown[1]).toBe(shown[0]);
+    expect(shown.after).toBe(shown.resetVal);
   });
 });
