@@ -17,7 +17,7 @@ async function post(ts: string, nowIso: string) {
   const t = await seedToken(db, ["10.0.0.0/8"]);
   const r = await app.inject({
     method: "POST", url: "/v1/flows", headers: { authorization: `Bearer ${t}` }, remoteAddress: "10.9.9.9",
-    payload: { flow_id: randomUUID(), app_id: "app-1", ts, src_ip: "198.51.100.8", dst_ip: "10.0.0.3", src_port: 40001,
+    payload: { flow_id: randomUUID(), app_id: "app-1", ts, src_ip: "198.51.99.8", dst_ip: "10.0.0.3", src_port: 40001,
       dst_port: 443, protocol: "udp", bytes_in: 3, bytes_out: 4, packets: 2, duration_ms: 7 },
   });
   await app.close();

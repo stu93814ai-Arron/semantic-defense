@@ -25,21 +25,21 @@ const acc = (ip: string, confidence: number, at: number, late = false) =>
 describe("待審累加（blacklist_cases）", () => {
   it("同 IP 兩次命中 → 一筆 open；hit_count=2、max 取大、last_hit_at 更新、created_at 不變", async () => {
     await boot();
-    const a = await acc("203.0.113.7", 0.6, T0);
-    const b = await acc("203.0.113.7", 0.55, T0 + 5 * MIN);
+    const a = await acc("64.0.113.7", 0.6, T0);
+    const b = await acc("64.0.113.7", 0.55, T0 + 5 * MIN);
     expect(b.case_id).toBe(a.case_id);
     const [c, ...rest] = await cases();
     expect(rest).toEqual([]);
-    expect(c).toMatchObject({ ip: "203.0.113.7/32", state: "open", max_confidence: 0.6, hit_count: 2, has_late: false,
+    expect(c).toMatchObject({ ip: "64.0.113.7/32", state: "open", max_confidence: 0.6, hit_count: 2, has_late: false,
       created_at: String(T0), expires_at: String(T0 + CASE_TTL_MS), last_hit_at: String(T0 + 5 * MIN), resolved_at: null });
-    await acc("203.0.113.7", 0.8, T0 + 6 * MIN, true);
+    await acc("64.0.113.7", 0.8, T0 + 6 * MIN, true);
     expect((await cases())[0]).toMatchObject({ max_confidence: 0.8, hit_count: 3, has_late: true });
   });
 
   it("created+23h59m 再命中 → 仍同一筆、expires_at 不延長", async () => {
     await boot();
-    await acc("203.0.113.8", 0.6, T0);
-    await acc("203.0.113.8", 0.6, T0 + CASE_TTL_MS - MIN);
+    await acc("64.0.113.8", 0.6, T0);
+    await acc("64.0.113.8", 0.6, T0 + CASE_TTL_MS - MIN);
     const all = await cases();
     expect(all).toHaveLength(1);
     expect(all[0]).toMatchObject({ hit_count: 2, expires_at: String(T0 + CASE_TTL_MS) });
@@ -47,8 +47,8 @@ describe("待審累加（blacklist_cases）", () => {
 
   it("created+24h 再命中 → 舊筆 expired（resolved_at=expires_at），開新筆", async () => {
     await boot();
-    const old = await acc("203.0.113.9", 0.7, T0);
-    const neu = await acc("203.0.113.9", 0.6, T0 + CASE_TTL_MS);
+    const old = await acc("64.0.113.9", 0.7, T0);
+    const neu = await acc("64.0.113.9", 0.6, T0 + CASE_TTL_MS);
     expect(neu.case_id).not.toBe(old.case_id);
     expect((await cases()).map((c) => [c.case_id, c.state, c.resolved_at, c.hit_count])).toEqual([
       [old.case_id, "expired", String(T0 + CASE_TTL_MS), 1],
@@ -58,26 +58,26 @@ describe("待審累加（blacklist_cases）", () => {
 
   it("兩個 tx 同時對同 IP 開案 → 只有 1 筆 open、hit_count=2", async () => {
     await boot();
-    await Promise.all([acc("198.51.100.4", 0.6, T0), acc("198.51.100.4", 0.7, T0)]);
+    await Promise.all([acc("198.51.99.4", 0.6, T0), acc("198.51.99.4", 0.7, T0)]);
     const all = await cases();
     expect(all).toHaveLength(1);
     expect(all[0]).toMatchObject({ state: "open", hit_count: 2, max_confidence: 0.7 });
   });
 
-  it("IPv6：2001:db8::1 存成 2001:db8::1/128；非主機前綴 → 拋錯不寫入", async () => {
+  it("IPv6：2001:db9::1 存成 2001:db9::1/128；非主機前綴 → 拋錯不寫入", async () => {
     await boot();
-    await acc("2001:db8::1", 0.6, T0);
-    expect((await cases()).map((c) => c.ip)).toEqual(["2001:db8::1/128"]);
-    await expect(acc("203.0.113.0/24", 0.6, T0)).rejects.toThrow();
+    await acc("2001:db9::1", 0.6, T0);
+    expect((await cases()).map((c) => c.ip)).toEqual(["2001:db9::1/128"]);
+    await expect(acc("64.0.113.0/24", 0.6, T0)).rejects.toThrow();
     expect(await cases()).toHaveLength(1);
   });
 
   it("DB 層：同 IP 第二筆 open 直接 INSERT → 唯一約束拒絕；expires_at 必須＝created_at+24h", async () => {
     await boot();
-    await acc("203.0.113.10", 0.6, T0);
+    await acc("64.0.113.10", 0.6, T0);
     const raw = (expires: number) => app.db.query(
       `INSERT INTO blacklist_cases (case_id, ip, state, max_confidence, hit_count, created_at, expires_at, last_hit_at)
-       VALUES (gen_random_uuid(), '203.0.113.10/32', 'open', 0.6, 1, $1, $2, $1)`, [T0, expires]);
+       VALUES (gen_random_uuid(), '64.0.113.10/32', 'open', 0.6, 1, $1, $2, $1)`, [T0, expires]);
     await expect(raw(T0 + CASE_TTL_MS)).rejects.toMatchObject({ code: "23505" });
     await expect(raw(T0 + CASE_TTL_MS + 1)).rejects.toMatchObject({ code: "23514" });
   });
@@ -85,7 +85,7 @@ describe("待審累加（blacklist_cases）", () => {
 
 describe("命中明細（case_hits）", () => {
   const hit = (over: Partial<Parameters<typeof upsertCaseHit>[1]> = {}) => ({
-    src_ip: "203.0.113.7", sensor_id: "s-1", app_id: "app-alpha", window_start: T0, confidence: 0.6, ontime_confidence: 0.6, ...over,
+    src_ip: "64.0.113.7", sensor_id: "s-1", app_id: "app-alpha", window_start: T0, confidence: 0.6, ontime_confidence: 0.6, ...over,
   });
   type HitRow = { src_ip: string; confidence: number; ontime_confidence: number | null; first_seen_at: string; updated_at: string };
   const hits = async () => (await app.db.query<HitRow>(
@@ -96,7 +96,7 @@ describe("命中明細（case_hits）", () => {
     expect(await app.db.tx((q) => upsertCaseHit(q, hit(), T0))).toEqual({ created: true, prevOntime: null });
     expect(await app.db.tx((q) => upsertCaseHit(q, hit({ confidence: 0.7, ontime_confidence: null }), T0 + MIN)))
       .toEqual({ created: false, prevOntime: 0.6 });
-    expect(await hits()).toEqual([{ src_ip: "203.0.113.7/32", confidence: 0.7, ontime_confidence: null,
+    expect(await hits()).toEqual([{ src_ip: "64.0.113.7/32", confidence: 0.7, ontime_confidence: null,
       first_seen_at: String(T0), updated_at: String(T0 + MIN) }]);
   });
 

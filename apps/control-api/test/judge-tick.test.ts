@@ -30,19 +30,19 @@ const cursor = async () => (await app.db.query<{ received_upto: string }>("SELEC
 describe("判定 tick", () => {
   it("可疑 IP 成案、正常流量不成案；依 sensor 分開成命中；cursor 前進到看到的最大 received_at", async () => {
     await boot();
-    await scan("203.0.113.5", T0 - 2 * MIN, T0 - 2 * MIN);
-    await scan("203.0.113.5", T0 - 2 * MIN, T0 - MIN, 30, "s-2");
-    await normal("198.51.100.9", T0 - 2 * MIN);
+    await scan("64.0.113.5", T0 - 2 * MIN, T0 - 2 * MIN);
+    await scan("64.0.113.5", T0 - 2 * MIN, T0 - MIN, 30, "s-2");
+    await normal("198.51.99.9", T0 - 2 * MIN);
     expect(await runJudgeTick(app.db, T0)).toMatchObject({ ran: true });
-    expect(await cases()).toEqual([{ ip: "203.0.113.5/32", hit_count: 2, has_late: false, max_confidence: 1 }]);
+    expect(await cases()).toEqual([{ ip: "64.0.113.5/32", hit_count: 2, has_late: false, max_confidence: 1 }]);
     expect((await hits()).map((h) => [h.src_ip, h.sensor_id, Number(h.window_start), h.ontime_confidence])).toEqual([
-      ["203.0.113.5/32", "s-1", T0 - 5 * MIN, 1], ["203.0.113.5/32", "s-2", T0 - 5 * MIN, 1]]);
+      ["64.0.113.5/32", "s-1", T0 - 5 * MIN, 1], ["64.0.113.5/32", "s-2", T0 - 5 * MIN, 1]]);
     expect(await cursor()).toEqual([{ received_upto: String(T0 - MIN) }]);
   });
 
   it("同一批資料重跑 tick（含 60 秒重疊）→ hit_count、命中數不變（冪等）", async () => {
     await boot();
-    await scan("203.0.113.5", T0 - 2 * MIN, T0 - 30_000);
+    await scan("64.0.113.5", T0 - 2 * MIN, T0 - 30_000);
     await runJudgeTick(app.db, T0);
     await runJudgeTick(app.db, T0);
     await runJudgeTick(app.db, T0 + 10_000);
@@ -53,22 +53,22 @@ describe("判定 tick", () => {
   it("較晚 commit、received_at 落在 cursor 前 60 秒內的列，下一次 tick 仍會掃到", async () => {
     await boot();
     await runJudgeTick(app.db, T0);
-    await scan("203.0.113.6", T0 - 2 * MIN, T0 - 50_000);
+    await scan("64.0.113.6", T0 - 2 * MIN, T0 - 50_000);
     await runJudgeTick(app.db, T0 + 5_000);
-    expect((await cases()).map((c) => c.ip)).toEqual(["203.0.113.6/32"]);
+    expect((await cases()).map((c) => c.ip)).toEqual(["64.0.113.6/32"]);
   });
 
   it("全部遲到的組 → 照樣成案（has_late），ontime_confidence=NULL", async () => {
     await boot();
-    await scan("203.0.113.7", T0 - 20 * MIN, T0 - MIN);
+    await scan("64.0.113.7", T0 - 20 * MIN, T0 - MIN);
     await runJudgeTick(app.db, T0);
-    expect(await cases()).toEqual([{ ip: "203.0.113.7/32", hit_count: 1, has_late: true, max_confidence: 1 }]);
+    expect(await cases()).toEqual([{ ip: "64.0.113.7/32", hit_count: 1, has_late: true, max_confidence: 1 }]);
     expect((await hits())[0]!.ontime_confidence).toBeNull();
   });
 
   it("另一個 tick 持有 advisory lock 時 → 不處理（ran:false、cursor 不動）", async () => {
     await boot();
-    await scan("203.0.113.5", T0 - 2 * MIN, T0 - MIN);
+    await scan("64.0.113.5", T0 - 2 * MIN, T0 - MIN);
     const r = await app.db.tx(async (q) => {
       await q.query("SELECT pg_advisory_xact_lock($1)", [JUDGE_LOCK]);
       return runJudgeTick(app.db, T0);
@@ -88,19 +88,19 @@ describe("判定 tick", () => {
     await boot();
     const hit = (ip: string, at: number) => app.db.query(
       "INSERT INTO case_hits VALUES ($1, 's-1', 'app-1', $2, 0.6, 0.6, $2, $2)", [ip, at]);
-    await hit("203.0.113.1/32", T0 - 7 * DAY);
-    await hit("203.0.113.2/32", T0 - 7 * DAY + 1);
+    await hit("64.0.113.1/32", T0 - 7 * DAY);
+    await hit("64.0.113.2/32", T0 - 7 * DAY + 1);
     const kase = (ip: string, state: string, created: number) => app.db.query(
       `INSERT INTO blacklist_cases (case_id, ip, state, max_confidence, hit_count, created_at, expires_at, last_hit_at, resolved_at)
        VALUES ($1, $2, $3, 0.6, 1, $4, $5, $4, $6)`,
       [randomUUID(), ip, state, created, created + DAY, state === "open" ? null : created + DAY]);
-    await kase("203.0.113.3/32", "expired", T0 - 8 * DAY);
-    await kase("203.0.113.4/32", "rejected", T0 - 8 * DAY + 1);
-    await kase("203.0.113.5/32", "open", T0 - DAY / 2); // 未到期的 open（過期的 open 會先被收成 expired，見修正 2）
+    await kase("64.0.113.3/32", "expired", T0 - 8 * DAY);
+    await kase("64.0.113.4/32", "rejected", T0 - 8 * DAY + 1);
+    await kase("64.0.113.5/32", "open", T0 - DAY / 2); // 未到期的 open（過期的 open 會先被收成 expired，見修正 2）
     await runJudgeTick(app.db, T0);
-    expect((await hits()).map((h) => h.src_ip)).toEqual(["203.0.113.2/32"]);
+    expect((await hits()).map((h) => h.src_ip)).toEqual(["64.0.113.2/32"]);
     expect((await app.db.query<{ ip: string }>("SELECT ip FROM blacklist_cases ORDER BY ip")).rows.map((r) => r.ip))
-      .toEqual(["203.0.113.4/32", "203.0.113.5/32"]);
+      .toEqual(["64.0.113.4/32", "64.0.113.5/32"]);
   });
 });
 
@@ -109,13 +109,13 @@ describe("judge_cursor 依資料時間前進（A 組領航員修正 1）", () =>
     await boot();
     await runJudgeTick(app.db, T0);
     expect(await cursor()).toEqual([]);
-    await normal("198.51.100.9", T0 - 6 * MIN);
+    await normal("198.51.99.9", T0 - 6 * MIN);
     await runJudgeTick(app.db, T0);
     expect(await cursor()).toEqual([{ received_upto: String(T0 - 6 * MIN) }]);
     // ingest 時鐘慢 5 分鐘：control-api 的 T0+10s 時，ingest 蓋的 received_at 只有 T0-5m+10s
-    await scan("203.0.113.10", T0 - 6 * MIN, T0 - 5 * MIN + 10_000);
+    await scan("64.0.113.10", T0 - 6 * MIN, T0 - 5 * MIN + 10_000);
     await runJudgeTick(app.db, T0 + 10_000);
-    expect((await cases()).map((c) => c.ip)).toEqual(["203.0.113.10/32"]);
+    expect((await cases()).map((c) => c.ip)).toEqual(["64.0.113.10/32"]);
     expect(await cursor()).toEqual([{ received_upto: String(T0 - 5 * MIN + 10_000) }]);
   });
 });
@@ -130,22 +130,22 @@ describe("過期 open case 每次 tick 全面收掉（A 組領航員修正 2）"
 
   it("過期且沒再命中的 case → expired、resolved_at＝expires_at；未到期的維持 open", async () => {
     await boot();
-    await open("203.0.113.1/32", T0 - DAY - 1);
-    await open("203.0.113.2/32", T0 - DAY);
-    await open("203.0.113.3/32", T0 - DAY + 1);
+    await open("64.0.113.1/32", T0 - DAY - 1);
+    await open("64.0.113.2/32", T0 - DAY);
+    await open("64.0.113.3/32", T0 - DAY + 1);
     await runJudgeTick(app.db, T0);
     expect((await all()).map((c) => [c.ip, c.state, c.resolved_at])).toEqual([
-      ["203.0.113.1/32", "expired", String(T0 - 1)], ["203.0.113.2/32", "expired", String(T0)],
-      ["203.0.113.3/32", "open", null]]);
+      ["64.0.113.1/32", "expired", String(T0 - 1)], ["64.0.113.2/32", "expired", String(T0)],
+      ["64.0.113.3/32", "open", null]]);
   });
 
   it("收掉後滿 7 天（resolved_at＋7d）被清除；未滿的保留", async () => {
     await boot();
-    await open("203.0.113.1/32", T0 - DAY);
-    await open("203.0.113.2/32", T0 - DAY + 1);
+    await open("64.0.113.1/32", T0 - DAY);
+    await open("64.0.113.2/32", T0 - DAY + 1);
     await runJudgeTick(app.db, T0);
     await runJudgeTick(app.db, T0 + 7 * DAY);
-    expect((await all()).map((c) => [c.ip, c.state])).toEqual([["203.0.113.2/32", "expired"]]);
+    expect((await all()).map((c) => [c.ip, c.state])).toEqual([["64.0.113.2/32", "expired"]]);
   });
 });
 
@@ -161,7 +161,7 @@ describe("門檻 fail-closed 在判定路徑寫 log.warn（資安 R3 補缺）",
   it("tick：舊表 {0,0} → 以 0.50 判定（正常流量不成案），並經 tick 的 logger 寫 warn", async () => {
     await boot();
     await legacyThresholds();
-    await normal("198.51.100.9", T0 - 2 * MIN);
+    await normal("198.51.99.9", T0 - 2 * MIN);
     await runJudgeTick(app.db, T0, log);
     expect(await cases()).toEqual([]);
     expect(lines.filter((l) => l.includes("violation"))).toHaveLength(1);
@@ -179,8 +179,8 @@ describe("門檻 fail-closed 在判定路徑寫 log.warn（資安 R3 補缺）",
 describe("buildApp 排程", () => {
   it("judgeIntervalMs>0 → 定期跑 tick（close 時清 timer）", async () => {
     await boot({ judgeIntervalMs: 20 });
-    await scan("203.0.113.5", T0 - 2 * MIN, T0 - 30_000);
-    await expect.poll(async () => (await cases()).map((c) => c.ip), { timeout: 5_000 }).toEqual(["203.0.113.5/32"]);
+    await scan("64.0.113.5", T0 - 2 * MIN, T0 - 30_000);
+    await expect.poll(async () => (await cases()).map((c) => c.ip), { timeout: 5_000 }).toEqual(["64.0.113.5/32"]);
     expect(await cursor()).toEqual([{ received_upto: String(T0 - 30_000) }]);
   });
 });
@@ -189,7 +189,7 @@ describe("重掃時待審 max 以 GREATEST 更新（A 組領航員裁定 11-09�
   type Full = { max_confidence: number; hit_count: number; expires_at: string; last_hit_at: string; state: string };
   const full = async () => (await app.db.query<Full>(
     "SELECT max_confidence, hit_count, expires_at, last_hit_at, state FROM blacklist_cases")).rows;
-  const IP = "203.0.113.8";
+  const IP = "64.0.113.8";
   const W = T0 - 2 * MIN;
   const more = (n: number, susp: boolean, receivedAt: number, port0 = 2000) => insertFlowEvents(app.db,
     Array.from({ length: n }, (_, i) => ({ flow: flow(IP, W, susp ? port0 + i : 443, susp), sensorId: "s-1", receivedAt })));
@@ -246,21 +246,21 @@ describe("白名單 IP 不開案；已上榜 IP 只寫 hit_while_listed（commit
 
   it("白名單 /24 內的 IP 命中 → 存 case_hits、不開案、不寫稽核", async () => {
     await boot();
-    await allow("203.0.113.0/24");
-    await scan("203.0.113.5", T0 - 2 * MIN, T0 - MIN);
+    await allow("64.0.113.0/24");
+    await scan("64.0.113.5", T0 - 2 * MIN, T0 - MIN);
     await runJudgeTick(app.db, T0);
-    expect([await hitIps(), await cases(), await audits()]).toEqual([["203.0.113.5/32"], [], []]);
+    expect([await hitIps(), await cases(), await audits()]).toEqual([["64.0.113.5/32"], [], []]);
   });
 
   it("已上榜 IP 再命中 → 存 case_hits、不開案、hit_while_listed 一筆；重掃不重寫、不延長", async () => {
     await boot();
-    const entry = await listed("203.0.113.5/32");
-    await scan("203.0.113.5", T0 - 2 * MIN, T0 - MIN, 30, "s-2");
+    const entry = await listed("64.0.113.5/32");
+    await scan("64.0.113.5", T0 - 2 * MIN, T0 - MIN, 30, "s-2");
     await runJudgeTick(app.db, T0);
     await runJudgeTick(app.db, T0 + 10_000);
-    expect([await hitIps(), await cases()]).toEqual([["203.0.113.5/32"], []]);
+    expect([await hitIps(), await cases()]).toEqual([["64.0.113.5/32"], []]);
     expect(await audits()).toEqual([{ action: "blacklist.hit_while_listed", actor: "system:auto", sensor_id: "s-2",
-      detail: { ip: "203.0.113.5/32", entry_id: entry, app_id: "app-1",
+      detail: { ip: "64.0.113.5/32", entry_id: entry, app_id: "app-1",
         window_start: new Date(T0 - 5 * MIN).toISOString(), confidence: 1 } }]);
     expect((await app.db.query<{ expires_at: string }>("SELECT expires_at FROM blocklist_entries")).rows)
       .toEqual([{ expires_at: String(T0 + DAY / 2) }]);
@@ -268,12 +268,12 @@ describe("白名單 IP 不開案；已上榜 IP 只寫 hit_while_listed（commit
 
   it("hit_while_listed 同一 entry_id 每小時最多一筆（伺服器時間）；多出來的命中每個 tick 一行 log 記數量（資安退回 R5）", async () => {
     await boot();
-    const entry = await listed("203.0.113.5/32");
-    for (const w of [12, 7, 2]) await scan("203.0.113.5", T0 - w * MIN, T0 - MIN);
+    const entry = await listed("64.0.113.5/32");
+    for (const w of [12, 7, 2]) await scan("64.0.113.5", T0 - w * MIN, T0 - MIN);
     await runJudgeTick(app.db, T0, log);
-    await scan("203.0.113.5", T0 + 52 * MIN, T0 + 58 * MIN);
+    await scan("64.0.113.5", T0 + 52 * MIN, T0 + 58 * MIN);
     await runJudgeTick(app.db, T0 + 59 * MIN, log);
-    await scan("203.0.113.5", T0 + 59 * MIN, T0 + 59 * MIN + 30_000);
+    await scan("64.0.113.5", T0 + 59 * MIN, T0 + 59 * MIN + 30_000);
     await runJudgeTick(app.db, T0 + 60 * MIN, log);
     const rows = await app.db.query<{ at: string }>("SELECT at FROM audit_events WHERE action = 'blacklist.hit_while_listed' ORDER BY id");
     expect(rows.rows.map((r) => Number(r.at))).toEqual([T0, T0 + 60 * MIN]);
@@ -284,13 +284,13 @@ describe("白名單 IP 不開案；已上榜 IP 只寫 hit_while_listed（commit
 
   it("「已上榜」只認 canonical IP 完全相等且生效：生效的 /24、已撤回、已結束、已到期 → 照常成案、不寫稽核", async () => {
     await boot();
-    await listed("203.0.113.0/24");
-    await listed("198.51.100.1/32", { revoked: true });
-    await listed("198.51.100.2/32", { ended: true });
-    await listed("198.51.100.3/32", { expires: T0 });
-    for (const ip of ["203.0.113.9", "198.51.100.1", "198.51.100.2", "198.51.100.3"]) await scan(ip, T0 - 2 * MIN, T0 - MIN);
+    await listed("64.0.113.0/24");
+    await listed("198.51.99.1/32", { revoked: true });
+    await listed("198.51.99.2/32", { ended: true });
+    await listed("198.51.99.3/32", { expires: T0 });
+    for (const ip of ["64.0.113.9", "198.51.99.1", "198.51.99.2", "198.51.99.3"]) await scan(ip, T0 - 2 * MIN, T0 - MIN);
     await runJudgeTick(app.db, T0);
-    expect((await cases()).map((c) => c.ip)).toEqual(["198.51.100.1/32", "198.51.100.2/32", "198.51.100.3/32", "203.0.113.9/32"]);
+    expect((await cases()).map((c) => c.ip)).toEqual(["198.51.99.1/32", "198.51.99.2/32", "198.51.99.3/32", "64.0.113.9/32"]);
     expect(await audits()).toEqual([]);
   });
 });
@@ -301,10 +301,10 @@ describe("保留位址的 src_ip（資安退回 B1）", () => {
   it("同一批有保留位址與正常 IP → 保留位址整組跳過（不拋錯、不 rollback），正常 IP 仍成案、cursor 前進；log 只記數量不記 IP", async () => {
     await boot();
     for (const ip of RESERVED) await scan(ip, T0 - 2 * MIN, T0 - MIN);
-    await scan("203.0.113.9", T0 - 2 * MIN, T0 - 30_000);
+    await scan("64.0.113.9", T0 - 2 * MIN, T0 - 30_000);
     await expect(runJudgeTick(app.db, T0, log)).resolves.toMatchObject({ ran: true, hits: 1 });
-    expect((await cases()).map((c) => c.ip)).toEqual(["203.0.113.9/32"]);
-    expect((await hits()).map((h) => h.src_ip)).toEqual(["203.0.113.9/32"]);
+    expect((await cases()).map((c) => c.ip)).toEqual(["64.0.113.9/32"]);
+    expect((await hits()).map((h) => h.src_ip)).toEqual(["64.0.113.9/32"]);
     expect(await cursor()).toEqual([{ received_upto: String(T0 - 30_000) }]);
     expect(lines.map((l) => JSON.parse(l) as object)).toEqual([{ skipped: RESERVED.length, msg: "judge tick skipped non-host src_ip groups" }]);
     for (const ip of RESERVED) expect(lines.join("\n")).not.toContain(ip);
@@ -314,9 +314,9 @@ describe("保留位址的 src_ip（資安退回 B1）", () => {
 describe("case_hits 7 天清除依 first_seen_at（資安退回 R3）", () => {
   it("命中第一次寫入後被重掃刷新 updated_at，+7 天的空 tick 仍會刪掉", async () => {
     await boot();
-    await scan("203.0.113.10", T0 - 2 * MIN, T0 - MIN);
+    await scan("64.0.113.10", T0 - 2 * MIN, T0 - MIN);
     await runJudgeTick(app.db, T0);
-    await scan("203.0.113.10", T0 - 2 * MIN, T0 + 6 * DAY, 1);
+    await scan("64.0.113.10", T0 - 2 * MIN, T0 + 6 * DAY, 1);
     await runJudgeTick(app.db, T0 + 6 * DAY);
     const at = await app.db.query<{ first_seen_at: string; updated_at: string }>("SELECT first_seen_at, updated_at FROM case_hits");
     expect(at.rows).toEqual([{ first_seen_at: String(T0), updated_at: String(T0 + 6 * DAY) }]);
@@ -344,9 +344,9 @@ describe("判定只讀 ts_ms（ts slice；B2 改寫）：ts_ms NULL 的列不分
   it("50 筆舊毒列排在佇列最前＋正常 IP 同批 → 正常 IP 成案、cursor 前進；log 只有 {null_ts:50}，不帶 IP／ts", async () => {
     await boot();
     await poison(50, T0 - 2 * MIN);
-    await scan("203.0.113.11", T0 - 2 * MIN, T0 - 30_000);
+    await scan("64.0.113.11", T0 - 2 * MIN, T0 - 30_000);
     await expect(runJudgeTick(app.db, T0, log)).resolves.toMatchObject({ ran: true, hits: 1, groups: 1 });
-    expect((await cases()).map((c) => c.ip)).toEqual(["203.0.113.11/32"]);
+    expect((await cases()).map((c) => c.ip)).toEqual(["64.0.113.11/32"]);
     expect(await cursor()).toEqual([{ received_upto: String(T0 - 30_000) }]);
     expect(logged()).toEqual([{ null_ts: 50, msg: NULL_TS_MSG }]);
     for (const s of [...BAD_TS, "198.51.", "0000-01-01"]) expect(lines.join("\n")).not.toContain(s);
@@ -365,16 +365,16 @@ describe("判定只讀 ts_ms（ts slice；B2 改寫）：ts_ms NULL 的列不分
   it("ts_ms 已寫入、ts 為 +23:59 的列 → 依 ts_ms 正常判定（不再對 ts 做 ::timestamptz）", async () => {
     await boot();
     await insertFlowEvents(app.db, Array.from({ length: 30 }, (_, i) => ({
-      flow: { ...flow("203.0.113.13", T0, 1000 + i, true), ts: BAD_TS[1]! }, sensorId: "s-1", receivedAt: T0 - MIN })));
+      flow: { ...flow("64.0.113.13", T0, 1000 + i, true), ts: BAD_TS[1]! }, sensorId: "s-1", receivedAt: T0 - MIN })));
     await runJudgeTick(app.db, T0, log);
-    expect(await cases()).toEqual([{ ip: "203.0.113.13/32", hit_count: 1, has_late: true, max_confidence: 1 }]);
+    expect(await cases()).toEqual([{ ip: "64.0.113.13/32", hit_count: 1, has_late: true, max_confidence: 1 }]);
     expect(Number((await hits())[0]!.window_start)).toBe(Math.floor(Date.parse(BAD_TS[1]!) / (5 * MIN)) * 5 * MIN);
     expect(lines).toEqual([]);
   });
 });
 
 describe("只吞 SQLSTATE 22（data exception）；其他錯誤讓整個 tick rollback、cursor 不動（資安退回 B3）", () => {
-  const IP = "203.0.113.12";
+  const IP = "64.0.113.12";
   /** 測試專用 trigger：寫這個 IP 的 case_hits 時丟指定 SQLSTATE（模擬 deadlock／lock_not_available）。 */
   const trap = (code: string) => app.db.exec(`
     CREATE OR REPLACE FUNCTION test_trap() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -395,7 +395,7 @@ describe("只吞 SQLSTATE 22（data exception）；其他錯誤讓整個 tick ro
   it.each(["40P01", "55P03"])("trigger 丟 %s → tick reject、cursor 不變、不寫 failed log；移除後下一個 tick 成案", async (code) => {
     await boot();
     await runJudgeTick(app.db, T0);
-    await normal("198.51.100.9", T0 - 3 * MIN);
+    await normal("198.51.99.9", T0 - 3 * MIN);
     await runJudgeTick(app.db, T0);
     const before = await cursor();
     await scan(IP, T0 - 2 * MIN, T0 - 30_000);
@@ -412,7 +412,7 @@ describe("只吞 SQLSTATE 22（data exception）；其他錯誤讓整個 tick ro
 });
 
 describe("只吞 22007／22008／22009；其他錯誤整個 tick 回滾；全部組都 22 類失敗也照常前進（R14b 已移除，A 組領航員裁示 R18）", () => {
-  const IP = "203.0.113.13";
+  const IP = "64.0.113.13";
   const trap = (code: string) => app.db.exec(`
     DROP TRIGGER IF EXISTS test_trap ON case_hits;
     CREATE OR REPLACE FUNCTION test_trap() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -420,11 +420,11 @@ describe("只吞 22007／22008／22009；其他錯誤整個 tick 回滾；全部
     CREATE TRIGGER test_trap BEFORE INSERT ON case_hits FOR EACH ROW WHEN (NEW.src_ip = '${IP}/32') EXECUTE FUNCTION test_trap();`);
   const seed = async () => {
     await boot();
-    await normal("198.51.100.9", T0 - 3 * MIN);
+    await normal("198.51.99.9", T0 - 3 * MIN);
     await runJudgeTick(app.db, T0);
     const before = await cursor();
     await scan(IP, T0 - 2 * MIN, T0 - 30_000);
-    await normal("198.51.100.10", T0 - MIN);
+    await normal("198.51.99.10", T0 - MIN);
     return before;
   };
 
@@ -471,9 +471,9 @@ describe("只吞 22007／22008／22009；其他錯誤整個 tick 回滾；全部
     await expect(runJudgeTick(app.db, T0 + 2000, log)).resolves.toMatchObject({ ran: true, hits: 0 });
     expect(await cursor()).toEqual([{ received_upto: String(T0 - 10_000) }]);
     await app.db.exec("DROP TRIGGER test_trap ON case_hits");
-    await scan("203.0.113.14", T0 - MIN, T0 - 5_000);
+    await scan("64.0.113.14", T0 - MIN, T0 - 5_000);
     await expect(runJudgeTick(app.db, T0 + 3000, log)).resolves.toMatchObject({ ran: true });
-    expect((await cases()).map((c) => c.ip)).toContain("203.0.113.14/32");
+    expect((await cases()).map((c) => c.ip)).toContain("64.0.113.14/32");
     // 第 2 個 tick：新列一組＋60 秒重疊區重判上一批 T0−2m 那組 → 22007 兩組
     expect(lines.map((l) => (JSON.parse(l) as { codes?: object }).codes)).toEqual([{ "22009": 2 }, { "22007": 2 }]);
   });

@@ -11,7 +11,7 @@ afterEach(async () => { if (app) await app.close(); });
 
 const PENDING_MSG = "judge tick pending backfill";
 const NULL_TS_MSG = "judge tick skipped rows without ts_ms";
-const IP = "203.0.113.21";
+const IP = "64.0.113.21";
 const POISON_TS = "0000-01-01T00:00:00Z";
 const log = { warn: (obj: object, msg: string) => { lines.push(JSON.stringify({ ...obj, msg })); }, error: (obj: object, msg: string) => { lines.push(JSON.stringify({ ...obj, msg })); } };
 const logged = () => lines.map((l) => JSON.parse(l) as object);
@@ -44,7 +44,7 @@ describe("待回填的可轉換 NULL：cursor 停在該列之前（R-B）", () =
     await app.db.query("UPDATE flow_events SET ts_ms = flow_ts_ms(ts) WHERE ts_ms IS NULL");
     lines = [];
     await expect(runJudgeTick(app.db, T0, log)).resolves.toMatchObject({ ran: true, hits: 1, groups: 1 });
-    expect(await cases()).toEqual([{ ip: "203.0.113.21/32" }]);
+    expect(await cases()).toEqual([{ ip: "64.0.113.21/32" }]);
     expect(await cursor()).toEqual([{ received_upto: String(T0 - MIN) }]);
     expect(logged()).toEqual([]);
   });
@@ -53,7 +53,7 @@ describe("待回填的可轉換 NULL：cursor 停在該列之前（R-B）", () =
     app = await bootJudgeApp();
     lines = [];
     expect(await insertLegacyFlowEvents(app.db, Array.from({ length: 3 }, (_, i) => ({
-      flow: { ...flow("198.51.100.21", T0 - 2 * MIN, 1000 + i, true), ts: POISON_TS },
+      flow: { ...flow("198.51.99.21", T0 - 2 * MIN, 1000 + i, true), ts: POISON_TS },
       sensorId: "s-1", receivedAt: T0 - MIN,
     })))).toBe(3);
     await expect(runJudgeTick(app.db, T0, log)).resolves.toMatchObject({ ran: true, hits: 0, groups: 0 });

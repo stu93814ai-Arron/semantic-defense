@@ -18,7 +18,7 @@ async function setup() {
   const t = await seedToken(db, ["10.0.0.0/8"]);
   const send = (ts: string, app_id = "app-1") => app.inject({
     method: "POST", url: "/v1/flows", headers: { authorization: `Bearer ${t}` }, remoteAddress: "10.9.9.9",
-    payload: { flow_id: randomUUID(), app_id, ts, src_ip: "198.51.100.7", dst_ip: "10.0.0.2", src_port: 40000,
+    payload: { flow_id: randomUUID(), app_id, ts, src_ip: "198.51.99.7", dst_ip: "10.0.0.2", src_port: 40000,
       dst_port: 8443, protocol: "tcp", bytes_in: 1, bytes_out: 2, packets: 1, duration_ms: 1 },
   });
   return { app, send };

@@ -38,7 +38,7 @@ describe("sensor-ingest log 不記 query", () => {
     await db.query("ALTER TABLE flow_events ADD CONSTRAINT t_qs_probe CHECK (bytes_in < 0) NOT VALID");
     const r = await app.inject({ method: "POST", url: `/v1/flows${QS}`, remoteAddress: "10.1.2.3",
       headers: { authorization: `Bearer ${token}` }, payload: { flow_id: randomUUID(), app_id: "app-1",
-        ts: "2027-01-15T07:00:00Z", src_ip: "203.0.113.5", dst_ip: "10.0.0.1", src_port: 1, dst_port: 2, protocol: "tcp",
+        ts: "2027-01-15T07:00:00Z", src_ip: "64.0.113.5", dst_ip: "10.0.0.1", src_port: 1, dst_port: 2, protocol: "tcp",
         bytes_in: 10, bytes_out: 20, packets: 3, duration_ms: 5 } });
     expect(r.statusCode).toBe(500);
     expect(lines.some((l) => (JSON.parse(l) as { level: number }).level >= 50)).toBe(true);

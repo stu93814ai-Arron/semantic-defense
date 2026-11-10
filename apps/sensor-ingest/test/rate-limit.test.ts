@@ -81,7 +81,7 @@ describe("有效 token 的感測器不受來源限流影響（先驗 Bearer，�
     expect((await get(app, "2001:db8:1:2::5", ok)).statusCode).toBe(200);
     const flow = await app.inject({
       method: "POST", url: "/v1/flows", remoteAddress: "2001:db8:1:2::5", headers: ok,
-      payload: { flow_id: randomUUID(), app_id: "app-1", ts: "2027-01-15T07:00:00Z", src_ip: "203.0.113.5", dst_ip: "10.0.0.1",
+      payload: { flow_id: randomUUID(), app_id: "app-1", ts: "2027-01-15T07:00:00Z", src_ip: "64.0.113.5", dst_ip: "10.0.0.1",
         src_port: 51234, dst_port: 443, protocol: "tcp", bytes_in: 10, bytes_out: 20, packets: 3, duration_ms: 5 },
     });
     expect(flow.statusCode).toBe(201);

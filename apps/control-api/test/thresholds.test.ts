@@ -183,8 +183,8 @@ describe("門檻：原子性、DB 約束與判定一致", () => {
     expect(t).toEqual((await get(c)).json());
     const flows = Array.from({ length: 30 }, (_, i) => ({
       flow_id: `550e8400-e29b-41d4-a716-${String(i + 1).padStart(12, "0")}`, app_id: "app-alpha",
-      ts: new Date(Date.parse("2026-11-05T12:00:00Z") + i * 1000).toISOString(), src_ip: "192.0.2.10",
-      dst_ip: "198.51.100.20", src_port: 51234, dst_port: 1000 + i, protocol: "tcp" as const,
+      ts: new Date(Date.parse("2026-11-05T12:00:00Z") + i * 1000).toISOString(), src_ip: "64.0.2.10",
+      dst_ip: "198.51.99.20", src_port: 51234, dst_port: 1000 + i, protocol: "tcp" as const,
       bytes_in: 800, bytes_out: 4000, packets: 20, duration_ms: 5000,
     }));
     const [v] = judgeFlows(flows);
