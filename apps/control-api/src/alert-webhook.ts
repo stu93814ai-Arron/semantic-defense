@@ -74,14 +74,14 @@ export function webhookSignature(secret: string, t: string, deliveryId: string, 
   return `t=${t},v1=${hex}`;
 }
 
-async function defaultLookup(host: string): Promise<Array<{ address: string; family: number }>> {
+export async function defaultLookup(host: string): Promise<Array<{ address: string; family: number }>> {
   return dns.lookup(host, { all: true });
 }
 
-async function pinHost(host: string, allow: BlockList, lookup: LookupFn): Promise<{ address: string; family: 4 | 6 }> {
+export async function pinHost(host: string, allow: BlockList, lookup: LookupFn, ssrfClass = "webhook_ssrf"): Promise<{ address: string; family: 4 | 6 }> {
   const v = isIP(host);
   if (v !== 0) {
-    if (!isAllowedAlertIp(host, allow)) throw new AlertSendError("webhook_ssrf");
+    if (!isAllowedAlertIp(host, allow)) throw new AlertSendError(ssrfClass);
     return { address: host, family: v === 6 ? 6 : 4 };
   }
   let all: Array<{ address: string; family: number }>;
@@ -89,7 +89,7 @@ async function pinHost(host: string, allow: BlockList, lookup: LookupFn): Promis
   catch { throw new AlertSendError("dns"); }
   if (all.length === 0) throw new AlertSendError("dns");
   for (const a of all) {
-    if (!isAllowedAlertIp(a.address, allow)) throw new AlertSendError("webhook_ssrf");
+    if (!isAllowedAlertIp(a.address, allow)) throw new AlertSendError(ssrfClass);
   }
   const first = all[0]!;
   return { address: first.address, family: first.family === 6 ? 6 : 4 };

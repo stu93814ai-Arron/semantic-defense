@@ -17,6 +17,7 @@ import { badJsonError, installErrorHandler, safeErr, withSafeReqLog } from "./er
 import { runJudgeTick, type TickOpts } from "./judge.js";
 import { deliverDueAlerts, enabledAlertChannels, type AlertChannel, type AlertSender } from "./alert-outbox.js";
 import { parseWebhookConfig, webhookSender, type WebhookHooks } from "./alert-webhook.js";
+import { parseSyslogConfig, syslogSender, type SyslogHooks } from "./alert-syslog.js";
 
 export type BuildAppOptions = {
   idleTimeoutMs?: number;
@@ -47,6 +48,7 @@ export type BuildAppOptions = {
   alertSenders?: Partial<Record<AlertChannel, AlertSender>>;
   /** 測試用：webhook 的 CA／lookup／時鐘。 */
   webhookHooks?: WebhookHooks;
+  syslogHooks?: SyslogHooks;
 };
 
 export type ControlApi = FastifyInstance;
@@ -244,6 +246,8 @@ function defaultSenders(opts: BuildAppOptions): Partial<Record<AlertChannel, Ale
   const senders: Partial<Record<AlertChannel, AlertSender>> = { ...opts.alertSenders };
   const webhook = parseWebhookConfig(process.env);
   if (webhook && !senders.webhook) senders.webhook = webhookSender(webhook, opts.webhookHooks ?? {});
+  const syslog = parseSyslogConfig(process.env);
+  if (syslog && !senders.syslog) senders.syslog = syslogSender(syslog, opts.syslogHooks ?? {});
   return senders;
 }
 
@@ -257,6 +261,7 @@ function hookTimers(app: ControlApi, db: Db, now: Clock, opts: BuildAppOptions):
 export async function buildApp(opts: BuildAppOptions = {}): Promise<ControlApi> {
   assertBreakerLimit(opts.autoBreakerPerHour);
   parseWebhookConfig(process.env);
+  parseSyslogConfig(process.env);
   const idleTimeoutMs = opts.idleTimeoutMs ?? 30 * 60_000;
   const rl = opts.loginRateLimit ?? { maxFailures: 5, windowMs: 60_000 };
   const now = opts.now ?? Date.now;
