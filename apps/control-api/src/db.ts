@@ -16,6 +16,9 @@ export type Db = {
 /** 只能查詢的介面（Db 本身或交易中的 client）；稽核等寫入函式吃這個，才能放進 tx。 */
 export type Queryable = Pick<Db, "query">;
 
+/** 種子刪除時的 warn（只帶筆數，不含 IP／CIDR）。 */
+export type SeedLog = { warn: (obj: Record<string, unknown>, msg: string) => void };
+
 /** 第 2 階段 schema 語句（逐條執行，搭配 advisory lock 避免並行建表競態）。 */
 const SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS users (
@@ -198,53 +201,73 @@ export async function runTx<T>(pool: TxPool, fn: (q: Queryable) => Promise<T>): 
   }
 }
 
-async function seedCriticalAllowlist(client: pg.PoolClient, now: () => number): Promise<void> {
-  const cidrs = parseCriticalAllowlist(process.env.SD_CRITICAL_ALLOWLIST);
+async function deleteStaleSeeds(
+  q: Queryable, at: number, log: SeedLog | undefined, keep: string[] | null,
+): Promise<void> {
+  const stale = keep === null
+    ? await q.query<AllowlistRow>(
+        `DELETE FROM allowlist_entries WHERE created_by = $1 RETURNING ${ALLOWLIST_COLS}`,
+        [CRITICAL_ALLOWLIST_ACTOR],
+      )
+    : await q.query<AllowlistRow>(
+        `DELETE FROM allowlist_entries
+          WHERE created_by = $1 AND NOT (cidr = ANY($2::text[]))
+          RETURNING ${ALLOWLIST_COLS}`,
+        [CRITICAL_ALLOWLIST_ACTOR, keep],
+      );
+  for (const row of stale.rows) {
+    await writeAudit(q, {
+      action: "whitelist.delete", actor: CRITICAL_ALLOWLIST_ACTOR, sensor_id: null, at,
+      detail: { ...toAllowlistEntry(row) },
+    });
+  }
+  if (stale.rows.length > 0) log?.warn({ count: stale.rows.length }, "critical allowlist seeds deleted");
+}
+
+async function upsertSeedCidrs(q: Queryable, at: number, cidrs: string[]): Promise<{ cidr: string; entry_id: string }[]> {
+  const current: { cidr: string; entry_id: string }[] = [];
+  for (const cidr of cidrs) {
+    const inserted = await q.query<AllowlistRow>(
+      `INSERT INTO allowlist_entries (${ALLOWLIST_COLS})
+       VALUES (gen_random_uuid(), $1, $2, $3, $4, NULL)
+       ON CONFLICT (cidr) WHERE created_by = 'system:install' DO NOTHING
+       RETURNING ${ALLOWLIST_COLS}`,
+      [cidr, CRITICAL_ALLOWLIST_REASON, CRITICAL_ALLOWLIST_ACTOR, at],
+    );
+    const row = inserted.rows[0];
+    if (row) {
+      const e = toAllowlistEntry(row);
+      await writeAudit(q, {
+        action: "whitelist.create", actor: CRITICAL_ALLOWLIST_ACTOR, sensor_id: null, at, detail: { ...e },
+      });
+      current.push({ cidr, entry_id: e.entry_id });
+    } else {
+      const existing = (await q.query<{ entry_id: string }>(
+        "SELECT entry_id FROM allowlist_entries WHERE cidr = $1 AND created_by = $2",
+        [cidr, CRITICAL_ALLOWLIST_ACTOR],
+      )).rows[0];
+      if (!existing) throw new Error("critical allowlist seed row missing");
+      current.push({ cidr, entry_id: existing.entry_id });
+    }
+  }
+  return current;
+}
+
+async function seedCriticalAllowlist(client: pg.PoolClient, now: () => number, log?: SeedLog): Promise<void> {
+  const spec = parseCriticalAllowlist(process.env.SD_CRITICAL_ALLOWLIST);
+  if (spec.kind === "leave") return;
   const at = now();
   const q: Queryable = {
     query: async <R>(sql: string, params?: unknown[]) => ({ rows: (await client.query(sql, params)).rows as R[] }),
   };
   await client.query("BEGIN");
   try {
-    const stale = await q.query<AllowlistRow>(
-      `DELETE FROM allowlist_entries
-        WHERE created_by = $1 AND NOT (cidr = ANY($2::text[]))
-        RETURNING ${ALLOWLIST_COLS}`,
-      [CRITICAL_ALLOWLIST_ACTOR, cidrs],
-    );
-    for (const row of stale.rows) {
-      await writeAudit(q, {
-        action: "whitelist.delete", actor: CRITICAL_ALLOWLIST_ACTOR, sensor_id: null, at,
-        detail: { ...toAllowlistEntry(row) },
-      });
-    }
-    const current: { cidr: string; entry_id: string }[] = [];
-    for (const cidr of cidrs) {
-      const inserted = await q.query<AllowlistRow>(
-        `INSERT INTO allowlist_entries (${ALLOWLIST_COLS})
-         VALUES (gen_random_uuid(), $1, $2, $3, $4, NULL)
-         ON CONFLICT (cidr) WHERE created_by = 'system:install' DO NOTHING
-         RETURNING ${ALLOWLIST_COLS}`,
-        [cidr, CRITICAL_ALLOWLIST_REASON, CRITICAL_ALLOWLIST_ACTOR, at],
-      );
-      const row = inserted.rows[0];
-      if (row) {
-        const e = toAllowlistEntry(row);
-        await writeAudit(q, {
-          action: "whitelist.create", actor: CRITICAL_ALLOWLIST_ACTOR, sensor_id: null, at, detail: { ...e },
-        });
-        current.push({ cidr, entry_id: e.entry_id });
-      } else {
-        const existing = (await q.query<{ entry_id: string }>(
-          "SELECT entry_id FROM allowlist_entries WHERE cidr = $1 AND created_by = $2",
-          [cidr, CRITICAL_ALLOWLIST_ACTOR],
-        )).rows[0];
-        if (!existing) throw new Error("critical allowlist seed row missing");
-        current.push({ cidr, entry_id: existing.entry_id });
+    await deleteStaleSeeds(q, at, log, spec.kind === "clear" ? null : spec.cidrs);
+    if (spec.kind === "cidrs") {
+      const current = await upsertSeedCidrs(q, at, spec.cidrs);
+      for (const s of current) {
+        await revokeContainedBlocks(q, { cidr: s.cidr, allowlistEntryId: s.entry_id, actor: CRITICAL_ALLOWLIST_ACTOR, at });
       }
-    }
-    for (const s of current) {
-      await revokeContainedBlocks(q, { cidr: s.cidr, allowlistEntryId: s.entry_id, actor: CRITICAL_ALLOWLIST_ACTOR, at });
     }
     await client.query("COMMIT");
   } catch (err) {
@@ -253,24 +276,24 @@ async function seedCriticalAllowlist(client: pg.PoolClient, now: () => number): 
   }
 }
 
-async function migrate(client: pg.PoolClient, now: () => number): Promise<void> {
+async function migrate(client: pg.PoolClient, now: () => number, log?: SeedLog): Promise<void> {
   await client.query("SELECT pg_advisory_lock($1)", [SCHEMA_LOCK]);
   try {
     for (const sql of SCHEMA_STATEMENTS) {
       await client.query(sql);
     }
-    await seedCriticalAllowlist(client, now);
+    await seedCriticalAllowlist(client, now, log);
   } finally {
     await client.query("SELECT pg_advisory_unlock($1)", [SCHEMA_LOCK]);
   }
 }
 
 /** 以連線字串開 Postgres、套用 schema。連線字串僅來自參數／環境，不寫死密鑰。 */
-export async function openDb(databaseUrl: string, opts?: { now?: () => number }): Promise<Db> {
+export async function openDb(databaseUrl: string, opts?: { now?: () => number; log?: SeedLog }): Promise<Db> {
   const pool = new pg.Pool({ connectionString: databaseUrl });
   const client = await pool.connect();
   try {
-    await migrate(client, opts?.now ?? Date.now);
+    await migrate(client, opts?.now ?? Date.now, opts?.log);
   } catch (err) {
     client.release();
     await pool.end();

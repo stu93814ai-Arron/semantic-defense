@@ -217,33 +217,38 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<ControlApi> 
   const idleTimeoutMs = opts.idleTimeoutMs ?? 30 * 60_000;
   const rl = opts.loginRateLimit ?? { maxFailures: 5, windowMs: 60_000 };
   const now = opts.now ?? Date.now;
-  const db = await openDb(resolveDatabaseUrl(opts.databaseUrl), { now });
-  const limiter = new LoginLimiter(db, rl.maxFailures, rl.windowMs, now);
   const app = Fastify({ trustProxy: opts.trustProxy ?? false, logger: withSafeReqLog(opts.logger) });
-  installErrorHandler(app);
-  allowEmptyJson(app);
-  app.decorate("db", db);
-  installRouteAudit(app);
-  const stopJudge = startJudgeTimer(app, db, now, opts.judgeIntervalMs ?? 5000, { autoBreakerPerHour: opts.autoBreakerPerHour, autoListEnabled: opts.autoListEnabled });
-  app.addHook("onClose", async () => { await stopJudge(); await db.close(); });
-  app.addHook("preHandler", createAuthPreHandler(db, idleTimeoutMs, now));
-  registerLogin(app, db, limiter, now);
-  registerSessionRoutes(app, db);
-  registerRoleRoutes(app);
-  registerOwnerRoutes(app, db);
-  registerSensorTokenRoutes(app, db, now);
-  registerAuditRoute(app, db);
-  registerThresholdRoutes(app, db, now);
-  registerWhitelistRoutes(app, db, now);
-  registerBlacklistRoutes(app, db, now);
-  app.setNotFoundHandler((_req, reply) => reply.code(404).send({ error: "Not Found" }));
-  if (opts.beforeReady) await opts.beforeReady(app);
-  if (opts.management) {
-    await app.listen({ host: opts.management.host, port: opts.management.port });
-  } else {
-    await app.ready();
+  try {
+    const db = await openDb(resolveDatabaseUrl(opts.databaseUrl), { now, log: app.log });
+    const limiter = new LoginLimiter(db, rl.maxFailures, rl.windowMs, now);
+    installErrorHandler(app);
+    allowEmptyJson(app);
+    app.decorate("db", db);
+    installRouteAudit(app);
+    const stopJudge = startJudgeTimer(app, db, now, opts.judgeIntervalMs ?? 5000, { autoBreakerPerHour: opts.autoBreakerPerHour, autoListEnabled: opts.autoListEnabled });
+    app.addHook("onClose", async () => { await stopJudge(); await db.close(); });
+    app.addHook("preHandler", createAuthPreHandler(db, idleTimeoutMs, now));
+    registerLogin(app, db, limiter, now);
+    registerSessionRoutes(app, db);
+    registerRoleRoutes(app);
+    registerOwnerRoutes(app, db);
+    registerSensorTokenRoutes(app, db, now);
+    registerAuditRoute(app, db);
+    registerThresholdRoutes(app, db, now);
+    registerWhitelistRoutes(app, db, now);
+    registerBlacklistRoutes(app, db, now);
+    app.setNotFoundHandler((_req, reply) => reply.code(404).send({ error: "Not Found" }));
+    if (opts.beforeReady) await opts.beforeReady(app);
+    if (opts.management) {
+      await app.listen({ host: opts.management.host, port: opts.management.port });
+    } else {
+      await app.ready();
+    }
+    return app;
+  } catch (err) {
+    await app.close();
+    throw err;
   }
-  return app;
 }
 
 /** 再匯出測試用 seed；實作與明碼密碼在 seed-phase2.ts（生產勿呼叫）。 */
