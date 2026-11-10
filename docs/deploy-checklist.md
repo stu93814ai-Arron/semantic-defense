@@ -15,6 +15,7 @@
 - sensor-ingest 新版啟動時跑遷移（`packages/flow-store/src/write.ts` 的 `ensureFlowSchema`），補 `ts_ms` 欄並分批回填。
 - 滾動升級期間，舊版 ingest 寫入的列 ts 合法但 `ts_ms` 為 NULL：若該列 `received_at` 落後表內最新 `received_at`（`received_at <= now`）不超過 `PENDING_BACKFILL_MAX_LAG_MS`（10 分鐘），新版判定 cursor 會停在該列之前（log `{pending_backfill:n}`），回填補上後再判定分組。全部 ingest 升級完後再重啟一次 sensor-ingest，即可補齊。
 - **回填結束後才出現的可轉換 NULL**（例如舊版 ingest／restore）：若最早一筆待回填列的 `received_at` 已落後最新 `received_at` 超過 10 分鐘，判定會略過該列、不計分組，與毒列相同，並計 `{stale_pending:n}`、寫一行 error（只含筆數，不含 IP／ts）。上限內行為不變。沒有定期回填，需再啟動 ingest 才會補 `ts_ms`。lag 基準是最新 `received_at` 而不是 wall-clock now，以免首次回填時歷史列全部被當成過期而永久略過。
+- **超過 lag 上限而被略過的列永遠不會再被判定**（cursor 已越過，不會倒退；之後回填補上 `ts_ms` 也不會重判）。因此若首次升級的回填本身跑超過 10 分鐘，期間舊版 ingest 寫入的可轉換 NULL 列可能被略過。
 - **已接受的缺口**：若順序沒守住，新版判定的 cursor 已越過某些列之後，舊版 ingest 才寫入 `ts_ms` 為 NULL 的列，這些列下次啟動會被回填，但**不會再被判定**（cursor 不會倒退）。這是已接受的缺口，所以務必先升完所有 ingest。
 
 **每次啟動的成本（Q2）**：
