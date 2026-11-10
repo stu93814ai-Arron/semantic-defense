@@ -34,5 +34,5 @@ export type BuildAppOptions = ImplBuildAppOptions & {
 export async function buildApp(
   opts: BuildAppOptions = {},
 ): Promise<ControlApi> {
-  return buildAppImpl({ logger: false, judgeIntervalMs: 0, ...opts } as ImplBuildAppOptions);
+  return buildAppImpl({ logger: false, judgeIntervalMs: 0, alertDeliverIntervalMs: 0, ...opts } as ImplBuildAppOptions);
 }

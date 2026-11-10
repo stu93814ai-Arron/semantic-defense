@@ -15,6 +15,7 @@ import { registerWhitelistRoutes } from "./whitelist.js";
 import { registerBlacklistRoutes } from "./blacklist.js";
 import { badJsonError, installErrorHandler, safeErr, withSafeReqLog } from "./errors.js";
 import { runJudgeTick, type TickOpts } from "./judge.js";
+import { assertWebhookSecret, deliverDueAlerts, enabledAlertChannels, type AlertChannel, type AlertSender } from "./alert-outbox.js";
 
 export type BuildAppOptions = {
   idleTimeoutMs?: number;
@@ -37,6 +38,12 @@ export type BuildAppOptions = {
   autoListEnabled?: boolean;
   /** 測試用：ready／listen 前掛額外路由（例如無 roles 探針）。 */
   beforeReady?: (app: ControlApi) => void | Promise<void>;
+  /** 告警推送間隔（ms）；預設 1000，0＝關閉（測試直接呼叫 deliverDueAlerts）。 */
+  alertDeliverIntervalMs?: number;
+  /** 已啟用的告警通道；省略則依環境變數。 */
+  alertChannels?: readonly AlertChannel[];
+  /** 測試用發送器（未實作的通道不發送、不耗次數）。 */
+  alertSenders?: Partial<Record<AlertChannel, AlertSender>>;
 };
 
 export type ControlApi = FastifyInstance;
@@ -212,8 +219,34 @@ function startJudgeTimer(app: ControlApi, db: Db, now: Clock, ms: number, opts: 
   return async () => { clearInterval(t); await inflight; };
 }
 
+/** 定期發送到期 outbox（同一實例不重疊）；發送在交易外。 */
+function startAlertTimer(app: ControlApi, db: Db, now: Clock, ms: number, senders: Partial<Record<AlertChannel, AlertSender>>): () => Promise<void> {
+  if (ms <= 0) return async () => {};
+  let inflight: Promise<unknown> | undefined;
+  const t = setInterval(() => {
+    inflight ??= deliverDueAlerts(db, now(), senders, app.log)
+      .catch((err: unknown) => app.log.error({ err: safeErr(err as Parameters<typeof safeErr>[0]) }, "alert delivery failed"))
+      .finally(() => { inflight = undefined; });
+  }, ms);
+  return async () => { clearInterval(t); await inflight; };
+}
+
+async function readyOrListen(app: ControlApi, opts: BuildAppOptions): Promise<void> {
+  if (opts.beforeReady) await opts.beforeReady(app);
+  if (opts.management) await app.listen({ host: opts.management.host, port: opts.management.port });
+  else await app.ready();
+}
+
+function hookTimers(app: ControlApi, db: Db, now: Clock, opts: BuildAppOptions): void {
+  const alertChannels = enabledAlertChannels(process.env, opts.alertChannels);
+  const stopJudge = startJudgeTimer(app, db, now, opts.judgeIntervalMs ?? 5000, { autoBreakerPerHour: opts.autoBreakerPerHour, autoListEnabled: opts.autoListEnabled, alertChannels });
+  const stopAlert = startAlertTimer(app, db, now, opts.alertDeliverIntervalMs ?? 1000, opts.alertSenders ?? {});
+  app.addHook("onClose", async () => { await stopJudge(); await stopAlert(); await db.close(); });
+}
+
 export async function buildApp(opts: BuildAppOptions = {}): Promise<ControlApi> {
   assertBreakerLimit(opts.autoBreakerPerHour);
+  assertWebhookSecret(process.env);
   const idleTimeoutMs = opts.idleTimeoutMs ?? 30 * 60_000;
   const rl = opts.loginRateLimit ?? { maxFailures: 5, windowMs: 60_000 };
   const now = opts.now ?? Date.now;
@@ -225,8 +258,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<ControlApi> 
     allowEmptyJson(app);
     app.decorate("db", db);
     installRouteAudit(app);
-    const stopJudge = startJudgeTimer(app, db, now, opts.judgeIntervalMs ?? 5000, { autoBreakerPerHour: opts.autoBreakerPerHour, autoListEnabled: opts.autoListEnabled });
-    app.addHook("onClose", async () => { await stopJudge(); await db.close(); });
+    hookTimers(app, db, now, opts);
     app.addHook("preHandler", createAuthPreHandler(db, idleTimeoutMs, now));
     registerLogin(app, db, limiter, now);
     registerSessionRoutes(app, db);
@@ -238,12 +270,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<ControlApi> 
     registerWhitelistRoutes(app, db, now);
     registerBlacklistRoutes(app, db, now);
     app.setNotFoundHandler((_req, reply) => reply.code(404).send({ error: "Not Found" }));
-    if (opts.beforeReady) await opts.beforeReady(app);
-    if (opts.management) {
-      await app.listen({ host: opts.management.host, port: opts.management.port });
-    } else {
-      await app.ready();
-    }
+    await readyOrListen(app, opts);
     return app;
   } catch (err) {
     await app.close();
