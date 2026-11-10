@@ -4,19 +4,9 @@
 
 ## R9
 
-**啟動時建索引會擋寫入**：`ensureFlowSchema` 啟動時用非 concurrent 的 `CREATE INDEX IF NOT EXISTS`，本切片新增 `flow_events_group_ms`。大表上建索引期間會擋住 flow_events 的寫入，同時持有 advisory lock、並跑回填。
+**啟動時已用 CONCURRENTLY 建立 `flow_events_group_ms`**：`ensureFlowSchema` 會自動 `CREATE INDEX CONCURRENTLY`（`statement_timeout` 10 分鐘）。一般不必再手動建索引。
 
-- 部署前先估 flow_events 的量（見 R15 的估量 SQL）。
-- 量大時，在維護窗口手動先建索引，再啟動新版；啟動時的 `IF NOT EXISTS` 就會跳過：
-
-```sql
--- 不能在交易內執行
-CREATE INDEX CONCURRENTLY IF NOT EXISTS flow_events_group_ms
-  ON flow_events (sensor_id, app_id, src_ip, ts_ms);
-```
-
-- 若 CONCURRENTLY 中途失敗會留下 INVALID 索引，需先 `DROP INDEX CONCURRENTLY flow_events_group_ms` 再重建。
-- 之後任何新增的索引都比照辦理。
+若啟動失敗或逾時：檢查是否留下 INVALID 索引，先 `DROP INDEX CONCURRENTLY flow_events_group_ms`（不得在交易內），再重試或再啟動一次。
 
 ## R15：flow_events.ts_ms 遷移與 ts_ms 為 NULL 的舊列
 
@@ -46,12 +36,7 @@ SELECT count(*) AS total, count(*) FILTER (WHERE ts_ms IS NULL) AS null_ts FROM 
 
 ## R-C：首次升級的鎖、表大小與舊 infinity 列
 
-(a) **啟動時的 DROP INDEX 與 ALTER 都拿 AccessExclusive**。部署前先在維護窗口手動移除舊索引，啟動時的 `DROP INDEX IF EXISTS` 就會跳過：
-
-```sql
--- 不能在交易內執行
-DROP INDEX CONCURRENTLY IF EXISTS flow_events_group;
-```
+(a) **舊索引 `flow_events_group` 啟動時已用 `DROP INDEX CONCURRENTLY` 移除**（`statement_timeout` 10 分鐘）。一般不必再手動刪。若失敗或逾時，再執行 `DROP INDEX CONCURRENTLY IF EXISTS flow_events_group`（不得在交易內）並重試。
 
 (b) **首次回填會重寫整張表**：每一列都更新一次 `ts_ms`。預期表大小約翻倍（直到 VACUUM 回收），並產生大量 WAL。部署前確認磁碟與複寫／備份的 WAL 空間足夠。
 
