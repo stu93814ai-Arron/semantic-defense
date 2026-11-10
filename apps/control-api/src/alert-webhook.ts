@@ -122,12 +122,17 @@ function readResponse(res: import("node:http").IncomingMessage, ok: () => void, 
   res.on("error", fail);
 }
 
+/** 自訂 Agent，以空白 proxyEnv 隔離子行程 NODE_USE_ENV_PROXY／HTTPS_PROXY。 */
+export function createWebhookAgent(ca?: string): https.Agent {
+  return new https.Agent({ keepAlive: false, rejectUnauthorized: true, ca, proxyEnv: {}, autoSelectFamily: false });
+}
+
 function postPinned(cfg: WebhookConfig, body: string, header: string, pin: { address: string; family: 4 | 6 }, hooks: WebhookHooks, remain: number): Promise<void> {
-  const agent = new https.Agent({ keepAlive: false, rejectUnauthorized: true, ca: hooks.ca });
+  const agent = createWebhookAgent(hooks.ca);
   return new Promise<void>((resolve, reject) => {
     const fail = (e: unknown) => reject(e);
     const req = https.request({
-      host: cfg.hrefHost,
+      host: pin.address,
       port: cfg.port,
       path: cfg.path,
       method: "POST",
@@ -136,17 +141,21 @@ function postPinned(cfg: WebhookConfig, body: string, header: string, pin: { add
       ca: hooks.ca,
       agent,
       timeout: remain,
-      headers: { "content-type": "application/json", "content-length": Buffer.byteLength(body), "x-sd-alert-signature": header },
-      lookup: ((_h, options, cb) => {
-        const all = typeof options === "object" && options !== null && "all" in options && Boolean((options as { all?: boolean }).all);
-        if (all) (cb as (e: null, a: Array<{ address: string; family: 4 | 6 }>) => void)(null, [pin]);
-        else (cb as (e: null, a: string, f: 4 | 6) => void)(null, pin.address, pin.family);
-      }) as NonNullable<https.RequestOptions["lookup"]>,
+      lookup: ((_h, opts, cb) => {
+        const done = typeof opts === "function" ? opts : cb;
+        done(null, pin.address, pin.family);
+      }) as https.RequestOptions["lookup"],
+      headers: {
+        host: cfg.hrefHost,
+        "content-type": "application/json",
+        "content-length": Buffer.byteLength(body),
+        "x-sd-alert-signature": header,
+      },
     }, (res) => readResponse(res, () => resolve(), fail));
     req.setTimeout(remain, () => { req.destroy(); fail(new AlertSendError("webhook_timeout")); });
     req.on("error", fail);
     req.end(body);
-  }).finally(() => agent.destroy());
+  }).finally(() => { if (agent !== https.globalAgent) agent.destroy(); });
 }
 
 async function postWebhook(cfg: WebhookConfig, row: OutboxRow, hooks: WebhookHooks): Promise<void> {
