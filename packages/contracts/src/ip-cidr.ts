@@ -212,3 +212,56 @@ export function assertFlowSingleIp(raw: string): boolean {
   if (!parts) return false;
   return formatCanonicalIpv6(parts) === raw && !isIpv4Mapped(parts);
 }
+
+/** A 組領航員裁示（未經使用者確認）；落在總召 §21:09 R10 範圍內。不含 100::/64、2001:2::/48、198.18/15。 */
+const INGEST_RESERVED_V4: ReadonlyArray<readonly [string, number]> = [
+  ["0.0.0.0", 8], ["127.0.0.0", 8], ["169.254.0.0", 16],
+  ["224.0.0.0", 4], ["240.0.0.0", 4],
+  ["192.0.2.0", 24], ["198.51.100.0", 24], ["203.0.113.0", 24],
+];
+
+function rewriteV4Tail(addr: string): string | null {
+  if (!addr.includes(".")) return addr;
+  const i = addr.lastIndexOf(":");
+  if (i < 0) return null;
+  const v4 = addr.slice(i + 1);
+  if (ipVersion(v4) !== 4) return null;
+  const [a, b, c, d] = v4.split(".").map(Number);
+  if (a === undefined || b === undefined || c === undefined || d === undefined) return null;
+  return `${addr.slice(0, i + 1)}${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
+}
+
+function mappedV4(addr: string): string | null {
+  const s = rewriteV4Tail(addr);
+  if (s === null) return null;
+  const parts = expandIpv6(s);
+  if (!parts || !isIpv4Mapped(parts)) return null;
+  return `${parts[6]! >> 8}.${parts[6]! & 0xff}.${parts[7]! >> 8}.${parts[7]! & 0xff}`;
+}
+
+function reservedIngestV4(ip: string): boolean {
+  const n = ipv4ToInt(ip);
+  return INGEST_RESERVED_V4.some(([base, bits]) => ((n ^ ipv4ToInt(base)) >>> (32 - bits)) === 0);
+}
+
+function reservedIngestV6(parts: number[]): boolean {
+  if (parts.every((p) => p === 0)) return true;
+  if (parts.slice(0, 7).every((p) => p === 0) && parts[7] === 1) return true;
+  if ((parts[0]! & 0xffc0) === 0xfe80) return true;
+  if ((parts[0]! & 0xff00) === 0xff00) return true;
+  if (parts[0] === 0x2001 && parts[1] === 0xdb8) return true;
+  return parts[0] === 0x3fff && (parts[1]! & 0xf000) === 0;
+}
+
+/**
+ * ingest／hostCidr 共用的保留與文件範圍（含 ::ffff: 內嵌 v4）。
+ * RFC1918 與 ULA 回 false。非法字串回 false。
+ */
+export function isReservedForIngest(ip: string): boolean {
+  if (typeof ip !== "string" || ip.includes("/") || ip.includes("%") || ip.includes(" ")) return false;
+  const inner = mappedV4(ip);
+  if (inner !== null) return reservedIngestV4(inner);
+  if (ipVersion(ip) === 4) return reservedIngestV4(ip);
+  const parts = expandIpv6(ip);
+  return parts !== null && reservedIngestV6(parts);
+}

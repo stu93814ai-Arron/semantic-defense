@@ -9,7 +9,7 @@ import { Id, NonNegInt } from "./primitives.js";
 
 export const CONTRACTS_PACKAGE = "@semantic-defense/contracts";
 export { Id, NonNegInt, Port, Rfc3339, SingleIp } from "./primitives.js";
-export { parseCidr, assertIpOrCidr, assertAllowlistCidr, isHostPrefix } from "./ip-cidr.js";
+export { parseCidr, assertIpOrCidr, assertAllowlistCidr, isHostPrefix, isReservedForIngest } from "./ip-cidr.js";
 
 const Family = z.enum(["read", "write", "auth", "admin"]);
 export type Family = z.infer<typeof Family>;
