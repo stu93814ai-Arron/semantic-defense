@@ -176,3 +176,27 @@ describe("發送迴圈：優先順序與保留", () => {
     expect(logs.some((o) => "purged" in o && Object.keys(o).join() === "purged")).toBe(true);
   });
 });
+
+describe("發送迴圈：單筆整體期限", () => {
+  it("卡住的通道在期限內記為逾時失敗，其他通道仍完成，且總時間不超過租約", async () => {
+    await boot();
+    await app.db.tx((q) => enqueueAlerts(q, {
+      channels: ["email", "webhook", "syslog"], kind: "auto_list", now: NOW, entryId: "e1", caseId: "c1",
+    }));
+    const deadline = 200;
+    const t0 = Date.now();
+    const out = await deliverDueAlerts(app.db, NOW, {
+      email: async () => undefined,
+      webhook: async () => new Promise(() => { /* 永不結束 */ }),
+      syslog: async () => undefined,
+    }, undefined, { sendDeadlineMs: deadline });
+    const elapsed = Date.now() - t0;
+    expect(elapsed).toBeLessThanOrEqual(deadline + 800);
+    expect(elapsed).toBeLessThan(60_000);
+    expect(out).toEqual({ delivered: 2, failed: 0, retried: 1 });
+    const byCh = Object.fromEntries((await rows()).map((r) => [r.channel, r]));
+    expect(byCh.email).toMatchObject({ status: "delivered" });
+    expect(byCh.syslog).toMatchObject({ status: "delivered" });
+    expect(byCh.webhook).toMatchObject({ status: "pending", attempts: 1, error_class: "webhook_timeout" });
+  }, 8_000);
+});

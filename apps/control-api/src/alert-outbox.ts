@@ -10,6 +10,7 @@ export const ALERT_MAX_ATTEMPTS = 8;
 export const ALERT_BACKOFF_START_MS = 1_000;
 export const ALERT_BACKOFF_CAP_MS = 15 * 60_000;
 export const ALERT_CLAIM_LEASE_MS = 60_000;
+export const ALERT_SEND_DEADLINE_MS = ALERT_CLAIM_LEASE_MS;
 export const ALERT_DELIVER_BATCH = 16;
 export const ALERT_FAILED_RETENTION_MS = 30 * 24 * 60 * 60_000;
 export const ALERT_OUTBOX_MAX_ROWS_DEFAULT = 10_000;
@@ -212,25 +213,45 @@ function configuredChannels(senders: Partial<Record<AlertChannel, AlertSender>>)
   return out;
 }
 
+function sendTimeoutClass(channel: AlertChannel): string {
+  if (channel === "email") return "smtp_timeout";
+  if (channel === "webhook") return "webhook_timeout";
+  return "syslog_timeout";
+}
+
+function withSendDeadline<T>(p: Promise<T>, ms: number, errorClass: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new AlertSendError(errorClass)), ms);
+    p.then((v) => { clearTimeout(timer); resolve(v); }, (e) => { clearTimeout(timer); reject(e); });
+  });
+}
+
+async function deliverClaimedRow(
+  db: Db, row: OutboxRow, senders: Partial<Record<AlertChannel, AlertSender>>,
+  now: number, log: AlertLog | undefined, deadlineMs: number,
+  out: { delivered: number; failed: number; retried: number },
+): Promise<void> {
+  const send = senderOf(senders, row.channel);
+  if (!send) return;
+  try {
+    await withSendDeadline(send(row), deadlineMs, sendTimeoutClass(row.channel));
+    await db.tx((q) => markDelivered(q, row.id, now));
+    out.delivered += 1;
+  } catch (err) {
+    const result = await db.tx((q) => markFailure(q, row, now, errorClassOf(err), log));
+    if (result === "failed") out.failed += 1;
+    else out.retried += 1;
+  }
+}
+
 export async function deliverDueAlerts(
   db: Db, now: number, senders: Partial<Record<AlertChannel, AlertSender>>, log?: AlertLog,
-  opts: { maxRows?: number } = {},
+  opts: { maxRows?: number; sendDeadlineMs?: number } = {},
 ): Promise<{ delivered: number; failed: number; retried: number }> {
   await purgeAlertOutbox(db, now, opts.maxRows ?? ALERT_OUTBOX_MAX_ROWS_DEFAULT, log);
   const claimed = await db.tx((q) => claimDue(q, now, configuredChannels(senders), ALERT_DELIVER_BATCH));
   const out = { delivered: 0, failed: 0, retried: 0 };
-  for (const row of claimed) {
-    const send = senderOf(senders, row.channel);
-    if (!send) continue;
-    try {
-      await send(row);
-      await db.tx((q) => markDelivered(q, row.id, now));
-      out.delivered += 1;
-    } catch (err) {
-      const result = await db.tx((q) => markFailure(q, row, now, errorClassOf(err), log));
-      if (result === "failed") out.failed += 1;
-      else out.retried += 1;
-    }
-  }
+  const deadlineMs = opts.sendDeadlineMs ?? ALERT_SEND_DEADLINE_MS;
+  await Promise.all(claimed.map((row) => deliverClaimedRow(db, row, senders, now, log, deadlineMs, out)));
   return out;
 }
