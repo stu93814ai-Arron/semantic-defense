@@ -135,20 +135,25 @@ async function claimDue(q: Queryable, now: number, channels: readonly AlertChann
   return r.rows;
 }
 
-async function markDelivered(q: Queryable, id: string, now: number): Promise<void> {
+async function markDelivered(q: Queryable, row: OutboxRow, now: number): Promise<void> {
   await q.query(
-    "UPDATE alert_outbox SET status = 'delivered', delivered_at = $2, error_class = NULL WHERE id = $1",
-    [id, now],
+    `UPDATE alert_outbox SET status = 'delivered', delivered_at = $2, error_class = NULL
+      WHERE id = $1 AND status = 'pending' AND next_attempt_at = $3`,
+    [row.id, now, row.next_attempt_at],
   );
 }
 
-async function markFailure(q: Queryable, row: OutboxRow, now: number, errorClass: string, log?: AlertLog): Promise<"failed" | "retried"> {
+export async function markFailure(q: Queryable, row: OutboxRow, now: number, errorClass: string, log?: AlertLog): Promise<"failed" | "retried" | "ignored"> {
   const attempts = row.attempts + 1;
+  const lease = row.next_attempt_at;
   if (attempts >= ALERT_MAX_ATTEMPTS) {
-    await q.query(
-      "UPDATE alert_outbox SET status = 'failed', attempts = $2, error_class = $3, next_attempt_at = $4, failed_at = $4 WHERE id = $1",
-      [row.id, attempts, errorClass, now],
+    const r = await q.query<{ id: string }>(
+      `UPDATE alert_outbox SET status = 'failed', attempts = $2, error_class = $3, next_attempt_at = $4, failed_at = $4
+        WHERE id = $1 AND status = 'pending' AND next_attempt_at = $5
+        RETURNING id`,
+      [row.id, attempts, errorClass, now, lease],
     );
+    if (r.rows.length !== 1) return "ignored";
     await writeAudit(q, {
       action: "alert.delivery_failed", actor: "system:auto", sensor_id: null, at: now,
       detail: { delivery_id: String(row.id), channel: row.channel, kind: row.kind, error_class: errorClass, attempts },
@@ -156,11 +161,13 @@ async function markFailure(q: Queryable, row: OutboxRow, now: number, errorClass
     log?.error({ failed: 1, attempts }, "alert delivery exhausted");
     return "failed";
   }
-  await q.query(
-    "UPDATE alert_outbox SET attempts = $2, error_class = $3, next_attempt_at = $4 WHERE id = $1",
-    [row.id, attempts, errorClass, now + alertBackoffMs(attempts)],
+  const r = await q.query<{ id: string }>(
+    `UPDATE alert_outbox SET attempts = $2, error_class = $3, next_attempt_at = $4
+      WHERE id = $1 AND status = 'pending' AND next_attempt_at = $5
+      RETURNING id`,
+    [row.id, attempts, errorClass, now + alertBackoffMs(attempts), lease],
   );
-  return "retried";
+  return r.rows.length === 1 ? "retried" : "ignored";
 }
 
 export async function purgeAlertOutbox(
@@ -235,12 +242,12 @@ async function deliverClaimedRow(
   if (!send) return;
   try {
     await withSendDeadline(send(row), deadlineMs, sendTimeoutClass(row.channel));
-    await db.tx((q) => markDelivered(q, row.id, now));
+    await db.tx((q) => markDelivered(q, row, now));
     out.delivered += 1;
   } catch (err) {
     const result = await db.tx((q) => markFailure(q, row, now, errorClassOf(err), log));
     if (result === "failed") out.failed += 1;
-    else out.retried += 1;
+    else if (result === "retried") out.retried += 1;
   }
 }
 

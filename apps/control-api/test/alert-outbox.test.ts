@@ -4,7 +4,7 @@ import pg from "pg";
 import { autoListInTx } from "../src/auto-blacklist.js";
 import {
   ALERT_BACKOFF_CAP_MS, ALERT_MAX_ATTEMPTS, AlertSendError, alertBackoffMs, alertHealthCounts,
-  assertWebhookSecret, deliverDueAlerts, enqueueAlerts, purgeAlertOutbox, type AlertChannel, type OutboxRow,
+  assertWebhookSecret, deliverDueAlerts, enqueueAlerts, markFailure, purgeAlertOutbox, type AlertChannel, type OutboxRow,
 } from "../src/alert-outbox.js";
 import { buildApp, seedPhase2Fixtures, type ControlApi } from "./helpers/app.js";
 import { writeAutoBlocklistEntry } from "./helpers/auto-list.js";
@@ -220,5 +220,20 @@ describe("purge 不得刪 pending", () => {
     const deleted = await purgeAlertOutbox(app.db, NOW, 2);
     expect(await count()).toBe(before);
     expect(deleted).toBe(0);
+  });
+});
+
+describe("標記送達與失敗：租約 token", () => {
+  it("先 markDelivered 再遲到的 markFailure 不得改寫 delivered，也不得寫 delivery_failed", async () => {
+    await boot();
+    await app.db.tx((q) => enqueueAlerts(q, { channels: ["webhook"], kind: "auto_list", now: NOW, entryId: "e1", caseId: "c1" }));
+    await app.db.query("UPDATE alert_outbox SET attempts = $1", [ALERT_MAX_ATTEMPTS - 1]);
+    let claimed: OutboxRow | undefined;
+    await deliverDueAlerts(app.db, NOW, { webhook: async (row) => { claimed = row; } });
+    expect(claimed).toBeDefined();
+    expect((await rows())[0]).toMatchObject({ status: "delivered" });
+    await markFailure(app.db, claimed!, NOW, "webhook_timeout");
+    expect((await rows())[0]).toMatchObject({ id: claimed!.id, status: "delivered" });
+    expect(await audits("alert.delivery_failed")).toEqual([]);
   });
 });
