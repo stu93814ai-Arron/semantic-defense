@@ -231,7 +231,7 @@ function startAlertTimer(app: ControlApi, db: Db, now: Clock, ms: number, sender
   if (ms <= 0) return async () => {};
   let inflight: Promise<unknown> | undefined;
   const t = setInterval(() => {
-    inflight ??= deliverDueAlerts(db, now(), senders, app.log)
+    inflight ??= deliverDueAlerts(db, now(), senders, app.log, { clock: now })
       .catch((err: unknown) => app.log.error({ err: safeErr(err as Parameters<typeof safeErr>[0]) }, "alert delivery failed"))
       .finally(() => { inflight = undefined; });
   }, ms);

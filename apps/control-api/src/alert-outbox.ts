@@ -10,7 +10,15 @@ export const ALERT_MAX_ATTEMPTS = 8;
 export const ALERT_BACKOFF_START_MS = 1_000;
 export const ALERT_BACKOFF_CAP_MS = 15 * 60_000;
 export const ALERT_CLAIM_LEASE_MS = 60_000;
-export const ALERT_SEND_DEADLINE_MS = ALERT_CLAIM_LEASE_MS;
+export const ALERT_SEND_DEADLINE_MARGIN_MS = 15_000;
+export const ALERT_SEND_DEADLINE_MS = ALERT_CLAIM_LEASE_MS - ALERT_SEND_DEADLINE_MARGIN_MS;
+
+/** 發送期限夾在 [1, 租約 − 邊際] 之間，避免期限大於或等於租約。 */
+export function clampSendDeadlineMs(ms: number): number {
+  const max = ALERT_CLAIM_LEASE_MS - ALERT_SEND_DEADLINE_MARGIN_MS;
+  if (!Number.isFinite(ms)) return ALERT_SEND_DEADLINE_MS;
+  return Math.min(max, Math.max(1, Math.trunc(ms)));
+}
 export const ALERT_DELIVER_BATCH = 16;
 export const ALERT_FAILED_RETENTION_MS = 30 * 24 * 60 * 60_000;
 export const ALERT_OUTBOX_MAX_ROWS_DEFAULT = 10_000;
@@ -116,7 +124,7 @@ export async function alertHealthCounts(db: Queryable, now: number): Promise<Ale
   };
 }
 
-async function claimDue(q: Queryable, now: number, channels: readonly AlertChannel[], limit: number): Promise<OutboxRow[]> {
+export async function claimDue(q: Queryable, now: number, channels: readonly AlertChannel[], limit: number): Promise<OutboxRow[]> {
   if (channels.length === 0) return [];
   const r = await q.query<OutboxRow>(
     `WITH due AS (
@@ -135,12 +143,14 @@ async function claimDue(q: Queryable, now: number, channels: readonly AlertChann
   return r.rows;
 }
 
-async function markDelivered(q: Queryable, row: OutboxRow, now: number): Promise<void> {
-  await q.query(
+export async function markDelivered(q: Queryable, row: OutboxRow, completedAt: number): Promise<"delivered" | "ignored"> {
+  const r = await q.query<{ id: string }>(
     `UPDATE alert_outbox SET status = 'delivered', delivered_at = $2, error_class = NULL
-      WHERE id = $1 AND status = 'pending' AND next_attempt_at = $3`,
-    [row.id, now, row.next_attempt_at],
+      WHERE id = $1 AND status = 'pending' AND next_attempt_at = $3
+      RETURNING id`,
+    [row.id, completedAt, row.next_attempt_at],
   );
+  return r.rows.length === 1 ? "delivered" : "ignored";
 }
 
 export async function markFailure(q: Queryable, row: OutboxRow, now: number, errorClass: string, log?: AlertLog): Promise<"failed" | "retried" | "ignored"> {
@@ -235,15 +245,15 @@ function withSendDeadline<T>(p: Promise<T>, ms: number, errorClass: string): Pro
 
 async function deliverClaimedRow(
   db: Db, row: OutboxRow, senders: Partial<Record<AlertChannel, AlertSender>>,
-  now: number, log: AlertLog | undefined, deadlineMs: number,
+  now: number, log: AlertLog | undefined, deadlineMs: number, clock: () => number,
   out: { delivered: number; failed: number; retried: number },
 ): Promise<void> {
   const send = senderOf(senders, row.channel);
   if (!send) return;
   try {
     await withSendDeadline(send(row), deadlineMs, sendTimeoutClass(row.channel));
-    await db.tx((q) => markDelivered(q, row, now));
-    out.delivered += 1;
+    const marked = await db.tx((q) => markDelivered(q, row, clock()));
+    if (marked === "delivered") out.delivered += 1;
   } catch (err) {
     const result = await db.tx((q) => markFailure(q, row, now, errorClassOf(err), log));
     if (result === "failed") out.failed += 1;
@@ -253,12 +263,13 @@ async function deliverClaimedRow(
 
 export async function deliverDueAlerts(
   db: Db, now: number, senders: Partial<Record<AlertChannel, AlertSender>>, log?: AlertLog,
-  opts: { maxRows?: number; sendDeadlineMs?: number } = {},
+  opts: { maxRows?: number; sendDeadlineMs?: number; clock?: () => number } = {},
 ): Promise<{ delivered: number; failed: number; retried: number }> {
   await purgeAlertOutbox(db, now, opts.maxRows ?? ALERT_OUTBOX_MAX_ROWS_DEFAULT, log);
   const claimed = await db.tx((q) => claimDue(q, now, configuredChannels(senders), ALERT_DELIVER_BATCH));
   const out = { delivered: 0, failed: 0, retried: 0 };
-  const deadlineMs = opts.sendDeadlineMs ?? ALERT_SEND_DEADLINE_MS;
-  await Promise.all(claimed.map((row) => deliverClaimedRow(db, row, senders, now, log, deadlineMs, out)));
+  const deadlineMs = clampSendDeadlineMs(opts.sendDeadlineMs ?? ALERT_SEND_DEADLINE_MS);
+  const clock = opts.clock ?? Date.now;
+  await Promise.all(claimed.map((row) => deliverClaimedRow(db, row, senders, now, log, deadlineMs, clock, out)));
   return out;
 }

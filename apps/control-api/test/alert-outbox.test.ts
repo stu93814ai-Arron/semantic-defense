@@ -3,7 +3,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import pg from "pg";
 import { autoListInTx } from "../src/auto-blacklist.js";
 import {
-  ALERT_BACKOFF_CAP_MS, ALERT_MAX_ATTEMPTS, AlertSendError, alertBackoffMs, alertHealthCounts,
+  ALERT_BACKOFF_CAP_MS, ALERT_CLAIM_LEASE_MS, ALERT_MAX_ATTEMPTS, ALERT_SEND_DEADLINE_MS,
+  AlertSendError, alertBackoffMs, alertHealthCounts, clampSendDeadlineMs,
   assertWebhookSecret, deliverDueAlerts, enqueueAlerts, markFailure, purgeAlertOutbox, type AlertChannel, type OutboxRow,
 } from "../src/alert-outbox.js";
 import { buildApp, seedPhase2Fixtures, type ControlApi } from "./helpers/app.js";
@@ -103,7 +104,7 @@ describe("發送迴圈：租約、重試、優先、清除", () => {
         await c.end();
       }
     };
-    expect(await deliverDueAlerts(app.db, NOW, { webhook: send })).toEqual({ delivered: 1, failed: 0, retried: 0 });
+    expect(await deliverDueAlerts(app.db, NOW, { webhook: send }, undefined, { clock: () => NOW })).toEqual({ delivered: 1, failed: 0, retried: 0 });
     expect(lockCheck).toEqual(["unlocked"]);
     expect((await rows())[0]).toMatchObject({ id: row!.id, status: "delivered", payload: expect.objectContaining({ delivery_id: row!.id }) });
     expect(await alertHealthCounts(app.db, NOW)).toMatchObject({ pending: 0, failed: 0, delivered_1h: 1 });
@@ -235,5 +236,45 @@ describe("標記送達與失敗：租約 token", () => {
     await markFailure(app.db, claimed!, NOW, "webhook_timeout");
     expect((await rows())[0]).toMatchObject({ id: claimed!.id, status: "delivered" });
     expect(await audits("alert.delivery_failed")).toEqual([]);
+  });
+});
+
+describe("發送期限小於租約", () => {
+  it("預設整體期限為租約減 15 秒，且必須小於租約", () => {
+    expect(ALERT_SEND_DEADLINE_MS).toBe(ALERT_CLAIM_LEASE_MS - 15_000);
+    expect(ALERT_SEND_DEADLINE_MS).toBeLessThan(ALERT_CLAIM_LEASE_MS);
+  });
+
+  it("sendDeadlineMs 被夾在 1 與租約減邊際之間", () => {
+    expect(clampSendDeadlineMs(200)).toBe(200);
+    expect(clampSendDeadlineMs(0)).toBe(1);
+    expect(clampSendDeadlineMs(-5)).toBe(1);
+    expect(clampSendDeadlineMs(ALERT_CLAIM_LEASE_MS)).toBe(ALERT_SEND_DEADLINE_MS);
+    expect(clampSendDeadlineMs(ALERT_CLAIM_LEASE_MS - 15_000 + 1)).toBe(ALERT_SEND_DEADLINE_MS);
+    expect(clampSendDeadlineMs(Number.NaN)).toBe(ALERT_SEND_DEADLINE_MS);
+  });
+});
+
+describe("delivered 計數與完成時間", () => {
+  it("delivered_at 是實際完成時間，不是批次開始的 now", async () => {
+    await boot();
+    await app.db.tx((q) => enqueueAlerts(q, { channels: ["webhook"], kind: "auto_list", now: NOW, entryId: "e1", caseId: "c1" }));
+    let t = NOW;
+    await deliverDueAlerts(app.db, NOW, { webhook: async () => { t = NOW + 5_000; } }, undefined, { clock: () => t });
+    const r = (await app.db.query<{ delivered_at: string; status: string }>("SELECT delivered_at, status FROM alert_outbox")).rows[0]!;
+    expect(r.status).toBe("delivered");
+    expect(Number(r.delivered_at)).toBe(NOW + 5_000);
+    expect(Number(r.delivered_at)).not.toBe(NOW);
+  });
+
+  it("markDelivered 未更新列時 out.delivered 不計入", async () => {
+    await boot();
+    await app.db.tx((q) => enqueueAlerts(q, { channels: ["webhook"], kind: "auto_list", now: NOW, entryId: "e1", caseId: "c1" }));
+    const send = async (row: OutboxRow) => {
+      await app.db.query("UPDATE alert_outbox SET next_attempt_at = $1 WHERE id = $2", [Number(row.next_attempt_at) + 1, row.id]);
+    };
+    expect(await deliverDueAlerts(app.db, NOW, { webhook: send }, undefined, { clock: () => NOW }))
+      .toEqual({ delivered: 0, failed: 0, retried: 0 });
+    expect((await rows())[0]).toMatchObject({ status: "pending" });
   });
 });
