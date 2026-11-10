@@ -126,6 +126,6 @@ Each commit is at most 400 lines, red then green. `package.json` / the lockfile 
 
 ## 8. Open / residual
 
-Residual for A 組領航員: section 2 of the security test list (`/workspace/exec-a-logs/push-design-tests.md`) still describes hand-written SMTP protocol tests (re-EHLO after STARTTLS, no pipelining, line-length and total-size caps, CRLF.CRLF). This design uses nodemailer 10.5.0 instead; those protocol details are left to the package and to the integration tests in section 9. The test list itself is unchanged and is not part of this repository.
+A 組領航員裁示: section 9 of the security test list (`/workspace/exec-a-logs/push-design-tests.md`) takes precedence over section 2. From section 2, keep only these behaviour tests, run against a local fake server: the server does not advertise STARTTLS, so sending must fail (`requireTLS`); a self-signed or wrong-hostname certificate must fail; in plaintext opt-in mode, AUTH is never sent; dot-stuffing; CR/LF in addresses and malformed addresses are rejected. Do not write the protocol-internal tests (re-sending EHLO, pipelining, line or total size limits); those are nodemailer's job. The test list itself is unchanged and is not part of this repository.
 
 Adding an IP or CIDR to the payload remains a later opt-in. There are no alert-storm summaries for now. 軟體大總召 may overrule any 領航員 default or the PM items above (the latter are not confirmed by the user).

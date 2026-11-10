@@ -63,3 +63,21 @@ ts 的小數秒超過 6 位時，Postgres 解析時會捨入到微秒，JS `Date
 ## 開啟使用者建立 API 前的追蹤事項
 
 在任何使用者建立 API 開放前須完成：使用者名稱經 NFKC 正規化、trim、轉小寫；整個 `system:` 前綴保留；資料庫 CHECK。
+
+## 告警推送（環境變數與外部監控）
+
+上線後必須把 control-api 的 `GET /api/health`（`platform_admin`，內含告警未送達筆數與最後失敗時間）接到外部監控，不得只靠本機 log。即使暫時未啟用任何通道，也要先接好監控，以免日後開啟通道時沒有告警。
+
+通道彼此獨立：該通道的啟用變數未設或 trim 後為空則關閉；一旦啟用，必備變數缺失或無效時 control-api 拒絕啟動（錯誤不含 URL、主機、憑證或位址）。私網覆寫只能用該通道的 CIDR 清單，不得使用全局開關。
+
+| 通道 | 啟用（未設＝關） | 啟用時必備 | 可選 |
+|---|---|---|---|
+| Email | `SD_ALERT_EMAIL_TO` | `SD_ALERT_EMAIL_SMTP_HOST`、`SD_ALERT_EMAIL_FROM` | `SD_ALERT_EMAIL_SMTP_PORT`（預設 587）、`SD_ALERT_EMAIL_USERNAME`、`SD_ALERT_EMAIL_PASSWORD`、`SD_ALERT_EMAIL_IMPLICIT_TLS`（`1`＝隱式 TLS）、`SD_ALERT_SMTP_ALLOW_PLAINTEXT`（必須為 `1` 才允許明文，此時禁止帳密）、`SD_ALERT_SMTP_ALLOW_CIDRS` |
+| Webhook | `SD_ALERT_WEBHOOK_URL`（僅 https、禁止 userinfo；整段 URL 視為密鑰） | `SD_ALERT_WEBHOOK_HMAC_SECRET`（至少 32 bytes） | `SD_ALERT_WEBHOOK_ALLOW_CIDRS` |
+| Syslog | `SD_ALERT_SYSLOG_HOST` | `SD_ALERT_SYSLOG_PORT`、`SD_ALERT_SYSLOG_TRANSPORT`（僅 `tcp` 或 `tls`；`udp` 啟動即 throw） | `SD_ALERT_SYSLOG_ALLOW_CIDRS`、`SD_ALERT_SYSLOG_HOSTNAME`、`SD_ALERT_SYSLOG_APP_NAME` |
+
+`SD_ALERT_EMAIL_TO` 與 `SD_ALERT_EMAIL_FROM` 必須是不含顯示名稱的嚴格 ASCII 位址；含 CR、LF、NUL、非 ASCII 或多個 `@` 時啟動即 throw。憑證、SMTP 密碼與 webhook URL／HMAC 不得寫入 log、稽核、outbox 或錯誤物件。
+
+## A 組領航員裁示（告警推送測試清單 §2 與 §9）
+
+A 組領航員裁示：測試清單 `/workspace/exec-a-logs/push-design-tests.md` 的 §9 優先於 §2。§2 僅保留以下對本機假伺服器的行為測試：伺服器未宣告 STARTTLS 則發送必須失敗（`requireTLS`）；自簽或主機名不符的憑證必須失敗；明文 opt-in 模式不送 AUTH；dot-stuffing；位址含 CRLF 或格式不正確則拒絕。不撰寫協定內部測試（重新送 EHLO、pipelining、行或總量上限）；那些是 nodemailer 的職責。測試清單本文未改。
