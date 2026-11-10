@@ -85,7 +85,10 @@ ts 的小數秒超過 6 位時，Postgres 解析時會捨入到微秒，JS `Date
 - 種子 IPv4 前綴須為 /16 或更窄，IPv6 須為 /48 或更窄；更寬的值會讓 control-api 無法啟動，錯誤訊息不含該 CIDR。
 - 種子列（`created_by = system:install`）不可由 API 刪除，也不可設定到期。
 - 若種子列缺失，重啟 control-api 會依當時的設定補回，並寫 `whitelist.create` 稽核（actor 為 `system:install`）；沒有新列則不寫。
-- 從設定移除某個位址後，下次重啟會刪除對應種子列，寫入 `whitelist.delete` 稽核（actor 為 `system:install`），且不恢復先前因該種子撤回的封鎖。設定為空時刪除全部種子列。
+- 從設定移除某個位址後，下次重啟會刪除對應種子列，寫入 `whitelist.delete` 稽核（actor 為 `system:install`），且不恢復先前因該種子撤回的封鎖。
+- 未設定或空字串（trim 後為空）不會改動既有種子，也不會做撤回。
+- 要清空全部種子必須明確設定 `SD_CRITICAL_ALLOWLIST=none`；會為每列寫 `whitelist.delete`。`none` 不得與 CIDR 混用，否則 control-api 無法啟動，錯誤訊息不含該值。
+- 任何一次啟動若刪除了種子，會寫一筆 warn，只含刪除筆數，不含 IP 或 CIDR。
 
 ## 開啟使用者建立 API 前的追蹤事項
 
