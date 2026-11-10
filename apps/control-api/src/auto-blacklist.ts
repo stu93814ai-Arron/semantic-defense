@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { BlockList, isIP } from "node:net";
-import { BlocklistEntrySchema, parseCidr, type BlocklistEntry } from "@semantic-defense/contracts";
+import { BlocklistEntrySchema, isReservedForIngest, parseCidr, type BlocklistEntry } from "@semantic-defense/contracts";
 import type { Queryable } from "./db.js";
 import { writeAudit } from "./audit.js";
 import { enqueueAlerts, type AlertChannel } from "./alert-outbox.js";
@@ -51,10 +51,12 @@ export async function loadAllowlist(q: Queryable, now: number): Promise<(ip: str
 
 const allowlisted = async (q: Queryable, ip: string, now: number): Promise<boolean> => (await loadAllowlist(q, now))(ip);
 
-/** 主機前綴正規化：合法 /32、/128（含無前綴）→ `<canonical address>/<prefix>`；否則 null。 */
+/** 主機前綴正規化：合法 /32、/128（含無前綴）→ `<canonical address>/<prefix>`；否則 null。
+ * A 組領航員裁示（未經使用者確認）；落在總召 §21:09 R10 範圍內：另排除 Class E 與文件範圍（isReservedForIngest）。不改 parseCidr。 */
 export function hostCidr(raw: string): string | null {
   const p = parseCidr(raw);
   if (!p || p.prefix !== (p.version === 4 ? 32 : 128)) return null;
+  if (isReservedForIngest(p.address)) return null;
   return `${p.address}/${p.prefix}`;
 }
 

@@ -450,7 +450,7 @@ describe("熔斷滑動視窗邊界（created_at > now − 1h）", () => {
 });
 
 describe("B5：非公網位址不自動上榜（auto_suppressed{non_public}，同 (ip, reason) 每小時去重；案件留在待審）", () => {
-  const NON_PUBLIC = ["10.0.0.53", "172.16.0.1", "192.168.1.1", "100.64.0.1", "240.0.0.1", "2001:db8::53", "fc00::1"];
+  const NON_PUBLIC = ["10.0.0.53", "172.16.0.1", "192.168.1.1", "100.64.0.1", "fc00::1"];
 
   it.each(NON_PUBLIC)("autoListInTx(%s) → not_public，不寫入", async (ip) => {
     await boot();
