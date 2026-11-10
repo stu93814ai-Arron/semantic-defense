@@ -137,6 +137,22 @@ const SCHEMA_STATEMENTS = [
   // A 覆核：auto_suppressed 每個 (ip, reason) 每小時最多一筆，寫前查過去 1 小時（auto-trigger.ts writeSuppressed）用的 partial index。
   `CREATE INDEX IF NOT EXISTS audit_auto_suppressed_ip_reason ON audit_events (action, (detail->>'ip'), (detail->>'reason'), at)
    WHERE action = 'blacklist.auto_suppressed'`,
+  // 告警 outbox（主動推送）：與 blacklist.auto_list 同交易入列；發送在交易外。
+  `CREATE TABLE IF NOT EXISTS alert_outbox (
+  id BIGSERIAL PRIMARY KEY,
+  audit_id BIGINT NULL,
+  channel TEXT NOT NULL CHECK (channel IN ('email','webhook','syslog')),
+  kind TEXT NOT NULL CHECK (kind IN ('auto_list','volume','breaker_open')),
+  payload JSONB NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+  next_attempt_at BIGINT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('pending','delivered','failed')),
+  error_class TEXT NULL,
+  created_at BIGINT NOT NULL,
+  delivered_at BIGINT NULL,
+  CHECK ((status = 'delivered') = (delivered_at IS NOT NULL))
+)`,
+  "CREATE INDEX IF NOT EXISTS alert_outbox_due ON alert_outbox (next_attempt_at, kind) WHERE status = 'pending'",
 ];
 
 /** 固定鍵：跨連線序列化 schema 遷移。 */

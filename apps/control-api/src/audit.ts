@@ -10,11 +10,12 @@ import type { Role } from "./auth.js";
 export type AuditEvent = { action: string; actor: string; sensor_id: string | null; at: number; detail?: Record<string, unknown> };
 
 /** 可傳 Db 或 tx 內的 Queryable；需與資料寫入同交易時請在 db.tx 內呼叫。 */
-export async function writeAudit(db: Queryable, e: AuditEvent): Promise<void> {
-  await db.query(
-    "INSERT INTO audit_events (action, actor, sensor_id, at, detail) VALUES ($1,$2,$3,$4,$5)",
+export async function writeAudit(db: Queryable, e: AuditEvent): Promise<number> {
+  const r = await db.query<{ id: string }>(
+    "INSERT INTO audit_events (action, actor, sensor_id, at, detail) VALUES ($1,$2,$3,$4,$5) RETURNING id",
     [e.action, e.actor, e.sensor_id, e.at, JSON.stringify(e.detail ?? {})],
   );
+  return Number(r.rows[0]!.id);
 }
 
 const ADMIN: Role[] = ["platform_admin"];

@@ -10,6 +10,7 @@ import { hostCidr, loadAllowlist } from "./auto-blacklist.js";
 import { writeAudit } from "./audit.js";
 import { autoListCase, countHighSeverity, e3aHolds, writeSuppressed } from "./auto-trigger.js";
 import { AUTO_BREAKER_PER_HOUR, recoverBreakerIfOpen } from "./auto-breaker.js";
+import type { AlertChannel } from "./alert-outbox.js";
 
 /**
  * 成案流程 commit 7：判定 tick（計畫 §1／§2）。讀 flow_events → 依 (sensor, app, src_ip, 5 分鐘窗) 分組重算 → 命中 → 待審。
@@ -66,10 +67,10 @@ export type TickHooks = { beforeAutoList?: () => Promise<void>; afterAllowlistSh
  */
 export const AUTO_LIST_ENABLED_DEFAULT = false;
 /** runJudgeTick 第 4 個參數：掛勾＋熔斷上限 N（buildApp 的 autoBreakerPerHour，預設 50）＋自動上榜總開關。 */
-export type TickOpts = TickHooks & { autoBreakerPerHour?: number; autoListEnabled?: boolean };
+export type TickOpts = TickHooks & { autoBreakerPerHour?: number; autoListEnabled?: boolean; alertChannels?: readonly AlertChannel[] };
 /** 一個 tick 內共用：門檻、白名單（每個 tick 只讀一次；只決定要不要開案）、時間、log、掛勾、本 tick 計數（去重的 hit_while_listed、failed 的 SQLSTATE）。 */
 type TickCtx = { th: FlowThresholds; isAllowlisted: (ip: string) => boolean; now: number; log?: TickLog; hooks: TickHooks; breakerPerHour: number;
-  autoList: boolean;
+  autoList: boolean; alertChannels: readonly AlertChannel[];
   stats: { suppressed: number; deduped: number; codes: Map<string, number>; nullTs: number; pendingBackfill: number; stalePending: number } };
 
 /** 待回填：ts_ms 仍 NULL 但 flow_ts_ms(ts) 算得出值。只用來決定 cursor 停點，絕不用來分組。 */
@@ -199,7 +200,7 @@ async function routeHit(q: Queryable, k: GroupKey, ctx: TickCtx, h: StoredHit): 
   else await raiseCaseMax(q, k.src_ip, h.confidence, now);
   if (await e3a()) {
     await hooks.beforeAutoList?.();
-    if (await autoListCase(q, ip, now, { log, gates: { breakerPerHour }, afterShare: hooks.afterAllowlistShare })) ctx.stats.deduped += 1;
+    if (await autoListCase(q, ip, now, { log, gates: { breakerPerHour }, afterShare: hooks.afterAllowlistShare, alertChannels: ctx.alertChannels })) ctx.stats.deduped += 1;
   }
 }
 
@@ -295,7 +296,7 @@ export async function runJudgeTick(db: Db, now: number, log?: TickLog, opts: Tic
     const { breakerPerHour, autoList } = await prepareAutoList(q, opts, now, log);
     const cur = (await q.query<{ received_upto: string }>("SELECT received_upto FROM judge_cursor WHERE id")).rows[0];
     const { keys, upto, nullTs, pendingBackfill, stalePending } = await scanGroups(q, Number(cur?.received_upto ?? 0), now);
-    const ctx: TickCtx = { th, isAllowlisted: await loadAllowlist(q, now), now, log, hooks: opts, breakerPerHour, autoList, stats: { suppressed: 0, deduped: 0, codes: new Map(), nullTs, pendingBackfill, stalePending } };
+    const ctx: TickCtx = { th, isAllowlisted: await loadAllowlist(q, now), now, log, hooks: opts, breakerPerHour, autoList, alertChannels: opts.alertChannels ?? [], stats: { suppressed: 0, deduped: 0, codes: new Map(), nullTs, pendingBackfill, stalePending } };
     const n = { hit: 0, miss: 0, skipped: 0, failed: 0 };
     for (const k of keys) n[await judgeGroupIsolated(q, k, ctx)] += 1;
     logTickCounts(log, n, ctx.stats);

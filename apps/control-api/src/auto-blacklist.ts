@@ -3,6 +3,7 @@ import { BlockList, isIP } from "node:net";
 import { BlocklistEntrySchema, parseCidr, type BlocklistEntry } from "@semantic-defense/contracts";
 import type { Queryable } from "./db.js";
 import { writeAudit } from "./audit.js";
+import { enqueueAlerts, type AlertChannel } from "./alert-outbox.js";
 import { loadThresholds, type WarnLog } from "./thresholds.js";
 import { insertActiveBlocklistEntry } from "./blocklist-store.js";
 import { breakerTripped, lockAllowlistShare, lockAuto } from "./auto-breaker.js";
@@ -63,7 +64,7 @@ export const AUTO_COOLDOWN_MS = 2 * 60 * 60 * 1000;
  * gates：E3.A 觸發才有的閘門（冷卻＋熔斷共用一個選項；A 組領航員裁定 11-09 第 4 點）。
  * 判定 tick 開（帶 breakerPerHour）；測試用的 §7 包裝（test/helpers/auto-list.ts）關，§7 原行為不變。
  */
-export type AutoListOpts = { log?: WarnLog; gates?: false | { breakerPerHour: number }; afterShare?: () => Promise<void> };
+export type AutoListOpts = { log?: WarnLog; gates?: false | { breakerPerHour: number }; afterShare?: () => Promise<void>; alertChannels?: readonly AlertChannel[] };
 
 async function lastRevokedWithin(q: Queryable, ip: string, now: number): Promise<number | null> {
   const r = await q.query<{ revoked_at: string }>(
@@ -96,6 +97,12 @@ async function lockShareThen(q: Queryable, then?: () => Promise<void>): Promise<
  * tick 早先讀的白名單只用來決定要不要開案，不能當上榜依據（A 組領航員裁定 11-09）。
  * opts.log：門檻 fail-closed 時的 warn 去處（呼叫端傳 tick／app 的 logger）。
  */
+async function recordAutoList(q: Queryable, entry: { entry_id: string; ip: string; confidence: number; case_id: string; expires_at: string }, now: number, channels: readonly AlertChannel[] | undefined): Promise<void> {
+  const auditId = await writeAudit(q, { action: "blacklist.auto_list", actor: "system:auto", sensor_id: null, at: now,
+    detail: { entry_id: entry.entry_id, ip: entry.ip, confidence: entry.confidence, case_id: entry.case_id, expires_at: entry.expires_at } });
+  await enqueueAlerts(q, { channels: channels ?? [], kind: "auto_list", now, auditId, entryId: entry.entry_id, caseId: entry.case_id });
+}
+
 export async function autoListInTx(q: Queryable, input: AutoListInput, now: number, opts: AutoListOpts = {}): Promise<AutoListResult> {
   const scoped = scopeOf(input.ip);
   if ("reject" in scoped) return scoped.reject;
@@ -121,7 +128,6 @@ export async function autoListInTx(q: Queryable, input: AutoListInput, now: numb
     created_at: now, expires_at: now + AUTO_LIST_TTL_MS, approved_by: "system:auto", approved_at: now,
   }, now);
   if (!entry) return { status: "already_listed" };
-  await writeAudit(q, { action: "blacklist.auto_list", actor: "system:auto", sensor_id: null, at: now,
-    detail: { entry_id: entry.entry_id, ip: entry.ip, confidence: entry.confidence, case_id: entry.case_id, expires_at: entry.expires_at } });
+  await recordAutoList(q, entry, now, opts.alertChannels);
   return { status: "listed", entry };
 }
