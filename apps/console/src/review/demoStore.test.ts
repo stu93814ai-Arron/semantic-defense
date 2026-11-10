@@ -11,6 +11,8 @@ import {
   reviewAddAllowlist,
   reviewApprove,
   reviewReject,
+  reviewRemoveAllowlist,
+  reviewUpdateAllowlist,
   reviewUpdateThresholds,
   reviewWithdraw,
   seedFixturesForTests,
@@ -143,5 +145,49 @@ describe("demoStore 門檻 get／set（僅 demo，寫稽核）", () => {
     const r = reviewUpdateThresholds({ case: 0.95, auto: 0.5 }, "admin1");
     expect(r.ok).toBe(false);
     expect(getThresholds()).toEqual(before);
+  });
+});
+
+describe("demoStore 未覆蓋路徑", () => {
+  it("查無項目時核准／退回／撤回失敗", () => {
+    resetDemoStoreForTests();
+    const missing = "00000000-0000-4000-8000-000000000000";
+    const a = reviewApprove(missing, "operator1");
+    expect(a.ok).toBe(false);
+    if (!a.ok) expect(a.code).toBe("not_found");
+    const j = reviewReject(missing, "operator1", "正常業務");
+    expect(j.ok).toBe(false);
+    if (!j.ok) expect(j.code).toBe("not_found");
+    const w = reviewWithdraw("no-such-entry", "operator1");
+    expect(w.ok).toBe(false);
+    if (!w.ok) expect(w.code).toBe("not_found");
+  });
+
+  it("後端不可達時退回／撤回／上榜清單同步失敗", () => {
+    setBackendUnreachable(true);
+    const j = reviewReject(CASE_A, "operator1", "正常業務");
+    expect(j.ok).toBe(false);
+    if (!j.ok) expect(j.code).toBe("backend_unreachable");
+    const w = reviewWithdraw("list-auto-1", "operator1");
+    expect(w.ok).toBe(false);
+    if (!w.ok) expect(w.code).toBe("backend_unreachable");
+    expect(listActive("all")).toEqual([]);
+  });
+
+  it("白名單刪除／更新成功與查無、格式錯誤", () => {
+    const added = reviewAddAllowlist({ cidr: "203.0.113.0/24", reason: "夥伴" }, "admin1");
+    expect(added.ok).toBe(true);
+    if (!added.ok) return;
+    const id = added.value.entry_id;
+    const updated = reviewUpdateAllowlist(id, { reason: "更新理由", expires_at: null }, "admin1");
+    expect(updated.ok).toBe(true);
+    expect(listAllowlist()[0]!.reason).toBe("更新理由");
+    expect(reviewRemoveAllowlist(id, "admin1").ok).toBe(true);
+    expect(listAllowlist()).toEqual([]);
+    expect(reviewRemoveAllowlist("missing", "admin1").ok).toBe(false);
+    const bad = reviewUpdateAllowlist("missing", { reason: "x", expires_at: null }, "admin1");
+    expect(bad.ok).toBe(false);
+    const invalid = reviewAddAllowlist({ cidr: "10.0.0.0/7", reason: "過寬" }, "admin1");
+    expect(invalid.ok).toBe(false);
   });
 });

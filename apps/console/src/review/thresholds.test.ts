@@ -64,4 +64,19 @@ describe("門檻 Thresholds（contracts/browser THRESHOLD_BOUNDS）", () => {
     expect(r.code).toBe("invalid_thresholds");
     expect(r.message.length).toBeGreaterThan(0);
   });
+
+  it("上限與非有限數：format 與 validate 對齊 violation", () => {
+    expect(validateThresholds({ case: 1.1, auto: 1 }).ok).toBe(false);
+    expect(validateThresholds({ case: 0.5, auto: 1.1 }).ok).toBe(false);
+    expect(validateThresholds({ case: Number.NaN, auto: 0.9 }).ok).toBe(false);
+    expect(formatThresholdsViolation("case_above_max")).toMatch(/1/);
+    expect(formatThresholdsViolation("auto_above_max")).toMatch(/1/);
+    expect(formatThresholdsViolation("invalid_shape")).toMatch(/有限/);
+    const r = updateThresholds(
+      { case: Number.POSITIVE_INFINITY, auto: 0.9 },
+      { actorId: "admin1", now: "2026-11-09T08:00:00Z", prev: DEFAULT_THRESHOLDS },
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.message).toMatch(/有限/);
+  });
 });
