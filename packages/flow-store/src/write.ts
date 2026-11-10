@@ -67,7 +67,7 @@ export async function runWithPoolSession<T>(
 }
 
 const onSession = <T>(db: FlowDb, fn: (q: FlowSession) => Promise<T>): Promise<T> =>
-  db.withSession ? db.withSession(fn) : fn(db);
+  db.withSession(fn);
 
 const EVENTS_DDL = `CREATE TABLE IF NOT EXISTS flow_events (
   flow_id TEXT NOT NULL, app_id TEXT NOT NULL, ts TEXT NOT NULL,
@@ -139,11 +139,11 @@ async function runDdl(q: FlowSession): Promise<void> {
 async function ensureGroupIndexes(q: FlowSession): Promise<void> {
   await q.query(`SET statement_timeout = ${flowIndexTimeoutMs()}`);
   try {
-    await q.query("DROP INDEX CONCURRENTLY IF EXISTS flow_events_group");
     if (await indexInvalid(q, "flow_events_group_ms")) {
       await q.query("DROP INDEX CONCURRENTLY IF EXISTS flow_events_group_ms");
     }
     await q.query("CREATE INDEX CONCURRENTLY IF NOT EXISTS flow_events_group_ms ON flow_events (sensor_id, app_id, src_ip, ts_ms)");
+    await q.query("DROP INDEX CONCURRENTLY IF EXISTS flow_events_group");
   } finally {
     await q.query("RESET statement_timeout");
   }
@@ -238,7 +238,7 @@ export async function ensureFlowSchema(db: FlowDb, opts?: { hooks?: FlowSchemaHo
 }
 
 /** 刪除年齡 ≥ 7 天的 flow_events／flow_rejections，回兩表刪除總筆數。 */
-export async function purgeExpired(db: FlowDb, now: number): Promise<number> {
+export async function purgeExpired(db: FlowSession, now: number): Promise<number> {
   const cutoff = now - RETENTION_MS;
   const ev = await db.query<{ flow_id: string }>(
     "DELETE FROM flow_events WHERE received_at <= $1 RETURNING flow_id", [cutoff],
@@ -256,7 +256,7 @@ const tsMsOf = (ts: string): number | null => {
 };
 
 /** 寫入一筆（含 ts_ms）；同 sensor 重複 flow_id → false（不同 sensor 可重用 flow_id）。 */
-export async function insertFlow(db: FlowDb, f: FlowMetadataEvent, sensorId: string, now: number): Promise<boolean> {
+export async function insertFlow(db: FlowSession, f: FlowMetadataEvent, sensorId: string, now: number): Promise<boolean> {
   const r = await db.query<{ flow_id: string }>(
     `INSERT INTO flow_events (flow_id, app_id, ts, src_ip, dst_ip, src_port, dst_port, protocol,
        bytes_in, bytes_out, packets, duration_ms, sensor_id, received_at, ts_ms)
@@ -269,6 +269,6 @@ export async function insertFlow(db: FlowDb, f: FlowMetadataEvent, sensorId: str
 }
 
 /** 記一筆 app_id 未綁定的拒絕；刻意不收 payload。 */
-export async function recordRejection(db: FlowDb, sensorId: string, now: number): Promise<void> {
+export async function recordRejection(db: FlowSession, sensorId: string, now: number): Promise<void> {
   await db.query("INSERT INTO flow_rejections (sensor_id, at) VALUES ($1,$2)", [sensorId, now]);
 }

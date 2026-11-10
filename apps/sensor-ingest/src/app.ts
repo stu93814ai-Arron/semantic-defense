@@ -5,7 +5,7 @@ import { parseFlowMetadataEvent } from "@semantic-defense/contracts";
 import { findSensorByToken, ipAllowed, type SensorDb } from "@semantic-defense/sensor-auth";
 import { createAuthFailLimiter } from "./rate-limit.js";
 import { installErrorHandler, withSafeReqLog } from "./errors.js";
-import { RETENTION_MS, ensureFlowSchema, insertFlow, purgeExpired, recordRejection } from "@semantic-defense/flow-store/write";
+import { RETENTION_MS, ensureFlowSchema, insertFlow, purgeExpired, recordRejection, type FlowDb } from "@semantic-defense/flow-store/write";
 
 /**
  * sensor-ingest（流量平面）③b：認證面。
@@ -18,7 +18,7 @@ import { RETENTION_MS, ensureFlowSchema, insertFlow, purgeExpired, recordRejecti
  *   自報 sensor_id／非法／ts 超前 >5 分鐘 → 400；app_id 不在 token 的 allowed_app_ids → 403（只記 sensor_id＋時間）；同 sensor 重複 flow_id → 409。寫入前清除 ≥7 天列（見 packages/flow-store）。
  */
 export type BuildIngestOptions = {
-  db: SensorDb;
+  db: SensorDb & FlowDb;
   https?: { key: string | Buffer; cert: string | Buffer };
   requireHttps?: boolean;
   /** 注入時鐘（epoch ms），預設 Date.now。 */

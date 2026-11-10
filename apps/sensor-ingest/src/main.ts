@@ -1,7 +1,7 @@
 /* eslint-disable security/detect-non-literal-fs-filename, security/detect-object-injection -- 程序入口：鍵為常值、TLS 路徑來自部署環境變數（運維設定，非請求輸入） */
 import { readFileSync } from "node:fs";
 import pg from "pg";
-import { runWithPoolSession } from "@semantic-defense/flow-store/write";
+import { runWithPoolSession, type FlowSession } from "@semantic-defense/flow-store/write";
 import { buildIngest } from "./app.js";
 
 /** 流量平面程序入口：DATABASE_URL、SENSOR_INGEST_TLS_KEY／_CERT（PEM 路徑，必填）、SENSOR_INGEST_HOST／_PORT。 */
@@ -14,7 +14,7 @@ const env = (k: string): string => {
 const pool = new pg.Pool({ connectionString: env("DATABASE_URL") });
 const db = {
   query: async <T>(sql: string, params?: unknown[]) => ({ rows: (await pool.query(sql, params)).rows as T[] }),
-  withSession: (fn: Parameters<typeof runWithPoolSession>[1]) => runWithPoolSession(pool, fn),
+  withSession: <T>(fn: (q: FlowSession) => Promise<T>) => runWithPoolSession(pool, fn),
 };
 const app = await buildIngest({
   db,
