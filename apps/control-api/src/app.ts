@@ -15,7 +15,8 @@ import { registerWhitelistRoutes } from "./whitelist.js";
 import { registerBlacklistRoutes } from "./blacklist.js";
 import { badJsonError, installErrorHandler, safeErr, withSafeReqLog } from "./errors.js";
 import { runJudgeTick, type TickOpts } from "./judge.js";
-import { assertWebhookSecret, deliverDueAlerts, enabledAlertChannels, type AlertChannel, type AlertSender } from "./alert-outbox.js";
+import { deliverDueAlerts, enabledAlertChannels, type AlertChannel, type AlertSender } from "./alert-outbox.js";
+import { parseWebhookConfig, webhookSender, type WebhookHooks } from "./alert-webhook.js";
 
 export type BuildAppOptions = {
   idleTimeoutMs?: number;
@@ -44,6 +45,8 @@ export type BuildAppOptions = {
   alertChannels?: readonly AlertChannel[];
   /** 測試用發送器（未實作的通道不發送、不耗次數）。 */
   alertSenders?: Partial<Record<AlertChannel, AlertSender>>;
+  /** 測試用：webhook 的 CA／lookup／時鐘。 */
+  webhookHooks?: WebhookHooks;
 };
 
 export type ControlApi = FastifyInstance;
@@ -237,16 +240,23 @@ async function readyOrListen(app: ControlApi, opts: BuildAppOptions): Promise<vo
   else await app.ready();
 }
 
+function defaultSenders(opts: BuildAppOptions): Partial<Record<AlertChannel, AlertSender>> {
+  const senders: Partial<Record<AlertChannel, AlertSender>> = { ...opts.alertSenders };
+  const webhook = parseWebhookConfig(process.env);
+  if (webhook && !senders.webhook) senders.webhook = webhookSender(webhook, opts.webhookHooks ?? {});
+  return senders;
+}
+
 function hookTimers(app: ControlApi, db: Db, now: Clock, opts: BuildAppOptions): void {
   const alertChannels = enabledAlertChannels(process.env, opts.alertChannels);
   const stopJudge = startJudgeTimer(app, db, now, opts.judgeIntervalMs ?? 5000, { autoBreakerPerHour: opts.autoBreakerPerHour, autoListEnabled: opts.autoListEnabled, alertChannels });
-  const stopAlert = startAlertTimer(app, db, now, opts.alertDeliverIntervalMs ?? 1000, opts.alertSenders ?? {});
+  const stopAlert = startAlertTimer(app, db, now, opts.alertDeliverIntervalMs ?? 1000, defaultSenders(opts));
   app.addHook("onClose", async () => { await stopJudge(); await stopAlert(); await db.close(); });
 }
 
 export async function buildApp(opts: BuildAppOptions = {}): Promise<ControlApi> {
   assertBreakerLimit(opts.autoBreakerPerHour);
-  assertWebhookSecret(process.env);
+  parseWebhookConfig(process.env);
   const idleTimeoutMs = opts.idleTimeoutMs ?? 30 * 60_000;
   const rl = opts.loginRateLimit ?? { maxFailures: 5, windowMs: 60_000 };
   const now = opts.now ?? Date.now;
