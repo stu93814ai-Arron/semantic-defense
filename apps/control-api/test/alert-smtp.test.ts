@@ -131,6 +131,17 @@ describe("parseSmtpConfig", () => {
     expect(() => parseSmtpConfig({ ...ok, SD_ALERT_SMTP_ALLOW_PLAINTEXT: "1", SD_ALERT_EMAIL_USERNAME: "u" })).toThrow(/PLAINTEXT/);
     expect(() => parseSmtpConfig({ ...ok, SD_ALERT_SMTP_ALLOW_PLAINTEXT: "1", SD_ALERT_EMAIL_PASSWORD: "p" })).toThrow(/PLAINTEXT/);
   });
+
+  it("明文與 IMPLICIT_TLS 僅接受未設或 1，其餘值啟動即 throw", () => {
+    const ok = baseEnv(587);
+    expect(parseSmtpConfig(ok)).toMatchObject({ allowPlaintext: false, implicitTls: false });
+    expect(parseSmtpConfig({ ...ok, SD_ALERT_SMTP_ALLOW_PLAINTEXT: "1" })?.allowPlaintext).toBe(true);
+    expect(parseSmtpConfig({ ...ok, SD_ALERT_EMAIL_IMPLICIT_TLS: "1" })?.implicitTls).toBe(true);
+    for (const v of ["true", "0", "yes", "TRUE", "2"]) {
+      expect(() => parseSmtpConfig({ ...ok, SD_ALERT_SMTP_ALLOW_PLAINTEXT: v })).toThrow(/SD_ALERT_SMTP_ALLOW_PLAINTEXT is invalid/);
+      expect(() => parseSmtpConfig({ ...ok, SD_ALERT_EMAIL_IMPLICIT_TLS: v })).toThrow(/SD_ALERT_EMAIL_IMPLICIT_TLS is invalid/);
+    }
+  });
 });
 
 describe("formatMail 與 transport 選項", () => {
