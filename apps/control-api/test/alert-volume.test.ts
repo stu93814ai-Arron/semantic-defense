@@ -51,7 +51,8 @@ describe("volume 與 breaker_open 告警", () => {
     expect(await kinds()).toEqual(["volume", "breaker_open"]);
     const payloads = (await app.db.query<{ payload: Record<string, unknown> }>("SELECT payload FROM alert_outbox WHERE kind IN ('volume','breaker_open') ORDER BY id")).rows.map((r) => r.payload);
     for (const p of payloads) {
-      expect(Object.keys(p).sort()).toEqual(["delivery_id", "kind"]);
+      expect(Object.keys(p).sort()).toEqual(["at", "delivery_id", "kind"]);
+      expect(p.at).toBe(T0);
       expect(JSON.stringify(p)).not.toMatch(/64\.0\.|https?:/i);
     }
   });

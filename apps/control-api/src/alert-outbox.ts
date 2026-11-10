@@ -14,7 +14,7 @@ export const ALERT_DELIVER_BATCH = 16;
 export const ALERT_FAILED_RETENTION_MS = 30 * 24 * 60 * 60_000;
 export const ALERT_OUTBOX_MAX_ROWS_DEFAULT = 10_000;
 
-export type AlertPayload = { delivery_id: string; kind: AlertKind; entry_id?: string; case_id?: string };
+export type AlertPayload = { delivery_id: string; kind: AlertKind; entry_id?: string; case_id?: string; at?: number };
 export type OutboxRow = {
   id: string; audit_id: string | null; channel: AlertChannel; kind: AlertKind; payload: AlertPayload;
   attempts: number; next_attempt_at: string; status: "pending" | "delivered" | "failed";
@@ -68,9 +68,10 @@ export async function enqueueAlerts(
   opts: { channels: readonly AlertChannel[]; kind: AlertKind; now: number; auditId?: number; entryId?: string; caseId?: string },
 ): Promise<string[]> {
   const ids: string[] = [];
-  const base: Record<string, string> = { kind: opts.kind };
+  const base: Record<string, string | number> = { kind: opts.kind };
   if (opts.entryId) base.entry_id = opts.entryId;
   if (opts.caseId) base.case_id = opts.caseId;
+  if (opts.kind === "volume" || opts.kind === "breaker_open") base.at = opts.now;
   const raw = JSON.stringify(base);
   for (const channel of opts.channels) {
     const r = await q.query<{ id: string }>(
