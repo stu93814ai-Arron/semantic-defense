@@ -181,7 +181,9 @@ async function backfillTsMs(q: FlowSession, hooks?: FlowSchemaHooks): Promise<vo
  * 其他已在跑的 ingest INSERT 與判定 SELECT 只碰到列鎖，可繼續工作。
  */
 
-/** 用 try_lock 輪詢，避免他實例堵在 pg_advisory_lock 的開著的 statement 上，與 CONCURRENTLY 互相等待。 */
+/** 用 try_lock 輪詢，避免他實例堵在 pg_advisory_lock 的開著的 statement 上，與 CONCURRENTLY 互相等待。
+ * 輪詢不設上限可接受：持有者連線斷開時，Postgres 會自動釋放 session 級 advisory lock。
+ */
 async function acquireSchemaLock(q: FlowSession): Promise<void> {
   for (;;) {
     const r = await q.query<{ ok: boolean }>("SELECT pg_try_advisory_lock($1) AS ok", [FLOW_SCHEMA_LOCK]);
