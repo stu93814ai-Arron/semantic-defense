@@ -38,10 +38,11 @@ const NOOP: TickResult = { ran: false, groups: 0, hits: 0 };
 type GroupKey = { sensor_id: string; app_id: string; src_ip: string; win: number };
 /**
  * 分組鍵欄位：窗由 ts_ms 算（ingest 以 Date.parse 寫入／啟動時 SQL 同值回填，與 judgeFlows 一致）；新列另帶 received_at 推 cursor。
- * ts_ms NULL（ts 無法換算的舊列）→ 不分組，只計入 stats.nullTs；仍參與 upto，cursor 照常前進（ts slice）。
+ * ts_ms NULL：毒列（flow_ts_ms 亦 NULL）不分組、計入 stats.nullTs，cursor 照常前進；
+ * 待回填（flow_ts_ms 非 NULL）則 cursor 停在該列之前，計入 stats.pendingBackfill（R-B）。flow_ts_ms 只用於停點，不分組。
  */
 type KeyRow = Pick<FlowEventRow, "sensor_id" | "app_id" | "src_ip" | "ts_ms">;
-type ScanRow = KeyRow & Pick<FlowEventRow, "received_at">;
+type ScanRow = KeyRow & Pick<FlowEventRow, "received_at"> & { convertible_ms: string | null };
 /**
  * runJudgeTick 的測試掛勾。beforeAutoList：時序注入點（讀完白名單之後、autoListInTx 之前）；
  * afterAllowlistShare：autoListInTx 取得 SHARE 之後。只能經 runJudgeTick 第 4 個參數傳入；buildApp 的排程不傳（A 組領航員裁定 11-09）。
@@ -57,26 +58,42 @@ export type TickOpts = TickHooks & { autoBreakerPerHour?: number; autoListEnable
 /** 一個 tick 內共用：門檻、白名單（每個 tick 只讀一次；只決定要不要開案）、時間、log、掛勾、本 tick 計數（去重的 hit_while_listed、failed 的 SQLSTATE）。 */
 type TickCtx = { th: FlowThresholds; isAllowlisted: (ip: string) => boolean; now: number; log?: WarnLog; hooks: TickHooks; breakerPerHour: number;
   autoList: boolean;
-  stats: { suppressed: number; deduped: number; codes: Map<string, number>; nullTs: number } };
+  stats: { suppressed: number; deduped: number; codes: Map<string, number>; nullTs: number; pendingBackfill: number } };
 
-/** upto：這批實際看到的最大 received_at（沒有新列 → null，cursor 不動）。不用 control-api 的 now，ingest 時鐘較慢時才不會漏列。 */
-async function scanGroups(q: Queryable, cursor: number, now: number): Promise<{ keys: GroupKey[]; upto: number | null; nullTs: number }> {
+/** 待回填：ts_ms 仍 NULL 但 flow_ts_ms(ts) 算得出值。只用來決定 cursor 停點，絕不用來分組。 */
+const isPendingBackfill = (r: ScanRow): boolean => r.ts_ms === null && r.convertible_ms != null;
+
+/** cursor 停在最早一筆待回填列的 received_at 之前（含同一時間點的列都不可越過）。 */
+function cursorUpto(fresh: ScanRow[], pendingAt: number | null): number | null {
+  const seen = pendingAt === null ? fresh : fresh.filter((r) => Number(r.received_at) < pendingAt);
+  const last = seen.at(-1);
+  return last ? Number(last.received_at) : null;
+}
+
+/** upto：這批實際看到的最大 received_at（沒有新列或停在待回填之前 → null，cursor 不動）。不用 control-api 的 now，ingest 時鐘較慢時才不會漏列。 */
+async function scanGroups(q: Queryable, cursor: number, now: number): Promise<{ keys: GroupKey[]; upto: number | null; nullTs: number; pendingBackfill: number }> {
   const fresh = (await q.query<ScanRow>(
-    `SELECT sensor_id, app_id, src_ip, ts_ms, received_at FROM flow_events
-     WHERE received_at > $1 AND received_at <= $2 ORDER BY received_at LIMIT ${JUDGE_BATCH}`, [cursor, now])).rows;
+    `SELECT sensor_id, app_id, src_ip, ts_ms, received_at,
+            CASE WHEN ts_ms IS NULL THEN flow_ts_ms(ts) END AS convertible_ms
+     FROM flow_events
+     WHERE received_at > $1 AND received_at <= $2
+     ORDER BY received_at, sensor_id, flow_id LIMIT ${JUDGE_BATCH}`, [cursor, now])).rows;
   // 重疊區只取可分組的列：NULL 列在第一次掃到時已計數，不重複計
   const overlap = (await q.query<KeyRow>(
     `SELECT sensor_id, app_id, src_ip, ts_ms FROM flow_events
      WHERE received_at > $1 AND received_at <= $2 AND ts_ms IS NOT NULL`, [cursor - JUDGE_OVERLAP_MS, cursor])).rows;
+  const stopAt = fresh.findIndex(isPendingBackfill);
+  const pending = fresh.find(isPendingBackfill);
+  const visible = pending === undefined ? fresh : fresh.slice(0, stopAt);
+  const pendingBackfill = pending === undefined ? 0 : fresh.filter(isPendingBackfill).length;
   const keys = new Map<string, GroupKey>();
   let nullTs = 0;
-  for (const r of [...overlap, ...fresh]) {
+  for (const r of [...overlap, ...visible]) {
     if (r.ts_ms === null) { nullTs += 1; continue; }
     const win = Math.floor(Number(r.ts_ms) / FLOW_WINDOW_MS) * FLOW_WINDOW_MS;
     keys.set(JSON.stringify([r.sensor_id, r.app_id, r.src_ip, win]), { sensor_id: r.sensor_id, app_id: r.app_id, src_ip: r.src_ip, win });
   }
-  const last = fresh.at(-1);
-  return { keys: [...keys.values()], upto: last ? Number(last.received_at) : null, nullTs };
+  return { keys: [...keys.values()], upto: cursorUpto(fresh, pending === undefined ? null : Number(pending.received_at)), nullTs, pendingBackfill };
 }
 
 const toFlow = (r: FlowEventRow): FlowMetadataEvent => ({
@@ -207,6 +224,7 @@ function logTickCounts(log: WarnLog | undefined, n: { skipped: number; failed: n
   if (!log) return;
   const lines: [number, object, string][] = [
     [stats.nullTs, { null_ts: stats.nullTs }, "judge tick skipped rows without ts_ms"],
+    [stats.pendingBackfill, { pending_backfill: stats.pendingBackfill }, "judge tick pending backfill"],
     [n.skipped, { skipped: n.skipped }, "judge tick skipped non-host src_ip groups"],
     [n.failed, { failed: n.failed, codes: Object.fromEntries(stats.codes) }, "judge tick rolled back failed groups"],
     [stats.suppressed, { suppressed: stats.suppressed }, "judge tick suppressed hit_while_listed audits (1 per entry per hour)"],
@@ -232,8 +250,8 @@ export async function runJudgeTick(db: Db, now: number, log?: WarnLog, opts: Tic
     await expireOpenCases(q, now);
     const { breakerPerHour, autoList } = await prepareAutoList(q, opts, now, log);
     const cur = (await q.query<{ received_upto: string }>("SELECT received_upto FROM judge_cursor WHERE id")).rows[0];
-    const { keys, upto, nullTs } = await scanGroups(q, Number(cur?.received_upto ?? 0), now);
-    const ctx: TickCtx = { th, isAllowlisted: await loadAllowlist(q, now), now, log, hooks: opts, breakerPerHour, autoList, stats: { suppressed: 0, deduped: 0, codes: new Map(), nullTs } };
+    const { keys, upto, nullTs, pendingBackfill } = await scanGroups(q, Number(cur?.received_upto ?? 0), now);
+    const ctx: TickCtx = { th, isAllowlisted: await loadAllowlist(q, now), now, log, hooks: opts, breakerPerHour, autoList, stats: { suppressed: 0, deduped: 0, codes: new Map(), nullTs, pendingBackfill } };
     const n = { hit: 0, miss: 0, skipped: 0, failed: 0 };
     for (const k of keys) n[await judgeGroupIsolated(q, k, ctx)] += 1;
     logTickCounts(log, n, ctx.stats);
