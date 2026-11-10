@@ -44,7 +44,7 @@ type KeyRow = Pick<FlowEventRow, "sensor_id" | "app_id" | "src_ip" | "ts_ms">;
 type ScanRow = KeyRow & Pick<FlowEventRow, "received_at">;
 /**
  * runJudgeTick 的測試掛勾。beforeAutoList：時序注入點（讀完白名單之後、autoListInTx 之前），
- * 只能經 runJudgeTick 第 4 個參數傳入；buildApp 的排程不傳（A 裁定 11-09）。
+ * 只能經 runJudgeTick 第 4 個參數傳入；buildApp 的排程不傳（A 組領航員裁定 11-09）。
  */
 export type TickHooks = { beforeAutoList?: () => Promise<void> };
 /**
@@ -237,7 +237,7 @@ export async function runJudgeTick(db: Db, now: number, log?: WarnLog, opts: Tic
     const n = { hit: 0, miss: 0, skipped: 0, failed: 0 };
     for (const k of keys) n[await judgeGroupIsolated(q, k, ctx)] += 1;
     logTickCounts(log, n, ctx.stats);
-    // R14b（全部組失敗就整個 tick 失敗）已移除（A 裁示 R18）：ts slice 後判定只讀 ts_ms，22007／22008／22009 只回滾該組、cursor 照常前進；
+    // R14b（全部組失敗就整個 tick 失敗）已移除（A 組領航員裁示 R18）：ts slice 後判定只讀 ts_ms，22007／22008／22009 只回滾該組、cursor 照常前進；
     // 非這三碼的錯誤仍在 judgeGroupIsolated 往外丟，整個 tick 回滾（B3／R14a）
     // 依 first_seen_at（第一次寫入、伺服器時間）清：重掃會一直刷新 updated_at，用它清會永遠清不掉（資安退回 R3）
     await q.query("DELETE FROM case_hits WHERE first_seen_at <= $1", [now - RETENTION_MS]);

@@ -185,7 +185,7 @@ describe("buildApp 排程", () => {
   });
 });
 
-describe("重掃時待審 max 以 GREATEST 更新（A 裁定 11-09）", () => {
+describe("重掃時待審 max 以 GREATEST 更新（A 組領航員裁定 11-09）", () => {
   type Full = { max_confidence: number; hit_count: number; expires_at: string; last_hit_at: string; state: string };
   const full = async () => (await app.db.query<Full>(
     "SELECT max_confidence, hit_count, expires_at, last_hit_at, state FROM blacklist_cases")).rows;
@@ -411,7 +411,7 @@ describe("只吞 SQLSTATE 22（data exception）；其他錯誤讓整個 tick ro
   });
 });
 
-describe("只吞 22007／22008／22009；其他錯誤整個 tick 回滾；全部組都 22 類失敗也照常前進（R14b 已移除，A 裁示 R18）", () => {
+describe("只吞 22007／22008／22009；其他錯誤整個 tick 回滾；全部組都 22 類失敗也照常前進（R14b 已移除，A 組領航員裁示 R18）", () => {
   const IP = "203.0.113.13";
   const trap = (code: string) => app.db.exec(`
     DROP TRIGGER IF EXISTS test_trap ON case_hits;

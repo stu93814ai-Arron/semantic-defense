@@ -3,7 +3,7 @@ import { writeAudit } from "./audit.js";
 import { autoListInTx, type AutoListOpts, type AutoListResult } from "./auto-blacklist.js";
 
 /**
- * 成案流程 commit 9：E3.A 自動上榜條件（計畫 §1 步驟 4、§6.1；A 裁定 11-09）。
+ * 成案流程 commit 9：E3.A 自動上榜條件（計畫 §1 步驟 4、§6.1；A 組領航員裁定 11-09）。
  * - 計數只看 case_hits（命中明細不掛在案上；白名單 IP 也照存），有案與白名單無案兩條路徑共用 countHighSeverity。
  * - 高嚴重命中＝ontime_confidence ≥ auto；30 分鐘以 window_start 對比伺服器 now；只計 token 未撤銷且 app 仍綁定者。
  * - 成立：≥3 次，且 ≥2 個不同 app_id 或 sensor_id。
@@ -33,7 +33,7 @@ export type Suppressed = { reason: "allowlist" | "cooldown" | "breaker" | "non_p
 export const AUTO_SUPPRESSED_EVERY_MS = 60 * 60_000;
 
 /**
- * E3.A 成立但被擋下：blacklist.auto_suppressed（actor system:auto、sensor_id null；A 裁定 11-09 Q4）。
+ * E3.A 成立但被擋下：blacklist.auto_suppressed（actor system:auto、sensor_id null；A 組領航員裁定 11-09 Q4）。
  * 寫前在同一 tx 查 audit_events 過去 1 小時有沒有同 (ip, reason)（partial index audit_auto_suppressed_ip_reason）；
  * 有 → 不寫、回 false（呼叫端計數，tick 結束記一行只帶數量的 log）。寫了回 true。
  */

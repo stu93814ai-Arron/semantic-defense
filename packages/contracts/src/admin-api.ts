@@ -58,7 +58,7 @@ export const DEFAULT_THRESHOLDS: Readonly<Thresholds> = Object.freeze({ case: CA
 
 /**
  * 黑名單待審候選：以 case_id 為鍵；ip 只收 /32、/128。
- * confidence＝累加期間的最高分；hit_count＝累加次數（≥1）；last_hit_at＝最後一次命中的伺服器時間（A 裁定 Q10）。
+ * confidence＝累加期間的最高分；hit_count＝累加次數（≥1）；last_hit_at＝最後一次命中的伺服器時間（A 組領航員裁定 Q10）。
  * 到期（created_at + 24h）、狀態等只在 DB，不進契約。
  */
 export const PendingCandidateSchema = z.strictObject({

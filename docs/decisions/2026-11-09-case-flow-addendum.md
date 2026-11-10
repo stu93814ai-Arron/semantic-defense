@@ -1,11 +1,13 @@
 # 2026-11-09 Case flow decision record (Asia/Taipei)
 
-## 21:09 PM ruling
+## 21:09 Ruling by 軟體大總召 (PM)
+This is the PM's ruling and was not confirmed by the user.
 - R12 ts_ms: before stage 3 closes, right after batch 3 and before batch 4 (later moved ahead of batch 3 by the R18 ruling). ingest writes ts_ms, add an index on (sensor_id, app_id, src_ip, ts_ms), the judge reads ts_ms, and the migration backfills rows that can be converted. Rows that can't be converted fall under R15.
 - R10 reserved addresses: ingest rejects loopback, link-local, multicast, broadcast, unspecified, 240/4, 2001:db8::/32 and other documentation ranges with 400, and the count must be visible in health or audit. RFC1918 and ULA are still accepted. hostCidr also excludes Class E and documentation ranges. The judge-side skip stays as a second line of defense. This is done as its own slice.
 - ts lower bound: ingest rejects any ts earlier than now - 7 days (the retention period) with 400.
 
-## 21:58 PM ruling (batch 3 returned by security)
+## 21:58 Ruling by 軟體大總召 (PM, batch 3 returned by security)
+This is the PM's ruling and was not confirmed by the user.
 - R18 takes option (a): ts_ms is its own small slice, goes to security first and merges first (merged as 17f6726, PR #20). Batch 3 then rebases onto it and removes or relaxes R14b. No quarantine table (b).
 - B5, R19, R17 and the coverage scope go ahead as the 領航員 specified. If control-api isn't in coverage, add it.
 - autoListEnabled is added in this batch. The development default is off, and the default is a single constant.

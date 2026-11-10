@@ -11,7 +11,7 @@ import { LOCK_TEST_TIMEOUT_MS, LOCK_TIMEOUT_MS, holdAllowlistInsert, holdsAdviso
 import { AUTO_LOCK } from "../src/auto-breaker.js";
 
 /**
- * 成案流程 commit 9：E3.A 自動上榜條件（計畫 §1 步驟 4、§6.1、§7；A 裁定 11-09）。
+ * 成案流程 commit 9：E3.A 自動上榜條件（計畫 §1 步驟 4、§6.1、§7；A 組領航員裁定 11-09）。
  * 30 分鐘內 ≥3 次高嚴重命中（ontime_confidence ≥ auto），且 ≥2 個已綁定的 app_id 或 sensor_id。
  */
 let app: ControlApi;
@@ -157,7 +157,7 @@ describe("E3.A 與白名單", () => {
       { actor: "system:auto", sensor_id: null, detail: { reason: "allowlist", ip: CIDR, case_id: c!.case_id } }]);
   });
 
-  it("autoListInTx 順序（A 裁定 11-09 第 2 點）：白名單先於 below_auto → 白名單內且信心未達 auto 回 allowlisted", async () => {
+  it("autoListInTx 順序（A 組領航員裁定 11-09 第 2 點）：白名單先於 below_auto → 白名單內且信心未達 auto 回 allowlisted", async () => {
     await boot();
     await allow("64.0.113.0/24");
     expect(await writeAutoBlocklistEntry(app.db, { ip: IP, confidence: 0.5, case_id: randomUUID() }, T0)).toEqual({ status: "allowlisted" });
@@ -312,7 +312,7 @@ describe("E3.A 熔斷：AUTO_LOCK 序列化與 auto_breaker 單列", () => {
   });
 });
 
-describe("自動上榜路徑只吞 data exception：其他錯誤讓整個 tick rollback、cursor 不動（A 裁定）", () => {
+describe("自動上榜路徑只吞 data exception：其他錯誤讓整個 tick rollback、cursor 不動（A 組領航員裁定）", () => {
   const cursor = async () => (await app.db.query<{ received_upto: string }>("SELECT received_upto FROM judge_cursor")).rows;
   /** 測試專用 trigger：寫 blocklist_entries（autoListInTx 的 insert）時丟指定 SQLSTATE。 */
   const trap = (code: string) => app.db.exec(`

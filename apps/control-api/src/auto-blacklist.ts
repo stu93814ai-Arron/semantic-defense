@@ -60,7 +60,7 @@ export function hostCidr(raw: string): string | null {
 /** 冷卻：同一 canonical IP（完全相同；涵蓋它的 /24 不算）在這段時間內被撤回過（auto 或 manual）就不自動上榜。 */
 export const AUTO_COOLDOWN_MS = 2 * 60 * 60 * 1000;
 /**
- * gates：E3.A 觸發才有的閘門（冷卻＋熔斷共用一個選項；A 裁定 11-09 第 4 點）。
+ * gates：E3.A 觸發才有的閘門（冷卻＋熔斷共用一個選項；A 組領航員裁定 11-09 第 4 點）。
  * 判定 tick 開（帶 breakerPerHour）；測試用的 §7 包裝（test/helpers/auto-list.ts）關，§7 原行為不變。
  */
 export type AutoListOpts = { log?: WarnLog; gates?: false | { breakerPerHour: number } };
@@ -86,14 +86,14 @@ function scopeOf(raw: string): { ip: string } | { reject: AutoListResult } {
 
 /**
  * tx 內版本（計畫 §7；判定 tick 在自己的 tx 裡呼叫）。白名單在這裡以 SHARE 鎖重新檢查：
- * tick 早先讀的白名單只用來決定要不要開案，不能當上榜依據（A 裁定 11-09）。
+ * tick 早先讀的白名單只用來決定要不要開案，不能當上榜依據（A 組領航員裁定 11-09）。
  * opts.log：門檻 fail-closed 時的 warn 去處（呼叫端傳 tick／app 的 logger）。
  */
 export async function autoListInTx(q: Queryable, input: AutoListInput, now: number, opts: AutoListOpts = {}): Promise<AutoListResult> {
   const scoped = scopeOf(input.ip);
   if ("reject" in scoped) return scoped.reject;
   const { ip } = scoped;
-  // 順序（A 裁定 11-09 第 2 點）：白名單（SHARE 鎖）→ below_auto → 冷卻 → AUTO_LOCK → 熔斷 → 寫入（冷卻、熔斷見 commit 10、11）
+  // 順序（A 組領航員裁定 11-09 第 2 點）：白名單（SHARE 鎖）→ below_auto → 冷卻 → AUTO_LOCK → 熔斷 → 寫入（冷卻、熔斷見 commit 10、11）
   await lockAllowlistShare(q);
   if (await allowlisted(q, ip, now)) return { status: "allowlisted" };
   const { auto } = await loadThresholds(q, opts.log);

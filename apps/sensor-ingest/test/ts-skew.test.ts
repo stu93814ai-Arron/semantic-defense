@@ -49,7 +49,7 @@ describe("ts 超前拒收", () => {
     await app.close();
   });
 
-  it("順序（A 裁定）：超前又 app_id 未綁定 → 400（先於綁定 403），不寫 flow_rejections", async () => {
+  it("順序（A 組領航員裁定）：超前又 app_id 未綁定 → 400（先於綁定 403），不寫 flow_rejections", async () => {
     const { app, send } = await setup();
     const r = await send(at(NOW + 10 * MIN), "app-unbound");
     expect([r.statusCode, r.json()]).toEqual([400, { error: "ts 超前接收時間" }]);

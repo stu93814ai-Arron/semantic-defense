@@ -3,7 +3,7 @@ import { writeAudit } from "./audit.js";
 import type { WarnLog } from "./thresholds.js";
 
 /**
- * 成案流程 commit 11：自動上榜熔斷（計畫 §6.3；A 裁定 11-09 第 5 點）。
+ * 成案流程 commit 11：自動上榜熔斷（計畫 §6.3；A 組領航員裁定 11-09 第 5 點）。
  * - 全域、滑動 1 小時：source=auto 且 created_at 在窗內的筆數 ≥ N → 熔斷（第 N+1 筆起擋，一小時最多 N 筆）。
  * - 所有自動寫入都在 AUTO_LOCK（xact advisory lock）下序列化，count 才正確；不擋人工撤回與讀取。
  * - auto_breaker 單列只記開關（opened_at），用來判斷「轉換」：只在開→關、關→開時寫稽核＋log.warn（只帶數量）。

@@ -195,7 +195,7 @@ function installRouteAudit(app: ControlApi): void {
   });
 }
 
-/** 熔斷上限必須是正整數（A 裁定）：0、負數、小數、NaN、Infinity 在啟動時就拋錯，不開 DB。 */
+/** 熔斷上限必須是正整數（A 組領航員裁定）：0、負數、小數、NaN、Infinity 在啟動時就拋錯，不開 DB。 */
 function assertBreakerLimit(n: number | undefined): void {
   if (n !== undefined && !(Number.isSafeInteger(n) && n > 0)) throw new Error("autoBreakerPerHour 必須是正整數");
 }
