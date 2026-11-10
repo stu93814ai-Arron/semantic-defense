@@ -126,6 +126,12 @@ Each commit is at most 400 lines, red then green. `package.json` / the lockfile 
 
 ## 8. Open / residual
 
+A 組領航員裁示（資安退回本切片後的追蹤清單）：
+
+- R1：其餘 embedded-address 範圍（`::/96`、`::ffff:0:0:0/96`、`100::/64`、`2001:2::/48`、`3fff::/20`）放到下次 R10 切片。
+- R4／R5（資安殘留, 詳見資安回報）為後續項。
+- B 組提出的 401/403 用語調整，稍後另開一小筆提交處理。
+
 A 組領航員裁示: section 9 of the security test list (`/workspace/exec-a-logs/push-design-tests.md`) takes precedence over section 2. From section 2, keep only these behaviour tests, run against a local fake server: the server does not advertise STARTTLS, so sending must fail (`requireTLS`); a self-signed or wrong-hostname certificate must fail; in plaintext opt-in mode, AUTH is never sent; dot-stuffing; CR/LF in addresses and malformed addresses are rejected. Do not write the protocol-internal tests (re-sending EHLO, pipelining, line or total size limits); those are nodemailer's job. The test list itself is unchanged and is not part of this repository.
 
 Adding an IP or CIDR to the payload remains a later opt-in. There are no alert-storm summaries for now. 軟體大總召 may overrule any 領航員 default or the PM items above (the latter are not confirmed by the user).
