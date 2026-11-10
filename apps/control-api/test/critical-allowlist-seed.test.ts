@@ -10,7 +10,7 @@ import { randomUUID } from "node:crypto";
 /** 安裝時關鍵基礎設施白名單：SD_CRITICAL_ALLOWLIST，種子不可刪、不可設到期。 */
 const NOW = Date.parse("2026-11-09T00:00:00Z");
 const V4 = "64.0.113.0/24";
-const V6 = "2400:cb00::/32";
+const V6 = "2400:cb00::/48";
 const one = (id: string) => ADMIN_API_PATHS.whitelistEntry.replace(":entryId", id);
 
 let app: ControlApi | undefined;
@@ -81,9 +81,10 @@ describe("SD_CRITICAL_ALLOWLIST 安裝種子", () => {
   it("種子 CIDR 內的位址 → autoListInTx 回 allowlisted，不上榜、不寫 auto_list 稽核", async () => {
     await wipeAllowlist();
     await boot(`${V4},${V6}`);
+    await app!.db.exec("TRUNCATE TABLE blocklist_entries, audit_events CASCADE");
     const caseId = randomUUID();
     const v4 = await writeAutoBlocklistEntry(app!.db, { ip: "64.0.113.7", confidence: 0.95, case_id: caseId }, NOW);
-    const v6 = await writeAutoBlocklistEntry(app!.db, { ip: "2400:cb00:1::5/128", confidence: 0.95, case_id: caseId }, NOW);
+    const v6 = await writeAutoBlocklistEntry(app!.db, { ip: "2400:cb00::5/128", confidence: 0.95, case_id: caseId }, NOW);
     expect([v4, v6]).toEqual([{ status: "allowlisted" }, { status: "allowlisted" }]);
     expect(Number((await app!.db.query<{ n: string }>("SELECT count(*) AS n FROM blocklist_entries")).rows[0]!.n)).toBe(0);
     expect(Number((await app!.db.query<{ n: string }>(
@@ -119,13 +120,100 @@ describe("SD_CRITICAL_ALLOWLIST 安裝種子", () => {
     expect((await seeds()).map((r) => r.cidr)).toEqual([V4]);
   });
 
-  it("從設定拿掉某 CIDR 後重啟，原種子列仍在", async () => {
-    await wipeAllowlist();
-    await boot(`${V4},${V6}`);
+});
+
+
+const wlAudits = async (action: string) =>
+  (await app!.db.query<{ actor: string; at: string; detail: Record<string, unknown> }>(
+    "SELECT actor, at, detail FROM audit_events WHERE action = $1 ORDER BY id", [action])).rows;
+
+describe("SD_CRITICAL_ALLOWLIST 前綴上限", () => {
+  it("IPv4 /16 與 IPv6 /48 可啟動", async () => {
+    for (const cidr of ["64.0.0.0/16", "2400:cb00::/48"]) {
+      await wipeAllowlist();
+      await boot(cidr);
+      expect((await seeds()).map((r) => r.cidr)).toEqual([cidr]);
+      await app!.close();
+      app = undefined;
+    }
+  });
+
+  it("IPv4 /15 與 IPv6 /47 使 buildApp 拋錯，訊息不含該值", async () => {
+    for (const cidr of ["64.0.0.0/15", "2400:cb00::/47"]) {
+      await wipeAllowlist();
+      process.env.SD_CRITICAL_ALLOWLIST = cidr;
+      let thrown: unknown;
+      try {
+        await buildApp({ idleTimeoutMs: 60_000, databaseUrl: requireDatabaseUrl(), now: () => NOW });
+      } catch (err) {
+        thrown = err;
+      }
+      const msg = String(thrown);
+      expect(thrown).toBeInstanceOf(Error);
+      expect(msg).toMatch(/SD_CRITICAL_ALLOWLIST/);
+      expect(msg).not.toContain(cidr);
+      delete process.env.SD_CRITICAL_ALLOWLIST;
+    }
+  });
+});
+
+describe("安裝種子與設定同步", () => {
+  it("新插入的種子寫 whitelist.create；再次啟動無新列則不寫 create／delete 稽核", async () => {
+    await clearLists();
+    await boot(V4);
+    const [row] = await seeds();
+    const creates = await wlAudits("whitelist.create");
+    expect(creates).toHaveLength(1);
+    expect(creates[0]).toMatchObject({
+      actor: "system:install", at: String(NOW),
+      detail: {
+        entry_id: row!.entry_id, cidr: V4, reason: "critical-infrastructure",
+        created_by: "system:install", created_at: new Date(NOW).toISOString(), expires_at: null,
+      },
+    });
     await app!.close();
     app = undefined;
     await boot(V4);
-    expect((await seeds()).map((r) => r.cidr).sort()).toEqual([V6, V4].sort());
+    expect(await wlAudits("whitelist.create")).toHaveLength(1);
+    expect(await wlAudits("whitelist.delete")).toHaveLength(0);
+  });
+
+  it("從設定拿掉的種子會在啟動時刪除並寫 whitelist.delete，不恢復已撤回封鎖", async () => {
+    await clearLists();
+    const blockId = await addBlock("64.0.113.7/32", "auto");
+    await boot(`${V4},${V6}`);
+    const v4id = (await seeds()).find((r) => r.cidr === V4)!.entry_id;
+    expect((await listedBlocks()).find((r) => r.entry_id === blockId)?.revoked_at).toBe(String(NOW));
+    await app!.close();
+    app = undefined;
+    await boot(V6);
+    expect((await seeds()).map((r) => r.cidr)).toEqual([V6]);
+    const dels = await wlAudits("whitelist.delete");
+    expect(dels).toHaveLength(1);
+    expect(dels[0]).toMatchObject({
+      actor: "system:install", at: String(NOW),
+      detail: { entry_id: v4id, cidr: V4, created_by: "system:install", expires_at: null },
+    });
+    expect((await listedBlocks()).find((r) => r.entry_id === blockId)?.revoked_at).toBe(String(NOW));
+  });
+
+  it("環境變數為空時刪除全部種子並寫 whitelist.delete，不恢復已撤回封鎖", async () => {
+    await clearLists();
+    const blockId = await addBlock("64.0.113.7/32", "auto");
+    await boot(V4);
+    const seedId = (await seeds())[0]!.entry_id;
+    expect((await listedBlocks()).find((r) => r.entry_id === blockId)?.revoked_at).toBe(String(NOW));
+    await app!.close();
+    app = undefined;
+    await boot("");
+    expect(await seeds()).toEqual([]);
+    const dels = await wlAudits("whitelist.delete");
+    expect(dels).toHaveLength(1);
+    expect(dels[0]).toMatchObject({
+      actor: "system:install",
+      detail: { entry_id: seedId, cidr: V4, created_by: "system:install" },
+    });
+    expect((await listedBlocks()).find((r) => r.entry_id === blockId)?.revoked_at).toBe(String(NOW));
   });
 });
 

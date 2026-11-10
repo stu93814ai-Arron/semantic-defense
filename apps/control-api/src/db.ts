@@ -1,6 +1,8 @@
 import pg from "pg";
 import { CRITICAL_ALLOWLIST_ACTOR, CRITICAL_ALLOWLIST_REASON, parseCriticalAllowlist } from "./critical-allowlist.js";
 import { revokeContainedBlocks } from "./revoke-contained.js";
+import { writeAudit } from "./audit.js";
+import { ALLOWLIST_COLS, toAllowlistEntry, type AllowlistRow } from "./allowlist-row.js";
 
 /** 可換驅動的精簡查詢介面；生產與測試皆走 Postgres（via databaseUrl／DATABASE_URL）。 */
 export type Db = {
@@ -202,28 +204,52 @@ async function seedCriticalAllowlist(client: pg.PoolClient, now: () => number): 
   const q: Queryable = {
     query: async <R>(sql: string, params?: unknown[]) => ({ rows: (await client.query(sql, params)).rows as R[] }),
   };
-  for (const cidr of cidrs) {
-    await client.query("BEGIN");
-    try {
-      const inserted = await client.query<{ entry_id: string }>(
-        `INSERT INTO allowlist_entries (entry_id, cidr, reason, created_by, created_at, expires_at)
+  await client.query("BEGIN");
+  try {
+    const stale = await q.query<AllowlistRow>(
+      `DELETE FROM allowlist_entries
+        WHERE created_by = $1 AND NOT (cidr = ANY($2::text[]))
+        RETURNING ${ALLOWLIST_COLS}`,
+      [CRITICAL_ALLOWLIST_ACTOR, cidrs],
+    );
+    for (const row of stale.rows) {
+      await writeAudit(q, {
+        action: "whitelist.delete", actor: CRITICAL_ALLOWLIST_ACTOR, sensor_id: null, at,
+        detail: { ...toAllowlistEntry(row) },
+      });
+    }
+    const current: { cidr: string; entry_id: string }[] = [];
+    for (const cidr of cidrs) {
+      const inserted = await q.query<AllowlistRow>(
+        `INSERT INTO allowlist_entries (${ALLOWLIST_COLS})
          VALUES (gen_random_uuid(), $1, $2, $3, $4, NULL)
          ON CONFLICT (cidr) WHERE created_by = 'system:install' DO NOTHING
-         RETURNING entry_id`,
+         RETURNING ${ALLOWLIST_COLS}`,
         [cidr, CRITICAL_ALLOWLIST_REASON, CRITICAL_ALLOWLIST_ACTOR, at],
       );
-      const entryId = inserted.rows[0]?.entry_id
-        ?? (await client.query<{ entry_id: string }>(
+      const row = inserted.rows[0];
+      if (row) {
+        const e = toAllowlistEntry(row);
+        await writeAudit(q, {
+          action: "whitelist.create", actor: CRITICAL_ALLOWLIST_ACTOR, sensor_id: null, at, detail: { ...e },
+        });
+        current.push({ cidr, entry_id: e.entry_id });
+      } else {
+        const existing = (await q.query<{ entry_id: string }>(
           "SELECT entry_id FROM allowlist_entries WHERE cidr = $1 AND created_by = $2",
           [cidr, CRITICAL_ALLOWLIST_ACTOR],
-        )).rows[0]?.entry_id;
-      if (!entryId) throw new Error("critical allowlist seed row missing");
-      await revokeContainedBlocks(q, { cidr, allowlistEntryId: entryId, actor: CRITICAL_ALLOWLIST_ACTOR, at });
-      await client.query("COMMIT");
-    } catch (err) {
-      try { await client.query("ROLLBACK"); } catch { /* 與 asTx 相同：ROLLBACK 失敗仍拋原錯 */ }
-      throw err;
+        )).rows[0];
+        if (!existing) throw new Error("critical allowlist seed row missing");
+        current.push({ cidr, entry_id: existing.entry_id });
+      }
     }
+    for (const s of current) {
+      await revokeContainedBlocks(q, { cidr: s.cidr, allowlistEntryId: s.entry_id, actor: CRITICAL_ALLOWLIST_ACTOR, at });
+    }
+    await client.query("COMMIT");
+  } catch (err) {
+    try { await client.query("ROLLBACK"); } catch { /* 與 asTx 相同：ROLLBACK 失敗仍拋原錯 */ }
+    throw err;
   }
 }
 
