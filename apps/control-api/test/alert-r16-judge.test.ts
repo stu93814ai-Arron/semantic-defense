@@ -144,6 +144,25 @@ describe("cursor 落後與 stale_pending 告警", () => {
     expect((await kinds()).map((r) => r.kind)).toEqual(["cursor_lag", "cursor_lag"]);
   });
 
+  it("cursor 落後恰好等於門檻不告警，超過 1ms 才告警", async () => {
+    await boot();
+    await app.db.query(
+      "INSERT INTO judge_cursor (id, received_upto) VALUES (TRUE, $1) ON CONFLICT (id) DO UPDATE SET received_upto = $1",
+      [T0],
+    );
+    expect(await insertFlowEvents(app.db, [
+      { flow: flow("203.0.113.10", T0, 80, false), sensorId: "s-1", receivedAt: T0 + CFG.lagMs },
+    ])).toBe(1);
+    await apply("success");
+    expect(await kinds()).toEqual([]);
+    await app.db.query("UPDATE flow_events SET received_at = $1", [T0 + CFG.lagMs + 1]);
+    await apply("success");
+    const rows = await kinds();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.kind).toBe("cursor_lag");
+    expect(rows[0]!.payload.lag_ms).toBe(CFG.lagMs + 1);
+  });
+
   it("stale_pending 發生時入列一筆且只帶筆數；health 含三個欄位", async () => {
     await boot();
     const leftover = Array.from({ length: 2 }, (_, i) => ({
