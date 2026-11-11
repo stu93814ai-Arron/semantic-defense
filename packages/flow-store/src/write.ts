@@ -92,7 +92,31 @@ EXCEPTION WHEN data_exception OR feature_not_supported THEN
 END
 $fn$`;
 
-const REJECTIONS_DDL = `CREATE TABLE IF NOT EXISTS flow_rejections (id BIGSERIAL PRIMARY KEY, sensor_id TEXT NOT NULL, at BIGINT NOT NULL, reason TEXT NOT NULL)`;
+const REJECTIONS_DDL = `CREATE TABLE IF NOT EXISTS flow_rejections (
+  id BIGSERIAL PRIMARY KEY, sensor_id TEXT NOT NULL, at BIGINT NOT NULL,
+  reason TEXT NOT NULL, CONSTRAINT flow_rejections_reason_check CHECK (reason IN ('unbound_app', 'reserved'))
+)`;
+
+async function columnDefault(q: FlowSession, table: string, column: string): Promise<string | null> {
+  const r = await q.query<{ column_default: string | null }>(
+    `SELECT column_default FROM information_schema.columns
+     WHERE table_schema = current_schema() AND table_name = $1 AND column_name = $2`,
+    [table, column],
+  );
+  return r.rows[0]?.column_default ?? null;
+}
+
+/** null＝無此約束；false＝已建尚未 VALIDATE；true＝已驗證。 */
+async function constraintValidated(q: FlowSession, table: string, name: string): Promise<boolean | null> {
+  const r = await q.query<{ convalidated: boolean }>(
+    `SELECT c.convalidated FROM pg_constraint c
+     JOIN pg_class t ON t.oid = c.conrelid
+     JOIN pg_namespace n ON n.oid = t.relnamespace
+     WHERE n.nspname = current_schema() AND t.relname = $1 AND c.conname = $2`,
+    [table, name],
+  );
+  return r.rows[0] === undefined ? null : r.rows[0].convalidated;
+}
 
 async function columnExists(q: FlowSession, table: string, column: string): Promise<boolean> {
   const r = await q.query(
@@ -116,6 +140,33 @@ async function indexInvalid(q: FlowSession, name: string): Promise<boolean> {
 }
 
 
+/** 短交易內：缺欄則 ADD 並以 DEFAULT 回填舊列，再加 NOT VALID CHECK、最後 DROP DEFAULT。 */
+async function ensureReasonCheck(q: FlowSession): Promise<void> {
+  if (!(await columnExists(q, "flow_rejections", "reason"))) {
+    await q.query("ALTER TABLE flow_rejections ADD COLUMN reason TEXT NOT NULL DEFAULT 'unbound_app'");
+  }
+  if ((await constraintValidated(q, "flow_rejections", "flow_rejections_reason_check")) === null) {
+    await q.query(
+      "ALTER TABLE flow_rejections ADD CONSTRAINT flow_rejections_reason_check CHECK (reason IN ('unbound_app', 'reserved')) NOT VALID",
+    );
+  }
+  if ((await columnDefault(q, "flow_rejections", "reason")) !== null) {
+    await q.query("ALTER TABLE flow_rejections ALTER COLUMN reason DROP DEFAULT");
+  }
+}
+
+/** 大表 VALIDATE 不進短交易；與 R-B 索引相同用 statement_timeout，失敗則下次啟動再試。 */
+async function validateReasonCheck(q: FlowSession): Promise<void> {
+  await q.query(`SET statement_timeout = ${flowIndexTimeoutMs()}`);
+  try {
+    if ((await constraintValidated(q, "flow_rejections", "flow_rejections_reason_check")) === false) {
+      await q.query("ALTER TABLE flow_rejections VALIDATE CONSTRAINT flow_rejections_reason_check");
+    }
+  } finally {
+    await q.query("RESET statement_timeout");
+  }
+}
+
 async function inShortTx<T>(q: FlowSession, fn: () => Promise<T>): Promise<T> {
   await q.query("BEGIN");
   try {
@@ -137,9 +188,7 @@ async function runDdl(q: FlowSession): Promise<void> {
     }
     await q.query(TS_MS_FN);
     await q.query(REJECTIONS_DDL);
-    if (!(await columnExists(q, "flow_rejections", "reason"))) {
-      await q.query("ALTER TABLE flow_rejections ADD COLUMN reason TEXT NOT NULL DEFAULT 'unbound_app'");
-    }
+    await ensureReasonCheck(q);
     await q.query("CREATE INDEX IF NOT EXISTS flow_events_received_at ON flow_events (received_at)");
     await q.query("CREATE INDEX IF NOT EXISTS flow_rejections_at ON flow_rejections (at)");
   });
@@ -242,6 +291,7 @@ export async function ensureFlowSchema(db: FlowDb, opts?: { hooks?: FlowSchemaHo
     await acquireSchemaLock(q, opts?.log);
     try {
       await runDdl(q);
+      await validateReasonCheck(q);
       await ensureGroupIndexes(q);
       await backfillTsMs(q, opts?.hooks);
     } finally {

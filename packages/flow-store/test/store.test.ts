@@ -130,3 +130,31 @@ describe("flow_rejections.reason（A 組領航員裁示；總召 §21:09 R10）"
     expect(r.rows[0]!.indexdef).toMatch(/\(sensor_id,\s*at\)/);
   });
 });
+
+describe("flow_rejections.reason CHECK 與去掉 DEFAULT（R10-d）", () => {
+  it("補欄回填舊列後才去掉 DEFAULT；CHECK 只允許 unbound_app 與 reserved", async () => {
+    await db.query("ALTER TABLE flow_rejections DROP COLUMN reason");
+    await db.query("INSERT INTO flow_rejections (sensor_id, at) VALUES ('s-old', $1)", [T0]);
+    await ensureFlowSchema(db);
+    const rows = await db.query<{ sensor_id: string; reason: string }>(
+      "SELECT sensor_id, reason FROM flow_rejections");
+    expect(rows.rows).toEqual([{ sensor_id: "s-old", reason: REJECTION_UNBOUND_APP }]);
+    const def = await db.query<{ column_default: string | null }>(
+      `SELECT column_default FROM information_schema.columns
+       WHERE table_schema = current_schema() AND table_name = 'flow_rejections' AND column_name = 'reason'`);
+    expect(def.rows[0]!.column_default).toBeNull();
+    const chk = await db.query<{ convalidated: boolean }>(
+      `SELECT c.convalidated FROM pg_constraint c
+       JOIN pg_class t ON t.oid = c.conrelid
+       JOIN pg_namespace n ON n.oid = t.relnamespace
+       WHERE n.nspname = current_schema() AND t.relname = 'flow_rejections'
+         AND c.conname = 'flow_rejections_reason_check'`);
+    expect(chk.rows).toEqual([{ convalidated: true }]);
+    await expect(db.query(
+      "INSERT INTO flow_rejections (sensor_id, at, reason) VALUES ('s-x', $1, 'other')", [T0],
+    )).rejects.toMatchObject({ code: "23514" });
+    await expect(db.query(
+      "INSERT INTO flow_rejections (sensor_id, at) VALUES ('s-y', $1)", [T0],
+    )).rejects.toMatchObject({ code: "23502" });
+  });
+});
