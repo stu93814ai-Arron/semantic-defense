@@ -15,20 +15,46 @@
 - sensor-ingest 新版啟動時跑遷移（`packages/flow-store/src/write.ts` 的 `ensureFlowSchema`），補 `ts_ms` 欄並分批回填。
 - 滾動升級期間，舊版 ingest 寫入的列 ts 合法但 `ts_ms` 為 NULL：若該列 `received_at` 落後表內最新 `received_at`（`received_at <= now`）不超過 `PENDING_BACKFILL_MAX_LAG_MS`（10 分鐘），新版判定 cursor 會停在該列之前（log `{pending_backfill:n}`），回填補上後再判定分組。全部 ingest 升級完後再重啟一次 sensor-ingest，即可補齊。
 - **回填結束後才出現的可轉換 NULL**（例如舊版 ingest／restore）：若最早一筆待回填列的 `received_at` 已落後最新 `received_at` 超過 10 分鐘，判定會略過該列、不計分組，與毒列相同，並計 `{stale_pending:n}`、寫一行 error（只含筆數，不含 IP／ts）。上限內行為不變。沒有定期回填，需再啟動 ingest 才會補 `ts_ms`。lag 基準是最新 `received_at` 而不是 wall-clock now，以免首次回填時歷史列全部被當成過期而永久略過。
-- **超過 lag 上限而被略過的列永遠不會再被判定**（cursor 已越過，不會倒退；之後回填補上 `ts_ms` 也不會重判）。因此若首次升級的回填本身跑超過 10 分鐘，期間舊版 ingest 寫入的可轉換 NULL 列可能被略過。
-- **已接受的缺口**：若順序沒守住，新版判定的 cursor 已越過某些列之後，舊版 ingest 才寫入 `ts_ms` 為 NULL 的列，這些列下次啟動會被回填，但**不會再被判定**（cursor 不會倒退）。這是已接受的缺口，所以務必先升完所有 ingest。
+- **超過 lag 上限而被略過的列永遠不會再被判定**（cursor 已越過，不會倒退；之後回填補上 `ts_ms` 也不會重判）。因此若首次升級的回填本身跑超過 10 分鐘，期間舊版 ingest 寫入的可轉換 NULL 列可能被略過。若升級順序沒守住，新版判定的 cursor 已越過某些列之後，舊版 ingest 才寫入 `ts_ms` 為 NULL 的列，這些列下次啟動會被回填，但同樣不會再被判定。**A 組領航員裁示（未經使用者確認）**。此情況會觸發 R16 的 `stale_pending` 告警（payload 只帶筆數）。收到該告警時，維運應查看 `GET /api/health` 的 `judge.stale_pending_total` 與當次告警筆數、確認 ingest／回填是否已完成，並決定是接受這批略過（無法靠把 cursor 倒退來重判），或從備份／來源重送這些 flow。務必先升完所有 ingest。
 
 **每次啟動的成本（Q2）**：
 
 - 回填依 `(received_at, sensor_id, flow_id)` 分批（每批 1000），各為短交易、只拿列鎖；只對可轉換的列寫入 `ts_ms`。
 - 遷移持有 session 級 `pg_advisory_lock(872364210)`（`FLOW_SCHEMA_LOCK`），結束後在 finally 釋放。多個 sensor-ingest 同時啟動會依序等待。
-- 部署前先估量：
+- 部署前先估量（只讀；這兩句已在測試庫實際執行）：
 
 ```sql
 SELECT count(*) AS total, count(*) FILTER (WHERE ts_ms IS NULL) AS null_ts FROM flow_events;
+
+-- (a) 毒列：ts_ms 為 NULL 且無法換算
+SELECT count(*) AS poison_unconvertible
+FROM flow_events
+WHERE ts_ms IS NULL AND flow_ts_ms(ts) IS NULL;
+
+-- (b) 待回填：ts_ms 為 NULL 但可換算
+SELECT count(*) AS pending_backfill
+FROM flow_events
+WHERE ts_ms IS NULL AND flow_ts_ms(ts) IS NOT NULL;
 ```
 
-**無法換算的舊列（毒列）**（A 組領航員裁示 (2026-11-10)）：Postgres 不收的 ts（0000 年、offset 超過 ±15:59、infinity 等）回填時會跳過、不重寫，`ts_ms` 維持 NULL。判定不分組、計 `{null_ts}`、cursor 照常前進。本切片不刪除這些列；7 天保留期到期後由 `purgeExpired` 清掉。判定 log `judge tick skipped rows without ts_ms {null_ts:n}` 持續出現時，表示還有這類列。
+任何清理之前必須先備份或匯出（例如 `pg_dump --table=flow_events` 或 `COPY flow_events TO ...`）。是否刪除由部署者依上述計數決定，本檢查表不代為刪除。
+
+- 毒列清理（僅說明）：`DELETE FROM flow_events WHERE ts_ms IS NULL AND flow_ts_ms(ts) IS NULL;`
+- 待回填列應優先重啟已升級的 sensor-ingest，讓 `ensureFlowSchema` 回填 `ts_ms`；不要先刪，刪了就不會被判定。
+
+**無法換算的舊列（毒列）**（A 組領航員裁示 (2026-11-10)）：Postgres 不收的 ts（0000 年、offset 超過 ±15:59、infinity 等）回填時會跳過、不重寫，`ts_ms` 維持 NULL。判定不分組、計 `{null_ts}`、cursor 照常前進，**不影響判定結果**。未手動清理時，7 天保留期到期後由 `purgeExpired` 清掉。判定 log `judge tick skipped rows without ts_ms {null_ts:n}` 持續出現時，表示還有這類列。
+
+
+## R16：對 tick 連敗與 cursor 落後設告警
+
+資安提出（11/9 第二批殘留；未併入 R15 本文）。判定行程是 control-api；健康檢查為 `GET /api/health`（`platform_admin`）的 `judge` 物件（主控台不改）：`tick_fail_streak`（連續失敗次數）、`cursor_lag_seconds`（表內 `max(received_at)` 減 cursor，無事件為 0）、`stale_pending_total`（累計略過的待回填筆數）。告警重用 `alert_outbox` 與既有 `SD_ALERT_*` 通道選擇；未設定通道時不寫 outbox，health 仍更新。payload 與錯誤只含 kind、error_class、數字與時間，不含 IP、SQL 或例外原文。
+
+| 變數 | 預設 | 說明 |
+|---|---|---|
+| `SD_JUDGE_TICK_FAIL_ALERT_N` | 3（**A 組領航員建議**；有效範圍 3–5） | 判定 tick 連續失敗達 N 次時入列一筆 `tick_fail`（每一輪連敗只告一次）；恢復後計數歸零，新一輪再告。無效值在啟動時拋錯。 |
+| `SD_JUDGE_CURSOR_LAG_MS` | 600000（與 `PENDING_BACKFILL_MAX_LAG_MS`／10 分鐘對齊；須為正整數） | cursor 落後超過此門檻時，每個落後段落入列一筆 `cursor_lag`。無效值在啟動時拋錯。 |
+
+`stale_pending` 見上方 R15：判定成功且本 tick 略過待回填列時入列，只帶筆數。收到該告警時的處置見 R15「超過 lag 上限而被略過的列」。
 
 ## R-B（已解決）：啟動遷移不再以 ACCESS EXCLUSIVE 鎖住整段回填
 
