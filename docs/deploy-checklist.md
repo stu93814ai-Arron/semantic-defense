@@ -86,6 +86,12 @@ ts 的小數秒超過 6 位時，Postgres 解析時會捨入到微秒，JS `Date
 - 要清空全部種子必須明確設定 `SD_CRITICAL_ALLOWLIST=none`；會為每列寫 `whitelist.delete`。`none` 不得與 CIDR 混用，否則 control-api 無法啟動，錯誤訊息不含該值。
 - 任何一次啟動若刪除了種子，會寫一筆 warn，只含刪除筆數，不含 IP 或 CIDR。
 
+## 待審核准／退回（A 組領航員裁示（未經使用者確認））
+
+A 組領航員裁示（未經使用者確認）：人工核准不受冷卻期限制；白名單一定要擋。退回不收本文，稽核不寫理由。管理面回應可帶 ip，新寫的核准／退回稽核與 log 不得含 IP。詳見 `docs/decisions/2026-11-11-bl-pending.md`。
+
+追蹤項：大寫 UUID 不放寬（僅小寫，否則 404）；既有含 IP 的稽核列不清（例如歷史 `blacklist.revoke`）。
+
 ## 開啟使用者建立 API 前的追蹤事項
 
 在任何使用者建立 API 開放前須完成：使用者名稱經 NFKC 正規化、trim、轉小寫；整個 `system:` 前綴保留；資料庫 CHECK。
