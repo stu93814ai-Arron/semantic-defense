@@ -44,8 +44,8 @@ export const JUDGE_BATCH = 5000;
  */
 export const PENDING_BACKFILL_MAX_LAG_MS = 10 * 60_000;
 export const LATE_MS = 5 * 60_000;
-export type TickResult = { ran: boolean; groups: number; hits: number };
-const NOOP: TickResult = { ran: false, groups: 0, hits: 0 };
+export type TickResult = { ran: boolean; groups: number; hits: number; stalePending: number };
+const NOOP: TickResult = { ran: false, groups: 0, hits: 0, stalePending: 0 };
 
 type GroupKey = { sensor_id: string; app_id: string; src_ip: string; win: number };
 /**
@@ -58,9 +58,9 @@ type KeyRow = Pick<FlowEventRow, "sensor_id" | "app_id" | "src_ip" | "ts_ms">;
 type ScanRow = KeyRow & Pick<FlowEventRow, "received_at"> & { convertible_ms: string | null };
 /**
  * runJudgeTick 的測試掛勾。beforeAutoList：時序注入點（讀完白名單之後、autoListInTx 之前）；
- * afterAllowlistShare：autoListInTx 取得 SHARE 之後。只能經 runJudgeTick 第 4 個參數傳入；buildApp 的排程不傳（A 組領航員裁定 11-09）。
+ * afterAllowlistShare：autoListInTx 取得 SHARE 之後；afterLock：拿到 JUDGE_LOCK 之後（供 R16 注入 tick 失敗）。只能經 runJudgeTick 第 4 個參數傳入；buildApp 的排程不傳 afterLock／beforeAutoList（A 組領航員裁定 11-09）。
  */
-export type TickHooks = { beforeAutoList?: () => Promise<void>; afterAllowlistShare?: () => Promise<void> };
+export type TickHooks = { beforeAutoList?: () => Promise<void>; afterAllowlistShare?: () => Promise<void>; afterLock?: () => Promise<void> };
 /**
  * 自動上榜總開關的預設值（唯一來源）：關。關時 tick 完全不做自動上榜——不評估 E3.A、不判熔斷恢復、
  * 不寫 auto_list／auto_suppressed／auto_breaker_*，案件只留在待審。buildApp 的 autoListEnabled 與測試明確開啟。
@@ -291,6 +291,7 @@ export async function runJudgeTick(db: Db, now: number, log?: TickLog, opts: Tic
   return db.tx(async (q): Promise<TickResult> => {
     const lock = await q.query<{ ok: boolean }>("SELECT pg_try_advisory_xact_lock($1) AS ok", [JUDGE_LOCK]);
     if (lock.rows[0]?.ok !== true) return NOOP;
+    await opts.afterLock?.();
     const th = await loadThresholds(q, log);
     await expireOpenCases(q, now);
     const { breakerPerHour, autoList } = await prepareAutoList(q, opts, now, log);
@@ -310,6 +311,6 @@ export async function runJudgeTick(db: Db, now: number, log?: TickLog, opts: Tic
         `INSERT INTO judge_cursor (id, received_upto) VALUES (TRUE, $1)
          ON CONFLICT (id) DO UPDATE SET received_upto = GREATEST(judge_cursor.received_upto, EXCLUDED.received_upto)`, [upto]);
     }
-    return { ran: true, groups: keys.length, hits: n.hit };
+    return { ran: true, groups: keys.length, hits: n.hit, stalePending };
   });
 }

@@ -14,8 +14,9 @@ import { registerThresholdRoutes } from "./thresholds.js";
 import { registerWhitelistRoutes } from "./whitelist.js";
 import { registerBlacklistRoutes } from "./blacklist.js";
 import { badJsonError, installErrorHandler, safeErr, withSafeReqLog } from "./errors.js";
-import { runJudgeTick, type TickOpts } from "./judge.js";
+import { type TickOpts } from "./judge.js";
 import { alertHealthCounts, deliverDueAlerts, enabledAlertChannels, type AlertChannel, type AlertSender } from "./alert-outbox.js";
+import { judgeHealthCounts, parseJudgeAlertConfig, runJudgeTickWithAlerts, type JudgeAlertConfig } from "./judge-alerts.js";
 import { parseWebhookConfig, webhookSender, type WebhookHooks } from "./alert-webhook.js";
 import { parseSyslogConfig, syslogSender, type SyslogHooks } from "./alert-syslog.js";
 import { parseSmtpConfig, smtpSender, type SmtpHooks } from "./alert-smtp.js";
@@ -148,7 +149,7 @@ function registerRoleRoutes(app: ControlApi, db: Db, now: Clock): void {
   for (const url of ["/api/admin/users", "/api/versions"]) {
     app.get(url, { config: { roles: admin } }, empty);
   }
-  app.get("/api/health", { config: { roles: admin } }, async () => ({ status: "ok", alerts: await alertHealthCounts(db, now()) }));
+  app.get("/api/health", { config: { roles: admin } }, async () => ({ status: "ok", alerts: await alertHealthCounts(db, now()), judge: await judgeHealthCounts(db) }));
 }
 
 function registerOwnerRoutes(app: ControlApi, db: Db): void {
@@ -215,11 +216,11 @@ function assertBreakerLimit(n: number | undefined): void {
 }
 
 /** 定期跑判定 tick（同一實例不重疊）；回傳的 stop 清 timer 並等進行中的 tick 結束。 */
-function startJudgeTimer(app: ControlApi, db: Db, now: Clock, ms: number, opts: TickOpts): () => Promise<void> {
+function startJudgeTimer(app: ControlApi, db: Db, now: Clock, ms: number, opts: TickOpts, cfg: JudgeAlertConfig): () => Promise<void> {
   if (ms <= 0) return async () => {};
   let inflight: Promise<unknown> | undefined;
   const t = setInterval(() => {
-    inflight ??= runJudgeTick(db, now(), app.log, opts)
+    inflight ??= runJudgeTickWithAlerts(db, now(), app.log, opts, cfg)
       .catch((err: unknown) => app.log.error({ err: safeErr(err as Parameters<typeof safeErr>[0]) }, "judge tick failed"))
       .finally(() => { inflight = undefined; });
   }, ms);
@@ -255,15 +256,17 @@ function defaultSenders(opts: BuildAppOptions): Partial<Record<AlertChannel, Ale
   return senders;
 }
 
-function hookTimers(app: ControlApi, db: Db, now: Clock, opts: BuildAppOptions): void {
+function hookTimers(app: ControlApi, db: Db, now: Clock, opts: BuildAppOptions, judgeAlerts: JudgeAlertConfig): void {
   const alertChannels = enabledAlertChannels(process.env, opts.alertChannels);
-  const stopJudge = startJudgeTimer(app, db, now, opts.judgeIntervalMs ?? 5000, { autoBreakerPerHour: opts.autoBreakerPerHour, autoListEnabled: opts.autoListEnabled, alertChannels });
+  const tickOpts = { autoBreakerPerHour: opts.autoBreakerPerHour, autoListEnabled: opts.autoListEnabled, alertChannels };
+  const stopJudge = startJudgeTimer(app, db, now, opts.judgeIntervalMs ?? 5000, tickOpts, judgeAlerts);
   const stopAlert = startAlertTimer(app, db, now, opts.alertDeliverIntervalMs ?? 1000, defaultSenders(opts));
   app.addHook("onClose", async () => { await stopJudge(); await stopAlert(); await db.close(); });
 }
 
 export async function buildApp(opts: BuildAppOptions = {}): Promise<ControlApi> {
   assertBreakerLimit(opts.autoBreakerPerHour);
+  const judgeAlerts = parseJudgeAlertConfig(process.env);
   parseWebhookConfig(process.env);
   parseSyslogConfig(process.env);
   const smtp = parseSmtpConfig(process.env);
@@ -279,7 +282,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<ControlApi> 
     allowEmptyJson(app);
     app.decorate("db", db);
     installRouteAudit(app);
-    hookTimers(app, db, now, opts);
+    hookTimers(app, db, now, opts, judgeAlerts);
     app.addHook("preHandler", createAuthPreHandler(db, idleTimeoutMs, now));
     registerLogin(app, db, limiter, now);
     registerSessionRoutes(app, db);
