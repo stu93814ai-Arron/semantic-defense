@@ -3,7 +3,7 @@ import { writeAudit } from "./audit.js";
 
 export const ALERT_CHANNELS = ["email", "webhook", "syslog"] as const;
 export type AlertChannel = (typeof ALERT_CHANNELS)[number];
-export const ALERT_KINDS = ["auto_list", "volume", "breaker_open"] as const;
+export const ALERT_KINDS = ["auto_list", "volume", "breaker_open", "tick_fail", "cursor_lag", "stale_pending"] as const;
 export type AlertKind = (typeof ALERT_KINDS)[number];
 
 export const ALERT_MAX_ATTEMPTS = 8;
@@ -23,7 +23,7 @@ export const ALERT_DELIVER_BATCH = 16;
 export const ALERT_FAILED_RETENTION_MS = 30 * 24 * 60 * 60_000;
 export const ALERT_OUTBOX_MAX_ROWS_DEFAULT = 10_000;
 
-export type AlertPayload = { delivery_id: string; kind: AlertKind; entry_id?: string; case_id?: string; at?: number };
+export type AlertPayload = { delivery_id: string; kind: AlertKind; entry_id?: string; case_id?: string; at?: number; streak?: number; lag_ms?: number; stale_pending?: number };
 export type OutboxRow = {
   id: string; audit_id: string | null; channel: AlertChannel; kind: AlertKind; payload: AlertPayload;
   attempts: number; next_attempt_at: string; status: "pending" | "delivered" | "failed";
@@ -71,18 +71,32 @@ export function assertWebhookSecret(env: Record<string, string | undefined> = pr
   }
 }
 
-const KIND_RANK = "CASE kind WHEN 'breaker_open' THEN 0 WHEN 'volume' THEN 1 ELSE 2 END";
+const KIND_RANK = "CASE kind WHEN 'breaker_open' THEN 0 WHEN 'tick_fail' THEN 1 WHEN 'cursor_lag' THEN 2 WHEN 'stale_pending' THEN 3 WHEN 'volume' THEN 4 ELSE 5 END";
 
-export async function enqueueAlerts(
-  q: Queryable,
-  opts: { channels: readonly AlertChannel[]; kind: AlertKind; now: number; auditId?: number; entryId?: string; caseId?: string },
-): Promise<string[]> {
+export type EnqueueAlertOpts = {
+  channels: readonly AlertChannel[]; kind: AlertKind; now: number; auditId?: number;
+  entryId?: string; caseId?: string; streak?: number; lag_ms?: number; stale_pending?: number;
+};
+
+function maybeField(key: string, value: string | number | undefined): Record<string, string | number> {
+  return value === undefined ? {} : { [key]: value };
+}
+
+function alertPayloadFields(opts: EnqueueAlertOpts): Record<string, string | number> {
+  return {
+    kind: opts.kind,
+    ...maybeField("entry_id", opts.entryId),
+    ...maybeField("case_id", opts.caseId),
+    ...(opts.kind === "auto_list" ? {} : { at: opts.now }),
+    ...maybeField("streak", opts.streak),
+    ...maybeField("lag_ms", opts.lag_ms),
+    ...maybeField("stale_pending", opts.stale_pending),
+  };
+}
+
+export async function enqueueAlerts(q: Queryable, opts: EnqueueAlertOpts): Promise<string[]> {
   const ids: string[] = [];
-  const base: Record<string, string | number> = { kind: opts.kind };
-  if (opts.entryId) base.entry_id = opts.entryId;
-  if (opts.caseId) base.case_id = opts.caseId;
-  if (opts.kind === "volume" || opts.kind === "breaker_open") base.at = opts.now;
-  const raw = JSON.stringify(base);
+  const raw = JSON.stringify(alertPayloadFields(opts));
   for (const channel of opts.channels) {
     const r = await q.query<{ id: string }>(
       `INSERT INTO alert_outbox (audit_id, channel, kind, payload, attempts, next_attempt_at, status, created_at)

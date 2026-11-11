@@ -86,7 +86,12 @@ export function formatMail(row: OutboxRow): { subject: string; text: string } {
   const delivery = sanitizeMailField(row.payload.delivery_id ?? row.id);
   const entry = sanitizeMailField(row.payload.entry_id);
   const caseId = sanitizeMailField(row.payload.case_id);
-  const text = [`kind=${kind}`, `delivery_id=${delivery}`, `entry_id=${entry}`, `case_id=${caseId}`, ".end"].join("\r\n");
+  const extras: string[] = [];
+  if (row.payload.at !== undefined) extras.push(`at=${sanitizeMailField(String(row.payload.at))}`);
+  if (row.payload.streak !== undefined) extras.push(`streak=${sanitizeMailField(String(row.payload.streak))}`);
+  if (row.payload.lag_ms !== undefined) extras.push(`lag_ms=${sanitizeMailField(String(row.payload.lag_ms))}`);
+  if (row.payload.stale_pending !== undefined) extras.push(`stale_pending=${sanitizeMailField(String(row.payload.stale_pending))}`);
+  const text = [`kind=${kind}`, `delivery_id=${delivery}`, `entry_id=${entry}`, `case_id=${caseId}`, ...extras, ".end"].join("\r\n");
   return { subject: `semantic-defense ${kind}`, text };
 }
 

@@ -124,6 +124,9 @@ const SCHEMA_STATEMENTS = [
   "CREATE INDEX IF NOT EXISTS case_hits_ip_window ON case_hits (src_ip, window_start)",
   // 判定 tick 進度（計畫 §2／§5）：單列，received_upto＝已掃到的 flow_events.received_at（epoch ms）。
   "CREATE TABLE IF NOT EXISTS judge_cursor (id BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (id), received_upto BIGINT NOT NULL)",
+  "ALTER TABLE judge_cursor ADD COLUMN IF NOT EXISTS fail_streak INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE judge_cursor ADD COLUMN IF NOT EXISTS lag_alerted BOOLEAN NOT NULL DEFAULT FALSE",
+  "ALTER TABLE judge_cursor ADD COLUMN IF NOT EXISTS stale_pending_total BIGINT NOT NULL DEFAULT 0",
   `CREATE TABLE IF NOT EXISTS audit_events (
   id BIGSERIAL PRIMARY KEY,
   action TEXT NOT NULL,
@@ -143,7 +146,7 @@ const SCHEMA_STATEMENTS = [
   id BIGSERIAL PRIMARY KEY,
   audit_id BIGINT NULL,
   channel TEXT NOT NULL CHECK (channel IN ('email','webhook','syslog')),
-  kind TEXT NOT NULL CHECK (kind IN ('auto_list','volume','breaker_open')),
+  kind TEXT NOT NULL CHECK (kind IN ('auto_list','volume','breaker_open','tick_fail','cursor_lag','stale_pending')),
   payload JSONB NOT NULL,
   attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
   next_attempt_at BIGINT NOT NULL,
@@ -308,12 +311,41 @@ async function seedCriticalAllowlist(client: pg.PoolClient, now: () => number, l
   }
 }
 
+const ALERT_KIND_CHECK = "alert_outbox_kind_check";
+const ALERT_KIND_SQL = "CHECK (kind IN ('auto_list','volume','breaker_open','tick_fail','cursor_lag','stale_pending'))";
+
+/** 既有庫的 kind CHECK 不含 R16 三種；短掃描後換成新約束（新值為既有列的超集）。 */
+async function ensureAlertKindCheck(q: { query(sql: string, params?: unknown[]): Promise<unknown> }): Promise<void> {
+  const found = await q.query(
+    `SELECT c.conname, pg_get_constraintdef(c.oid) AS def
+     FROM pg_constraint c
+     JOIN pg_class t ON t.oid = c.conrelid
+     JOIN pg_namespace n ON n.oid = t.relnamespace
+     WHERE n.nspname = current_schema() AND t.relname = 'alert_outbox' AND c.contype = 'c'
+       AND pg_get_constraintdef(c.oid) LIKE '%kind%'
+       AND pg_get_constraintdef(c.oid) NOT LIKE '%delivered_at%'`,
+  ) as { rows: Array<{ conname: string; def: string }> };
+  const hasNew = found.rows.some((r) => r.def.includes("tick_fail"));
+  if (hasNew) return;
+  for (const r of found.rows) {
+    await q.query(`ALTER TABLE alert_outbox DROP CONSTRAINT ${quoteIdent(r.conname)}`);
+  }
+  await q.query(`ALTER TABLE alert_outbox ADD CONSTRAINT ${ALERT_KIND_CHECK} ${ALERT_KIND_SQL}`);
+}
+
+function quoteIdent(name: string): string {
+  if (!/^[a-z_][a-z0-9_]*$/i.test(name)) throw new Error("invalid identifier");
+  return `"${name}"`;
+}
+
 async function migrate(client: pg.PoolClient, now: () => number, log?: SeedLog): Promise<void> {
+
   await client.query("SELECT pg_advisory_lock($1)", [SCHEMA_LOCK]);
   try {
     for (const sql of SCHEMA_STATEMENTS) {
       await client.query(sql);
     }
+    await ensureAlertKindCheck(client);
     await seedCriticalAllowlist(client, now, log);
   } finally {
     await client.query("SELECT pg_advisory_unlock($1)", [SCHEMA_LOCK]);
