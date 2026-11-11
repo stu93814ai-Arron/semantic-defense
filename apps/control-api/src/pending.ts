@@ -1,7 +1,7 @@
 /**
- * 待審案件：列表（GET /pending）與核准（POST /pending/:caseId/approve）。
+ * 待審案件：列表、核准與退回。
  * 列表只回 open 且尚未到期；核准成功回應重用既有 BlocklistEntry。
- * 稽核只寫 case_id、entry_id，不得含 IP。白名單以 SHARE 鎖重查必擋；冷卻期不擋人工核准。
+ * 稽核只寫 case_id（核准另加 entry_id），不得含 IP 或退回理由。白名單以 SHARE 鎖重查必擋；冷卻期不擋人工核准。退回不收本文。
  */
 import { randomUUID } from "node:crypto";
 import type { FastifyInstance, FastifyReply } from "fastify";
@@ -141,4 +141,17 @@ export function registerPendingRoutes(app: FastifyInstance, db: Db, now: () => n
     });
     return entry;
   }, (_reply, entry) => entry);
+
+  postCaseAction<true>(app, db, now, P.blacklistPendingReject, async (q, { id, at, actor }) => {
+    const r = await q.query<{ case_id: string }>(
+      `UPDATE blacklist_cases
+       SET state = 'rejected', resolved_by = $2, resolved_at = $3
+       WHERE case_id = $1 AND state = 'open' AND expires_at > $3 AND created_at <= $3
+       RETURNING case_id`,
+      [id, actor, at],
+    );
+    if (!r.rows[0]) return conflictIfUnclaimed(q, id, at);
+    await writeAudit(q, { action: "blacklist.reject", actor, sensor_id: null, at, detail: { case_id: id } });
+    return true as const;
+  }, (reply) => reply.code(204).send());
 }

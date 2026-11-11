@@ -38,8 +38,14 @@ export async function loginAs(app: ControlApi, username: string, password: strin
 export const asOperator = (app: ControlApi) => loginAs(app, "operator1", "pass-operator-1");
 
 export const approveUrl = (id: string) => ADMIN_API_PATHS.blacklistPendingApprove.replace(":caseId", id);
+export const rejectUrl = (id: string) => ADMIN_API_PATHS.blacklistPendingReject.replace(":caseId", id);
 export const approveReq = (app: ControlApi, c: string | undefined, id: string) =>
   app.inject({ method: "POST", url: approveUrl(id), headers: c ? cookieHeader(c) : {} });
+/** 退回不收本文；payload 只用來驗證帶了本文也被忽略。 */
+export const rejectReq = (app: ControlApi, c: string | undefined, id: string, payload?: Record<string, string>) =>
+  payload === undefined
+    ? app.inject({ method: "POST", url: rejectUrl(id), headers: c ? cookieHeader(c) : {} })
+    : app.inject({ method: "POST", url: rejectUrl(id), headers: c ? cookieHeader(c) : {}, payload });
 
 export type SeedCaseOver = {
   ip?: string; state?: string; conf?: number; hits?: number; created?: number; lastHit?: number;
@@ -83,6 +89,7 @@ export function pendingOps(getApp: () => ControlApi, logs: string[] = []) {
     op: () => asOperator(getApp()),
     seedCase: (over?: SeedCaseOver) => seedPendingCase(getApp(), over),
     approve: (c: string | undefined, id: string) => approveReq(getApp(), c, id),
+    reject: (c: string | undefined, id: string, payload?: Record<string, string>) => rejectReq(getApp(), c, id, payload),
     audits: () => pendingAudits(getApp()),
     caseRow: (id: string) => pendingCase(getApp(), id),
     expectNoIp: async (extra?: unknown) => {
