@@ -13,6 +13,7 @@ import { registerAuditRoute } from "./audit.js";
 import { registerThresholdRoutes } from "./thresholds.js";
 import { registerWhitelistRoutes } from "./whitelist.js";
 import { registerBlacklistRoutes } from "./blacklist.js";
+import { registerPendingRoutes } from "./pending.js";
 import { badJsonError, installErrorHandler, safeErr, withSafeReqLog } from "./errors.js";
 import { type TickOpts } from "./judge.js";
 import { alertHealthCounts, deliverDueAlerts, enabledAlertChannels, type AlertChannel, type AlertSender } from "./alert-outbox.js";
@@ -293,6 +294,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<ControlApi> 
     registerThresholdRoutes(app, db, now);
     registerWhitelistRoutes(app, db, now);
     registerBlacklistRoutes(app, db, now);
+    registerPendingRoutes(app, db, now);
     app.setNotFoundHandler((_req, reply) => reply.code(404).send({ error: "Not Found" }));
     await readyOrListen(app, opts);
     return app;
