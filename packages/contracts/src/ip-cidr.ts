@@ -255,6 +255,7 @@ function reservedIngestV6(parts: number[]): boolean {
 
 /**
  * ingest／hostCidr 共用的保留與文件範圍（含 ::ffff: 內嵌 v4）。
+ * 呼叫端須先經 SingleIp 正規化。
  * RFC1918 與 ULA 回 false。非法字串回 false。
  */
 export function isReservedForIngest(ip: string): boolean {
