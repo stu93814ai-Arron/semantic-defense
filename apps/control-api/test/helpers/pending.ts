@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { expect } from "vitest";
+import { afterEach, expect } from "vitest";
 import { ADMIN_API_PATHS } from "@semantic-defense/contracts";
 import { CASE_TTL_MS } from "../../src/cases.js";
 import { buildApp, seedPhase2Fixtures, type BuildAppOptions, type ControlApi } from "./app.js";
@@ -21,6 +21,13 @@ export async function bootPending(over: BuildAppOptions = {}, logs?: string[]): 
   });
   await seedPhase2Fixtures(app);
   return app;
+}
+
+/** 每個測試後關閉目前的 app，並清空回傳的 logs 陣列。 */
+export function closeAfterEach(getApp: () => ControlApi | undefined): string[] {
+  const logs: string[] = [];
+  afterEach(async () => { const app = getApp(); if (app) await app.close(); logs.length = 0; });
+  return logs;
 }
 
 export async function loginAs(app: ControlApi, username: string, password: string): Promise<string> {
@@ -62,8 +69,15 @@ export const pendingCase = async (app: ControlApi, id: string) =>
   (await app.db.query<{ state: string; resolved_by: string | null; resolved_at: string | null }>(
     "SELECT state, resolved_by, resolved_at FROM blacklist_cases WHERE case_id = $1", [id])).rows[0]!;
 
-/** 測試檔共用包裝：每次呼叫都讀 getApp() 目前的 app。 */
-export function pendingOps(getApp: () => ControlApi) {
+export const activeBlocklist = async (app: ControlApi) =>
+  (await app.db.query<{ ip: string }>(
+    "SELECT ip FROM blocklist_entries WHERE revoked_at IS NULL AND ended_at IS NULL")).rows;
+
+/**
+ * 測試檔共用包裝：每次呼叫都讀 getApp() 目前的 app。
+ * expectNoIp 斷言稽核、logs（與選填的額外物件）都不含測試 IP。
+ */
+export function pendingOps(getApp: () => ControlApi, logs: string[] = []) {
   return {
     as: (username: string, password: string) => loginAs(getApp(), username, password),
     op: () => asOperator(getApp()),
@@ -71,5 +85,10 @@ export function pendingOps(getApp: () => ControlApi) {
     approve: (c: string | undefined, id: string) => approveReq(getApp(), c, id),
     audits: () => pendingAudits(getApp()),
     caseRow: (id: string) => pendingCase(getApp(), id),
+    expectNoIp: async (extra?: unknown) => {
+      expect(JSON.stringify(await pendingAudits(getApp()))).not.toMatch(PENDING_IP_RE);
+      expect(logs.join("\n")).not.toMatch(PENDING_IP_RE);
+      if (extra !== undefined) expect(JSON.stringify(extra)).not.toMatch(PENDING_IP_RE);
+    },
   };
 }

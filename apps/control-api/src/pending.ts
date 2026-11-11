@@ -1,7 +1,7 @@
 /**
  * 待審案件：列表（GET /pending）與核准（POST /pending/:caseId/approve）。
  * 列表只回 open 且尚未到期；核准成功回應重用既有 BlocklistEntry。
- * 稽核只寫 case_id、entry_id，不得含 IP。
+ * 稽核只寫 case_id、entry_id，不得含 IP。白名單以 SHARE 鎖重查必擋；冷卻期不擋人工核准。
  */
 import { randomUUID } from "node:crypto";
 import type { FastifyInstance, FastifyReply } from "fastify";
@@ -9,7 +9,8 @@ import { ADMIN_API_PATHS as P, type BlocklistEntry } from "@semantic-defense/con
 import type { Db, Queryable } from "./db.js";
 import type { Role } from "./auth.js";
 import { writeAudit } from "./audit.js";
-import { AUTO_LIST_TTL_MS } from "./auto-blacklist.js";
+import { AUTO_LIST_TTL_MS, loadAllowlist } from "./auto-blacklist.js";
+import { lockAllowlistShare } from "./auto-breaker.js";
 import { insertActiveBlocklistEntry } from "./blocklist-store.js";
 
 const OPERATOR: Role[] = ["operator"];
@@ -110,6 +111,8 @@ export function registerPendingRoutes(app: FastifyInstance, db: Db, now: () => n
   });
 
   postCaseAction<BlocklistEntry>(app, db, now, P.blacklistPendingApprove, async (q, { id, at, actor }) => {
+    // 先 SHARE 再改案件：與白名單寫入同一鎖順序，核准當下重查白名單。
+    await lockAllowlistShare(q);
     const r = await q.query<{ case_id: string; ip: string; max_confidence: number }>(
       `UPDATE blacklist_cases
        SET state = 'approved', resolved_by = $2, resolved_at = $3
@@ -119,6 +122,7 @@ export function registerPendingRoutes(app: FastifyInstance, db: Db, now: () => n
     );
     const row = r.rows[0];
     if (!row) return conflictIfUnclaimed(q, id, at);
+    if ((await loadAllowlist(q, at))(row.ip)) throw new PendingConflict("已在白名單");
     const entry = await insertActiveBlocklistEntry(q, {
       entry_id: randomUUID(),
       ip: row.ip,
