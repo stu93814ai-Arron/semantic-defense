@@ -42,7 +42,7 @@ WHERE ts_ms IS NULL AND flow_ts_ms(ts) IS NOT NULL;
 - 毒列清理（僅說明）：`DELETE FROM flow_events WHERE ts_ms IS NULL AND flow_ts_ms(ts) IS NULL;`
 - 待回填列應優先重啟已升級的 sensor-ingest，讓 `ensureFlowSchema` 回填 `ts_ms`；不要先刪，刪了就不會被判定。
 
-**無法換算的舊列（毒列）**（A 組領航員裁示 (2026-11-10)）：Postgres 不收的 ts（0000 年、offset 超過 ±15:59、infinity 等）回填時會跳過、不重寫，`ts_ms` 維持 NULL。判定不分組、計 `{null_ts}`、cursor 照常前進，**不影響判定結果**。未手動清理時，7 天保留期到期後由 `purgeExpired` 清掉。判定 log `judge tick skipped rows without ts_ms {null_ts:n}` 持續出現時，表示還有這類列。
+**無法換算的舊列（毒列）**（A 組領航員裁示（未經使用者確認，2026-11-10））：Postgres 不收的 ts（0000 年、offset 超過 ±15:59、infinity 等）回填時會跳過、不重寫，`ts_ms` 維持 NULL。判定不分組、計 `{null_ts}`、cursor 照常前進，**不影響判定結果**。未手動清理時，7 天保留期到期後由 `purgeExpired` 清掉。判定 log `judge tick skipped rows without ts_ms {null_ts:n}` 持續出現時，表示還有這類列。
 
 
 ## R16：對 tick 連敗與 cursor 落後設告警
@@ -54,7 +54,7 @@ WHERE ts_ms IS NULL AND flow_ts_ms(ts) IS NOT NULL;
 | `SD_JUDGE_TICK_FAIL_ALERT_N` | 3（**A 組領航員建議**；有效範圍 3–5） | 判定 tick 連續失敗達 N 次時入列一筆 `tick_fail`（每一輪連敗只告一次）；恢復後計數歸零，新一輪再告。無效值在啟動時拋錯。 |
 | `SD_JUDGE_CURSOR_LAG_MS` | 600000（與 `PENDING_BACKFILL_MAX_LAG_MS`／10 分鐘對齊；須為正整數） | cursor 落後超過此門檻時，每個落後段落入列一筆 `cursor_lag`。無效值在啟動時拋錯。 |
 
-`stale_pending` 見上方 R15：判定成功且本 tick 略過待回填列時入列，只帶筆數。收到該告警時的處置見 R15「超過 lag 上限而被略過的列」。
+`stale_pending` 見上方 R15：判定成功且本 tick 略過待回填列時，每個略過段落入列一筆（比照 cursor 落後），只帶筆數。成功 tick 且本段 stale 為 0 時重置，之後再略過會再告。收到該告警時的處置見 R15「超過 lag 上限而被略過的列」。
 
 ## R-B（已解決）：啟動遷移不再以 ACCESS EXCLUSIVE 鎖住整段回填
 
@@ -92,7 +92,7 @@ ts 的小數秒超過 6 位時，Postgres 解析時會捨入到微秒，JS `Date
 
 ## 告警推送（環境變數與外部監控）
 
-上線後必須把 control-api 的 `GET /api/health`（`platform_admin`，內含告警未送達筆數、`last_failed_at`（`max(failed_at)`，不是 `next_attempt_at`）與近 24 小時 `purged`（讀自 `alert.purged` 稽核，重啟後仍在））接到外部監控，不得只靠本機 log。即使暫時未啟用任何通道，也要先接好監控，以免日後開啟通道時沒有告警。
+上線後必須把 control-api 的 `GET /api/health`（`platform_admin`，內含告警未送達筆數、`last_failed_at`（`max(failed_at)`，不是 `next_attempt_at`）與近 24 小時 `purged`（讀自 `alert.purged` 稽核，重啟後仍在））接到外部監控，不得只靠本機 log。外部監控必須把 `/api/health` 非 200 視為告警。即使暫時未啟用任何通道，也要先接好監控，以免日後開啟通道時沒有告警。
 
 通道彼此獨立：該通道的啟用變數未設或 trim 後為空則關閉；一旦啟用，必備變數缺失或無效時 control-api 拒絕啟動（錯誤不含 URL、主機、憑證或位址）。私網覆寫只能用該通道的 CIDR 清單，不得使用全局開關。
 
@@ -104,6 +104,6 @@ ts 的小數秒超過 6 位時，Postgres 解析時會捨入到微秒，JS `Date
 
 `SD_ALERT_EMAIL_TO` 與 `SD_ALERT_EMAIL_FROM` 必須是不含顯示名稱的嚴格 ASCII 位址；含 CR、LF、NUL、非 ASCII 或多個 `@` 時啟動即 throw。`SD_ALERT_SMTP_ALLOW_PLAINTEXT` 與 `SD_ALERT_EMAIL_IMPLICIT_TLS` 除未設或恰好為 `1` 外，啟動即 throw。Syslog TIMESTAMP 為 RFC 3339 UTC，PROCID／MSGID 為 `-`。volume／breaker 告警 payload 為 `{delivery_id, kind, at}`。憑證、SMTP 密碼與 webhook URL／HMAC 不得寫入 log、稽核、outbox 或錯誤物件。
 
-## A 組領航員裁示（告警推送測試清單 §2 與 §9）
+## A 組領航員裁示（未經使用者確認）（告警推送測試清單 §2 與 §9）
 
-A 組領航員裁示：測試清單 `/workspace/exec-a-logs/push-design-tests.md` 的 §9 優先於 §2。§2 僅保留以下對本機假伺服器的行為測試：伺服器未宣告 STARTTLS 則發送必須失敗（`requireTLS`）；自簽或主機名不符的憑證必須失敗；明文 opt-in 模式不送 AUTH；dot-stuffing；位址含 CRLF 或格式不正確則拒絕。不撰寫協定內部測試（重新送 EHLO、pipelining、行或總量上限）；那些是 nodemailer 的職責。測試清單本文未改。
+A 組領航員裁示（未經使用者確認）：測試清單 `/workspace/exec-a-logs/push-design-tests.md` 的 §9 優先於 §2。§2 僅保留以下對本機假伺服器的行為測試：伺服器未宣告 STARTTLS 則發送必須失敗（`requireTLS`）；自簽或主機名不符的憑證必須失敗；明文 opt-in 模式不送 AUTH；dot-stuffing；位址含 CRLF 或格式不正確則拒絕。不撰寫協定內部測試（重新送 EHLO、pipelining、行或總量上限）；那些是 nodemailer 的職責。測試清單本文未改。
