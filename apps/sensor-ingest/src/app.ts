@@ -88,7 +88,7 @@ export async function buildIngest(opts: BuildIngestOptions): Promise<FastifyInst
 
   app.get("/v1/health", { onRequest: guard }, async (req) => ({
     ok: true, sensor_id: req.sensorId,
-    reserved_rejected_24h: await countRejections(opts.db, clock(), REJECTION_RESERVED),
+    reserved_rejected_24h: await countRejections(opts.db, clock(), REJECTION_RESERVED, req.sensorId!),
   }));
 
   app.post("/v1/flows", { onRequest: guard }, async (req, reply) => {

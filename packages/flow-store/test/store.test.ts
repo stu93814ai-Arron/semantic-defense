@@ -112,6 +112,21 @@ describe("flow_rejections.reason（A 組領航員裁示；總召 §21:09 R10）"
     await recordRejection(db, "s-1", T0 - REJECTION_COUNT_WINDOW_MS, REJECTION_RESERVED);
     await recordRejection(db, "s-1", T0, REJECTION_RESERVED);
     await recordRejection(db, "s-1", T0, REJECTION_UNBOUND_APP);
-    expect(await countRejections(db, T0, REJECTION_RESERVED)).toBe(2);
+    expect(await countRejections(db, T0, REJECTION_RESERVED, "s-1")).toBe(2);
+  });
+
+  it("countRejections 不計其他 sensor 的拒絕", async () => {
+    await recordRejection(db, "s-other", T0, REJECTION_RESERVED);
+    await recordRejection(db, "s-1", T0, REJECTION_RESERVED);
+    expect(await countRejections(db, T0, REJECTION_RESERVED, "s-1")).toBe(1);
+    expect(await countRejections(db, T0, REJECTION_RESERVED, "s-other")).toBe(1);
+  });
+
+  it("ensureFlowSchema 建立 (sensor_id, at) 索引", async () => {
+    const r = await db.query<{ indexdef: string }>(
+      `SELECT indexdef FROM pg_indexes
+       WHERE schemaname = current_schema() AND indexname = 'flow_rejections_sensor_at'`);
+    expect(r.rows).toHaveLength(1);
+    expect(r.rows[0]!.indexdef).toMatch(/\(sensor_id,\s*at\)/);
   });
 });

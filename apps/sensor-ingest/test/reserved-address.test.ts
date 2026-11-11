@@ -125,4 +125,22 @@ describe("R10 ingest 拒絕列與可見計數", () => {
     expect(text).not.toContain("64.0.113");
     await app.close();
   });
+
+  it("health reserved_rejected_24h 只計本 sensor，其他 sensor 的拒絕不計", async () => {
+    const app = await buildIngest({ db, requireHttps: false, now: () => T0, logger: false });
+    const tA = await seedToken(db, ["10.0.0.0/8"], false, ["app-1"]);
+    const tB = await seedToken(db, ["10.0.0.0/8"], false, ["app-1"]);
+    const headers = (t: string) => ({ authorization: `Bearer ${t}` });
+    const rejected = await app.inject({
+      method: "POST", url: "/v1/flows", payload: flow({ src_ip: "192.0.2.1" }),
+      headers: headers(tB), remoteAddress: "10.1.2.3",
+    });
+    expect(rejected.statusCode).toBe(400);
+    const health = (t: string) => app.inject({
+      method: "GET", url: "/v1/health", headers: headers(t), remoteAddress: "10.1.2.3",
+    });
+    expect((await health(tA)).json()).toMatchObject({ reserved_rejected_24h: 0 });
+    expect((await health(tB)).json()).toMatchObject({ reserved_rejected_24h: 1 });
+    await app.close();
+  });
 });

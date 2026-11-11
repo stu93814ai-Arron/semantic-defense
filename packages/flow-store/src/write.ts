@@ -153,6 +153,10 @@ async function ensureGroupIndexes(q: FlowSession): Promise<void> {
     }
     await q.query("CREATE INDEX CONCURRENTLY IF NOT EXISTS flow_events_group_ms ON flow_events (sensor_id, app_id, src_ip, ts_ms)");
     await q.query("DROP INDEX CONCURRENTLY IF EXISTS flow_events_group");
+    if (await indexInvalid(q, "flow_rejections_sensor_at")) {
+      await q.query("DROP INDEX CONCURRENTLY IF EXISTS flow_rejections_sensor_at");
+    }
+    await q.query("CREATE INDEX CONCURRENTLY IF NOT EXISTS flow_rejections_sensor_at ON flow_rejections (sensor_id, at)");
   } finally {
     await q.query("RESET statement_timeout");
   }
@@ -289,11 +293,11 @@ export async function recordRejection(db: FlowSession, sensorId: string, now: nu
   await db.query("INSERT INTO flow_rejections (sensor_id, at, reason) VALUES ($1,$2,$3)", [sensorId, now, reason]);
 }
 
-/** 指定 reason 在 [now − 24h, now] 的筆數（health 用）。 */
-export async function countRejections(db: FlowSession, now: number, reason: string): Promise<number> {
+/** 指定 sensor 的指定 reason 在 [now − 24h, now] 的筆數（health 用；不跨 sensor）。 */
+export async function countRejections(db: FlowSession, now: number, reason: string, sensorId: string): Promise<number> {
   const r = await db.query<{ n: string }>(
-    "SELECT count(*) AS n FROM flow_rejections WHERE reason = $1 AND at >= $2",
-    [reason, now - REJECTION_COUNT_WINDOW_MS],
+    "SELECT count(*) AS n FROM flow_rejections WHERE sensor_id = $1 AND reason = $2 AND at >= $3",
+    [sensorId, reason, now - REJECTION_COUNT_WINDOW_MS],
   );
   return Number(r.rows[0]!.n);
 }
