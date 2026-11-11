@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { AllowlistEntrySchema } from "./allowlist-entry.js";
-import { BlocklistEntrySchema } from "./blocklist-entry.js";
+import { BlocklistEntrySchema, type BlocklistEntry } from "./blocklist-entry.js";
 import { AUTO_THRESHOLD, CASE_THRESHOLD } from "./flow-verdict.js";
 import { assertAllowlistCidr, assertIpOrCidr, isHostPrefix } from "./ip-cidr.js";
 import { Reason, Rfc3339 } from "./primitives.js";
@@ -74,6 +74,14 @@ export const PendingCandidateListSchema = z.strictObject({ items: z.array(Pendin
 
 /** 已上榜黑名單列表（GET blacklist）；撤回（POST blacklistRevoke）無本文，回應為更新後的黑名單項目。 */
 export const BlocklistListSchema = z.strictObject({ items: z.array(BlocklistEntrySchema) });
+
+/**
+ * 待審核准（POST blacklistPendingApprove）無請求本文；成功回應重用既有 BlocklistEntry，不新增欄位。
+ * 待審退回（POST blacklistPendingReject）無請求本文，成功為 204 無本文。
+ * A 組領航員裁示（未經使用者確認）。
+ */
+export type BlacklistPendingApproveResponse = BlocklistEntry;
+
 
 const ExpiresAt = z.union([Rfc3339, z.null()]);
 

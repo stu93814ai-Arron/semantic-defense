@@ -1,18 +1,23 @@
 import { randomUUID } from "node:crypto";
 import { expect } from "vitest";
+import { ADMIN_API_PATHS } from "@semantic-defense/contracts";
 import { CASE_TTL_MS } from "../../src/cases.js";
 import { buildApp, seedPhase2Fixtures, type BuildAppOptions, type ControlApi } from "./app.js";
-import { login } from "./session.js";
+import { cookieHeader, login } from "./session.js";
 import { requireDatabaseUrl } from "./pg.js";
 
 /** 待審案件測試共用：固定時鐘、種子案件與登入包裝。 */
 export const PENDING_NOW = Date.parse("2026-11-11T08:00:00Z");
 export const PENDING_HOST = "64.0.113.7/32";
+export const PENDING_IP_RE = /64\.0\.113\.7/;
 
-export async function bootPending(over: BuildAppOptions = {}): Promise<ControlApi> {
+export async function bootPending(over: BuildAppOptions = {}, logs?: string[]): Promise<ControlApi> {
+  const logger = logs
+    ? { level: "info" as const, stream: { write: (l: string) => { logs.push(l); } } }
+    : over.logger;
   const app = await buildApp({
     idleTimeoutMs: 60_000, databaseUrl: requireDatabaseUrl(), now: () => PENDING_NOW,
-    ...over,
+    ...over, logger,
   });
   await seedPhase2Fixtures(app);
   return app;
@@ -24,6 +29,10 @@ export async function loginAs(app: ControlApi, username: string, password: strin
   return r.cookie!;
 }
 export const asOperator = (app: ControlApi) => loginAs(app, "operator1", "pass-operator-1");
+
+export const approveUrl = (id: string) => ADMIN_API_PATHS.blacklistPendingApprove.replace(":caseId", id);
+export const approveReq = (app: ControlApi, c: string | undefined, id: string) =>
+  app.inject({ method: "POST", url: approveUrl(id), headers: c ? cookieHeader(c) : {} });
 
 export type SeedCaseOver = {
   ip?: string; state?: string; conf?: number; hits?: number; created?: number; lastHit?: number;
@@ -45,11 +54,22 @@ export async function seedPendingCase(app: ControlApi, over: SeedCaseOver = {}):
   return id;
 }
 
+export const pendingAudits = async (app: ControlApi) =>
+  (await app.db.query<{ action: string; actor: string; detail: Record<string, unknown> }>(
+    "SELECT action, actor, detail FROM audit_events WHERE action LIKE 'blacklist.%' ORDER BY id")).rows;
+
+export const pendingCase = async (app: ControlApi, id: string) =>
+  (await app.db.query<{ state: string; resolved_by: string | null; resolved_at: string | null }>(
+    "SELECT state, resolved_by, resolved_at FROM blacklist_cases WHERE case_id = $1", [id])).rows[0]!;
+
 /** 測試檔共用包裝：每次呼叫都讀 getApp() 目前的 app。 */
 export function pendingOps(getApp: () => ControlApi) {
   return {
     as: (username: string, password: string) => loginAs(getApp(), username, password),
     op: () => asOperator(getApp()),
     seedCase: (over?: SeedCaseOver) => seedPendingCase(getApp(), over),
+    approve: (c: string | undefined, id: string) => approveReq(getApp(), c, id),
+    audits: () => pendingAudits(getApp()),
+    caseRow: (id: string) => pendingCase(getApp(), id),
   };
 }

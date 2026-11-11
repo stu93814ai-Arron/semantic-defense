@@ -109,9 +109,12 @@ describe("writeAutoBlocklistEntry：拒絕與邊界", () => {
     expect(await count("blocklist_entries")).toBe(0);
   });
 
-  it("不開 HTTP：已掛路由中沒有任何 POST/PUT 寫入黑名單項目的路徑（只有撤回）", async () => {
+  it("不開 HTTP：黑名單非 GET 路徑僅撤回與待審核准（無直接新增項目的 API）", async () => {
     await boot();
     const writes = app.authRouteAudit.filter((r) => r.url.startsWith("/api/blacklist") && r.method !== "GET");
-    expect(writes.map((r) => `${r.method} ${r.url}`)).toEqual(["POST /api/blacklist/:entryId/revoke"]);
+    expect(writes.map((r) => `${r.method} ${r.url}`)).toEqual([
+      "POST /api/blacklist/:entryId/revoke",
+      "POST /api/blacklist/pending/:caseId/approve",
+    ]);
   });
 });
