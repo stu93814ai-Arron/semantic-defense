@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseCidr } from "@semantic-defense/contracts";
+import { isReservedForIngest, parseCidr } from "@semantic-defense/contracts";
 import { hostCidr } from "../src/auto-blacklist.js";
 
 /** A 組領航員裁示（未經使用者確認）；落在總召 §21:09 R10 範圍內。只加嚴 hostCidr，不改 parseCidr。 */
@@ -11,6 +11,20 @@ const CASES: Array<[string, string | null]> = [
   ["10.0.0.1", "10.0.0.1/32"], ["192.168.1.1", "192.168.1.1/32"], ["fc00::1", "fc00::1/128"],
   ["64.0.113.20", "64.0.113.20/32"], ["2001:db9::1", "2001:db9::1/128"],
   ["100::1", "100::1/128"], ["2001:2::1", "2001:2::1/128"], ["198.18.0.1", "198.18.0.1/32"],
+  // A 組領航員裁示（未經使用者確認）：只加嚴判定端。ingest／isReservedForIngest 仍不擋這四類。
+  ["::7f00:1", null], ["::808:808", null],
+  ["fec0::1", null], ["feff::1", null],
+  ["64:ff9b::7f00:1", null], ["64:ff9b::c000:201", null],
+  ["2002:7f00:1::", null], ["2002:c000:201::", null],
+  // 內嵌公開 v4 與內嵌 RFC1918 仍可開案；ULA／RFC1918 本體見上方。
+  ["64:ff9b::808:808", "64:ff9b::808:808/128"],
+  ["2002:808:808::", "2002:808:808::/128"],
+  ["64:ff9b::a00:1", "64:ff9b::a00:1/128"],
+];
+
+/** 四類位址：ingest 不擋（契約未改），判定擋。 */
+const JUDGE_ONLY: string[] = [
+  "::7f00:1", "fec0::1", "64:ff9b::7f00:1", "2002:7f00:1::",
 ];
 
 describe("hostCidr 排除 Class E 與文件範圍（剩餘 B5）", () => {
@@ -22,5 +36,15 @@ describe("hostCidr 排除 Class E 與文件範圍（剩餘 B5）", () => {
     expect(parseCidr("192.0.2.1")).toEqual({ version: 4, address: "192.0.2.1", prefix: 32 });
     expect(parseCidr("240.0.0.1")).toEqual({ version: 4, address: "240.0.0.1", prefix: 32 });
     expect(parseCidr("2001:db8::1")).toEqual({ version: 6, address: "2001:db8::1", prefix: 128 });
+  });
+});
+
+describe("hostCidr 另排除相容位址、site-local 與內嵌保留 v4", () => {
+  it("四類位址判定擋、ingest 契約仍不擋，parseCidr 仍接受", () => {
+    for (const ip of JUDGE_ONLY) {
+      expect(isReservedForIngest(ip)).toBe(false);
+      expect(parseCidr(ip)).toEqual({ version: 6, address: ip, prefix: 128 });
+      expect(hostCidr(ip)).toBe(null);
+    }
   });
 });

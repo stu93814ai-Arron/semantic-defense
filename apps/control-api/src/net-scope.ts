@@ -108,6 +108,14 @@ function embeddedV4(addr: string): string | null {
   return fromMapped(dv) ?? fromNat96(dv) ?? fromNat48(dv) ?? from6to4(dv);
 }
 
+/** 僅 64:ff9b::/96 與 2002::/16 的內嵌 v4；供判定端 hostCidr 使用。不含 64:ff9b:1::/48。不改 isGlobalUnicast。 */
+export function embeddedNat64Or6to4(addr: string): string | null {
+  const b = ipv6ToBytes(addr);
+  if (!b) return null;
+  const dv = viewOf(b);
+  return fromNat96(dv) ?? from6to4(dv);
+}
+
 function isPublicV4(addr: string): boolean {
   return isIP(addr) === 4 && !NON_PUBLIC.check(addr, "ipv4");
 }

@@ -7,7 +7,7 @@ import { enqueueAlerts, type AlertChannel } from "./alert-outbox.js";
 import { loadThresholds, type WarnLog } from "./thresholds.js";
 import { insertActiveBlocklistEntry } from "./blocklist-store.js";
 import { breakerTripped, lockAllowlistShare, lockAuto, maybeEnqueueVolume } from "./auto-breaker.js";
-import { isGlobalUnicast } from "./net-scope.js";
+import { embeddedNat64Or6to4, isGlobalUnicast } from "./net-scope.js";
 
 /**
  * ④ source=auto 寫入邊界（內部函式，不開 HTTP）。觸發條件（命中次數）在 auto-trigger.ts；冷卻只在 opts.gates 開時檢查。
@@ -51,12 +51,24 @@ export async function loadAllowlist(q: Queryable, now: number): Promise<(ip: str
 
 const allowlisted = async (q: Queryable, ip: string, now: number): Promise<boolean> => (await loadAllowlist(q, now))(ip);
 
+/** 判定端另排除：::/96、fec0::/10，以及 NAT64／6to4 內嵌保留 v4。A 組領航員裁示（未經使用者確認）。ingest 不動。 */
+const JUDGE_SKIP_V6 = new BlockList();
+JUDGE_SKIP_V6.addSubnet("::", 96, "ipv6");
+JUDGE_SKIP_V6.addSubnet("fec0::", 10, "ipv6");
+
+function isJudgeSkippedHost(addr: string): boolean {
+  if (isIP(addr) === 6 && JUDGE_SKIP_V6.check(addr, "ipv6")) return true;
+  const inner = embeddedNat64Or6to4(addr);
+  return inner !== null && isReservedForIngest(inner);
+}
+
 /** 主機前綴正規化：合法 /32、/128（含無前綴）→ `<canonical address>/<prefix>`；否則 null。
- * A 組領航員裁示（未經使用者確認）；落在總召 §21:09 R10 範圍內：另排除 Class E 與文件範圍（isReservedForIngest）。不改 parseCidr。 */
+ * A 組領航員裁示（未經使用者確認）；落在總召 §21:09 R10 範圍內：另排除 Class E 與文件範圍（isReservedForIngest）。
+ * 另排除 ::/96、fec0::/10，以及 64:ff9b::/96 與 2002::/16 中內嵌 v4 被 isReservedForIngest 判為保留的位址。不改 parseCidr，不改 ingest。 */
 export function hostCidr(raw: string): string | null {
   const p = parseCidr(raw);
   if (!p || p.prefix !== (p.version === 4 ? 32 : 128)) return null;
-  if (isReservedForIngest(p.address)) return null;
+  if (isReservedForIngest(p.address) || isJudgeSkippedHost(p.address)) return null;
   return `${p.address}/${p.prefix}`;
 }
 
