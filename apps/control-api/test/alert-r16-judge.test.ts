@@ -187,3 +187,24 @@ describe("cursor 落後與 stale_pending 告警", () => {
     expect(JSON.stringify(h.judge)).not.toMatch(/203\.0\.|198\.51\.|SELECT |ERROR:/i);
   });
 });
+
+describe("stale_pending 每段只發一次", () => {
+  it("連兩次只發一筆；成功恢復後再觸發會再發", async () => {
+    await boot();
+    await apply("success", { stalePending: 1 });
+    expect((await kinds()).filter((r) => r.kind === "stale_pending")).toHaveLength(1);
+    await apply("success", { stalePending: 1 });
+    expect((await kinds()).filter((r) => r.kind === "stale_pending")).toHaveLength(1);
+    await apply("failure");
+    await apply("noop");
+    await apply("success", { stalePending: 1 });
+    expect((await kinds()).filter((r) => r.kind === "stale_pending")).toHaveLength(1);
+    await apply("success", { stalePending: 0 });
+    expect((await kinds()).filter((r) => r.kind === "stale_pending")).toHaveLength(1);
+    await apply("success", { stalePending: 2 });
+    const rows = (await kinds()).filter((r) => r.kind === "stale_pending");
+    expect(rows).toHaveLength(2);
+    expect(rows[1]!.payload.stale_pending).toBe(2);
+    expect(payloadKeys(rows[1]!.payload)).toEqual(["at", "delivery_id", "kind", "stale_pending"]);
+  });
+});

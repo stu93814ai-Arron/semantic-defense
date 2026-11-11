@@ -23,6 +23,7 @@ type CursorAlertState = {
   cursor: number;
   failStreak: number;
   lagAlerted: boolean;
+  staleAlerted: boolean;
   stalePendingTotal: number;
 };
 
@@ -61,12 +62,13 @@ async function measureCursorLag(q: Queryable, cursor: number): Promise<number> {
 async function loadState(q: Queryable): Promise<CursorAlertState> {
   await q.query("INSERT INTO judge_cursor (id, received_upto) VALUES (TRUE, 0) ON CONFLICT (id) DO NOTHING");
   const row = (await q.query<{
-    received_upto: string; fail_streak: number; lag_alerted: boolean; stale_pending_total: string;
-  }>("SELECT received_upto, fail_streak, lag_alerted, stale_pending_total FROM judge_cursor WHERE id FOR UPDATE")).rows[0]!;
+    received_upto: string; fail_streak: number; lag_alerted: boolean; stale_alerted: boolean; stale_pending_total: string;
+  }>("SELECT received_upto, fail_streak, lag_alerted, stale_alerted, stale_pending_total FROM judge_cursor WHERE id FOR UPDATE")).rows[0]!;
   return {
     cursor: Number(row.received_upto),
     failStreak: row.fail_streak,
     lagAlerted: row.lag_alerted,
+    staleAlerted: row.stale_alerted,
     stalePendingTotal: Number(row.stale_pending_total),
   };
 }
@@ -82,9 +84,19 @@ function shouldAlertTickFail(prev: number, next: number, n: number): boolean {
   return next >= n && prev < n;
 }
 
-function nextLagFlag(lagMs: number, threshold: number, wasAlerted: boolean): { alerted: boolean; enqueue: boolean } {
-  if (lagMs > threshold) return { alerted: true, enqueue: !wasAlerted };
+function nextOnceFlag(active: boolean, wasAlerted: boolean): { alerted: boolean; enqueue: boolean } {
+  if (active) return { alerted: true, enqueue: !wasAlerted };
   return { alerted: false, enqueue: false };
+}
+
+function nextLagFlag(lagMs: number, threshold: number, wasAlerted: boolean): { alerted: boolean; enqueue: boolean } {
+  return nextOnceFlag(lagMs > threshold, wasAlerted);
+}
+
+/** 只在成功 tick 判斷：stale>0 且尚未發過才告；stale=0 時重置。失敗／NOOP 不改旗標。 */
+function nextStaleFlag(outcome: JudgeTickOutcome, stale: number, wasAlerted: boolean): { alerted: boolean; enqueue: boolean } {
+  if (outcome !== "success") return { alerted: wasAlerted, enqueue: false };
+  return nextOnceFlag(stale > 0, wasAlerted);
 }
 
 async function applyJudgeAlertsTx(q: Queryable, opts: ApplyJudgeAlertsOpts): Promise<void> {
@@ -93,16 +105,17 @@ async function applyJudgeAlertsTx(q: Queryable, opts: ApplyJudgeAlertsOpts): Pro
   const failStreak = nextStreak(state.failStreak, opts.outcome);
   const lag = nextLagFlag(lagMs, opts.cfg.lagMs, state.lagAlerted);
   const stale = opts.outcome === "success" ? (opts.stalePending ?? 0) : 0;
+  const staleFlag = nextStaleFlag(opts.outcome, stale, state.staleAlerted);
   const total = state.stalePendingTotal + stale;
   const base = { channels: opts.channels, now: opts.now };
   if (shouldAlertTickFail(state.failStreak, failStreak, opts.cfg.failN)) {
     await enqueueAlerts(q, { ...base, kind: "tick_fail", streak: failStreak });
   }
   if (lag.enqueue) await enqueueAlerts(q, { ...base, kind: "cursor_lag", lag_ms: lagMs });
-  if (stale > 0) await enqueueAlerts(q, { ...base, kind: "stale_pending", stale_pending: stale });
+  if (staleFlag.enqueue) await enqueueAlerts(q, { ...base, kind: "stale_pending", stale_pending: stale });
   await q.query(
-    "UPDATE judge_cursor SET fail_streak = $1, lag_alerted = $2, stale_pending_total = $3 WHERE id",
-    [failStreak, lag.alerted, total],
+    "UPDATE judge_cursor SET fail_streak = $1, lag_alerted = $2, stale_alerted = $3, stale_pending_total = $4 WHERE id",
+    [failStreak, lag.alerted, staleFlag.alerted, total],
   );
 }
 
