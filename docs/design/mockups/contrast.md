@@ -81,3 +81,54 @@
 | E（italian） | 主題切換選中段 text #1E1C1A | surface #FFFFFF | 16.99:1 | ✓ |
 | E（italian） | 停用「完成接入」 neutral #6A635D | surface-2 #F1EDE8 | 5.07:1 | ✓ |
 | E（italian） | 步驟已完成 success #3B6B52 | bg #FAF8F5 | 5.81:1 | ✓ |
+
+### 管理主控台（2026-11-17，僅 D 北歐溫潤）
+
+沿用 v1.0 tokens。頂欄與登入木板只用 `--color-on-wood` / `--color-text`。數字與 IP 使用 Noto Sans Mono + `zero` 斜線 0。
+新增 AI／規則徽章：AI 為實心 info `#3E5F78`＋白字與四向星標；規則為實心 neutral `#6B6358`＋白字。本機模型名稱全稿為 Llama 3.1 8B（僅作示意，非廠商介面）。
+
+| 方向 | 前景 | 背景 | 對比 | AA |
+|---|---|---|---|---|
+| D（nordic） | 頂欄品牌／時間字 #33291F | 橡木淺端 #D2B288 | 7.08:1 | ✓ |
+| D（nordic） | 頂欄品牌／時間字 #33291F | 橡木深端 #C6A072 | 5.87:1 | ✓ |
+| D（nordic） | 頂欄主文字 #2E2A24 | 橡木淺端 #D2B288 | 7.10:1 | ✓ |
+| D（nordic） | 模式膠囊／AI 入口文字 #2E2A24 | 膠囊底 surface #FBF8F2 | 13.45:1 | ✓ |
+| D（nordic） | 頁籤未選 #5F574B | 頁籤列 surface #FBF8F2 | 6.71:1 | ✓ |
+| D（nordic） | 頁籤選中 #2E2A24 | 頁籤列 surface #FBF8F2 | 13.45:1 | ✓ |
+| D（nordic） | 樹狀選單文字 #2E2A24 | 樹狀底 surface-2 #ECE4D6 | 11.29:1 | ✓ |
+| D（nordic） | 樹狀選單次要 #5F574B | 樹狀底 surface-2 #ECE4D6 | 5.64:1 | ✓ |
+| D（nordic） | 樹狀選中項 #2E2A24 | 選中底 surface #FBF8F2 | 13.45:1 | ✓ |
+| D（nordic） | KPI 自動上榜數字 #3F6B4A | KPI 淡底（55% sf2） #F3EDE3 | 5.28:1 | ✓ |
+| D（nordic） | KPI 待審數字 #8A5A12 | KPI 淡底（55% sf2） #F3EDE3 | 5.08:1 | ✓ |
+| D（nordic） | KPI 未成案／白名單數字 #3E5F78 | KPI 淡底（55% sf2） #F3EDE3 | 5.79:1 | ✓ |
+| D（nordic） | 狀態燈說明成功 #3F6B4A | 卡片 surface #FBF8F2 | 5.80:1 | ✓ |
+| D（nordic） | 狀態燈說明注意 #8A5A12 | 卡片 surface #FBF8F2 | 5.58:1 | ✓ |
+| D（nordic） | 狀態燈說明資訊 #3E5F78 | 卡片 surface #FBF8F2 | 6.36:1 | ✓ |
+| D（nordic） | 核准／前往核准按鈕字 #FFFFFF | primary #4F6B57 | 5.88:1 | ✓ |
+| D（nordic） | 駁回／撤回按鈕 #9E3B2C | 卡片 surface #FBF8F2 | 6.36:1 | ✓ |
+| D（nordic） | 登入主標 #2E2A24 | 頁底 #F4EFE6 | 12.45:1 | ✓ |
+| D（nordic） | 登入木板標語 #2E2A24 | 橡木淺端 #D2B288 | 7.10:1 | ✓ |
+| D（nordic） | 登入木板次行 #33291F | 橡木深端 #C6A072 | 5.87:1 | ✓ |
+| D（nordic） | 登入木板次行 #33291F | 橡木深端＋木紋條 #BD986B | 5.32:1 | ✓ |
+| D（nordic） | AI 徽章字 #FFFFFF | AI 徽章底 info #3E5F78 | 6.75:1 | ✓ |
+| D（nordic） | 規則徽章字 #FFFFFF | 規則徽章底 neutral #6B6358 | 5.91:1 | ✓ |
+| D（nordic） | 詢問 AI 啟動器字 #FFFFFF | 啟動器底 info #3E5F78 | 6.75:1 | ✓ |
+| D（nordic） | AI 理由／次要說明 #5F574B | 卡片 surface #FBF8F2 | 6.71:1 | ✓ |
+| D（nordic） | 已帶入案件晶片 #3E5F78 | info 10% 淡底 #E8E9E6 | 5.53:1 | ✓ |
+| D（nordic） | 使用者對話字 #2E2A24 | 氣泡 surface-2 #ECE4D6 | 11.29:1 | ✓ |
+| D（nordic） | AI 對話字 #2E2A24 | 氣泡 info 7% 淡底 #EEEDE9 | 12.17:1 | ✓ |
+| D（nordic） | 側欄說明 #5F574B | info 7% 淡底 #EEEDE9 | 6.07:1 | ✓ |
+| D（nordic） | 信心數字 warning #8A5A12 | 卡片 surface #FBF8F2 | 5.58:1 | ✓ |
+| D（nordic） | 選中對話列字 #2E2A24 | info 8% 淡底 #ECECE8 | 12.04:1 | ✓ |
+| D（nordic） | 模式橫幅 info #3E5F78 | info 7% 淡底 #EEEDE9 | 5.76:1 | ✓ |
+| D（nordic） | 待審橫幅 warning #8A5A12 | warning 8% 淡底 #F2EBE0 | 4.99:1 | ✓ |
+| D（nordic） | 健康注意標題 #8A5A12 | warning 8% 淡底 #F2EBE0 | 4.99:1 | ✓ |
+| D（nordic） | 高風險標籤 #9E3B2C | 10% 淡底 #F2E5DE | 5.47:1 | ✓ |
+| D（nordic） | 注意標籤 #8A5A12 | 12% 淡底 #EDE5D7 | 4.73:1 | ✓ |
+| D（nordic） | 成功標籤 #3F6B4A | 12% 淡底 #E4E7DE | 4.92:1 | ✓ |
+| D（nordic） | 資訊標籤 #3E5F78 | 10% 淡底 #E8E9E6 | 5.53:1 | ✓ |
+| D（nordic） | 狀態燈成功（圖形） #3F6B4A | 卡片 #FBF8F2 | 5.80:1 | ✓ |
+| D（nordic） | 狀態燈注意（圖形） #8A5A12 | 卡片 #FBF8F2 | 5.58:1 | ✓ |
+| D（nordic） | 頂欄模式燈成功（圖形） #3F6B4A | 模式膠囊 #FBF8F2 | 5.80:1 | ✓ |
+
+本批最低文字對比：**4.73:1**（注意標籤 #8A5A12 on 12% 淡底 #EDE5D7）。
