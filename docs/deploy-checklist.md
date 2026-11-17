@@ -140,9 +140,9 @@ A 組領航員裁示（未經使用者確認）：測試清單 `/workspace/exec-
 
 A 組領航員裁示（未經使用者確認）；資安提出的條目另標。詳見 `docs/decisions/2026-11-17-auto-list-setting.md`。
 
-- 開關預設 `false`。**(d) 三向交握佐證（tcp_hs）合併並上線之前，不得開啟。** 程式目前以 `HANDSHAKE_EVIDENCE_READY = false` 擋住：PUT `{"enabled":true}` 回 409「三向交握佐證尚未上線，暫不能開啟自動封鎖」，並寫 `settings.auto_list.update_blocked` 稽核（軟體大總召裁示（未經使用者確認），依 11/9 使用者決定）。
+- 開關預設 `false`。**(d) 三向交握佐證（tcp_hs）合併並上線之前，不得開啟。** 程式目前以 `HANDSHAKE_EVIDENCE_READY = false` 擋住：PUT `{"enabled":true}` 回 409「三向交握佐證尚未上線，暫不能開啟自動封鎖」，並寫 `settings.auto_list.update_blocked` 稽核（軟體大總召裁示（未經使用者確認），依 11/9 使用者決定）；tick 也會 AND 上 `HANDSHAKE_EVIDENCE_READY`，未就緒時即使 DB 已是 `true` 也不自動上榜（A 組領航員裁示（未經使用者確認））。
 - 現況下若開啟，E3.A 條件成立但沒有三向交握佐證的來源會**直接寫進 EDL**。
 - 開啟前必須：完成白名單（含 `SD_CRITICAL_ALLOWLIST`）審查；所有寫入方法都有 `Origin` 或 `Sec-Fetch-Site` 檢查（資安提出；目前只有這條 PUT 有）。
-- 開關值只能經這條 PUT 改（`platform_admin`），不得以 SQL 直接改 `auto_list_settings`；tick 不另檢查。（「不得以 SQL 直接改」為駕駛員自行決定（交 A 組領航員））
+- 這條 PUT（`platform_admin`）是開關值唯一核准的寫入管道，不得以 SQL 直接改 `auto_list_settings`；是否自動上榜另由 tick 與 `HANDSHAKE_EVIDENCE_READY` 取 AND 決定，不是單靠 PUT。（「不得以 SQL 直接改」為駕駛員自行決定（交 A 組領航員））
 - 生產不得傳 `autoListEnabled`／`autoListHandshakeReady`：`NODE_ENV` 不是 `test` 時傳入會拒絕啟動（資安提出）。
 - 關閉不撤銷既有自動上榜項目（自然到期）；開啟只影響之後的判定。
