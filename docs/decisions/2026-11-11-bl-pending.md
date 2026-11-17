@@ -7,7 +7,7 @@
 1. `GET /api/blacklist/pending` 只回 `state=open` 且尚未到期（`expires_at > now`）的案件，欄位嚴格對應契約 `PendingCandidate`。
 2. 核准（`POST /api/blacklist/pending/:caseId/approve`）無請求本文；成功回應重用既有 `BlocklistEntry`，不新增欄位。`created_at` 與 `approved_at` 皆為核准當下的 app 時鐘；`source=manual`；有效期 24 小時。
 3. 退回（`POST /api/blacklist/pending/:caseId/reject`）不收本文，成功為 204 無本文；稽核不寫理由。
-4. 不加速率限制。
+4. 不加速率限制。（已由 `2026-11-17-approve-guard.md` 取代：核准改為每個 operator 每小時有上限。）
 5. 管理面回應可以照契約帶 ip；新寫的 `blacklist.approve`／`blacklist.reject` 稽核與 log 不得出現 IP。
 6. **人工核准不受冷卻期限制。** 白名單一定要擋：核准當下以 `LOCK TABLE allowlist_entries IN SHARE MODE` 重查，命中則整筆交易回滾、不上榜。
 7. 僅 `operator` 可列表、核准與退回。路徑參數只接受小寫 UUID，大寫視為不存在（404）。
