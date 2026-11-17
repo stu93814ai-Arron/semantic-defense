@@ -176,3 +176,27 @@ describe("JudgmentDetailPage 版面占位", () => {
     expect(page).not.toContain("0.87");
   });
 });
+
+describe("JudgmentDetailPage 2xx 不顯示判決或狀態", () => {
+  it("即使後端帶入 verdict／status 欄位，頁面也不顯示任何判決或狀態", async () => {
+    mockedGet.mockResolvedValue({
+      status: 200,
+      data: {
+        verdict: "block",
+        status: "pending",
+        decision: "核准",
+        state: "待審",
+        confidence: 0.87,
+      },
+    });
+    renderPage("/judgments/abc");
+    await waitFor(() => expect(mockedGet).toHaveBeenCalled());
+    expect(screen.queryByTestId("empty-state")).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByRole("button", { name: /核准|駁回/ })).toBeNull();
+    const page = (document.querySelector("main.case-detail") as HTMLElement | null)?.textContent ?? "";
+    expect(page).not.toMatch(/待審|核准|駁回|判決|建議封鎖|信心|成案|自動上榜/);
+    expect(page).not.toMatch(/verdict|pending|block/i);
+    expect(page).not.toContain("0.87");
+  });
+});
