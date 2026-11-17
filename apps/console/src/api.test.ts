@@ -140,6 +140,66 @@ describe("loginRequestSync", () => {
   });
 });
 
+
+describe("loginRequestSync 錯誤文案", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  function stubStatus(status: number, body: unknown) {
+    class FakeXHR {
+      status = 0;
+      responseText = "";
+      withCredentials = false;
+      open() {}
+      setRequestHeader() {}
+      send() {
+        this.status = status;
+        this.responseText = JSON.stringify(body);
+      }
+    }
+    vi.stubGlobal("XMLHttpRequest", FakeXHR as unknown as typeof XMLHttpRequest);
+  }
+
+  it("401 使用既有帳密錯誤訊息", () => {
+    stubStatus(401, { error: "帳號或密碼錯誤" });
+    expect(loginRequestSync("x", "y")).toEqual({
+      ok: false,
+      status: 401,
+      message: "帳號或密碼錯誤",
+    });
+  });
+
+  it("5xx 與連線失敗顯示固定前端文案，不採用後端本文", () => {
+    stubStatus(500, { error: "internal secret stack" });
+    const five = loginRequestSync("x", "y");
+    expect(five).toEqual({
+      ok: false,
+      status: 500,
+      message: "後端無法連線，請稍後再試",
+    });
+    expect(five.ok === false && five.message).not.toMatch(/secret|internal/);
+
+    class BoomXHR {
+      status = 0;
+      responseText = "";
+      withCredentials = false;
+      open() {}
+      setRequestHeader() {}
+      send() {
+        throw new TypeError("Failed to fetch");
+      }
+    }
+    vi.stubGlobal("XMLHttpRequest", BoomXHR as unknown as typeof XMLHttpRequest);
+    expect(loginRequestSync("x", "y")).toEqual({
+      ok: false,
+      status: 0,
+      message: "後端無法連線，請稍後再試",
+    });
+  });
+});
+
 describe("apiGet 429／404", () => {
   beforeEach(() => {
     setUnauthorizedHandler(null);
@@ -301,7 +361,7 @@ describe("loginRequestSync 失敗分支", () => {
     expect(loginRequestSync("a", "b")).toEqual({
       ok: false,
       status: 0,
-      message: "帳號或密碼錯誤",
+      message: "後端無法連線，請稍後再試",
     });
 
     stubFailLoginXhr();

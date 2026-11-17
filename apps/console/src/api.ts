@@ -99,12 +99,15 @@ export function loginRequestSync(username: string, password: string): LoginResul
   try {
     xhr.send(JSON.stringify({ username, password }));
   } catch {
-    return { ok: false, status: 0, message: "帳號或密碼錯誤" };
+    return { ok: false, status: 0, message: "後端無法連線，請稍後再試" };
   }
   if (xhr.status === 429) {
     // 後端原文已含「請稍後再試」，UI 原樣顯示、不改寫
     const msg = parseError(xhr.responseText) ?? "帳號或密碼錯誤，請稍後再試";
     return { ok: false, status: 429, message: msg };
+  }
+  if (xhr.status >= 500 || xhr.status === 0) {
+    return { ok: false, status: xhr.status, message: "後端無法連線，請稍後再試" };
   }
   if (xhr.status < 200 || xhr.status >= 300) {
     const msg = parseError(xhr.responseText) ?? "帳號或密碼錯誤";

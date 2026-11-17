@@ -49,6 +49,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     navigate("/login", { replace: true });
   }, [navigate]);
 
+  const clearToLoginExpired = useCallback(() => {
+    setUser(null);
+    navigate("/login", { replace: true, state: { expired: true } });
+  }, [navigate]);
+
   useEffect(() => {
     setUnauthorizedHandler(clearToLogin);
     return () => setUnauthorizedHandler(null);
@@ -72,7 +77,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const timer = startIdleTimer({
       timeoutMs: resolveIdleTimeoutMs(viteIdleEnv()),
       onIdle: () => {
-        void logoutRequest().finally(() => clearToLogin());
+        void logoutRequest().finally(() => clearToLoginExpired());
       },
     });
     const onActivity = () => timer.touch();
@@ -83,7 +88,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       window.removeEventListener("pointerdown", onActivity);
       window.removeEventListener("keydown", onActivity);
     };
-  }, [user, clearToLogin]);
+  }, [user, clearToLoginExpired]);
 
   const login = useCallback((username: string, password: string): LoginOutcome => {
     const result = loginRequestSync(username, password);
