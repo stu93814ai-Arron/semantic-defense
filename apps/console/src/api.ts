@@ -18,13 +18,25 @@ export type ApiGetResult<T> = {
   error?: string;
 };
 
+function pickStringError(body: unknown): string | undefined {
+  if (!body || typeof body !== "object") return undefined;
+  const rec = body as { error?: unknown; message?: unknown };
+  if (typeof rec.error === "string") return rec.error;
+  if (typeof rec.message === "string") return rec.message;
+  return undefined;
+}
+
 async function readError(res: Response): Promise<string | undefined> {
   try {
-    const body = (await res.json()) as { error?: string; message?: string };
-    return body.error ?? body.message;
+    return pickStringError(await res.json());
   } catch {
     return undefined;
   }
+}
+
+function truncatedError(raw: string | undefined, fallback?: string): string | undefined {
+  const text = raw ?? fallback;
+  return text === undefined ? undefined : truncateBackendMessage(text);
 }
 
 export async function apiGet<T>(url: string): Promise<ApiGetResult<T>> {
@@ -34,16 +46,14 @@ export async function apiGet<T>(url: string): Promise<ApiGetResult<T>> {
     return { status: 401, data: null };
   }
   if (res.status === 429) {
-    const error = (await readError(res)) ?? "帳號或密碼錯誤，請稍後再試";
+    const error = truncatedError(await readError(res), "帳號或密碼錯誤，請稍後再試");
     return { status: 429, data: null, error };
   }
   if (res.status === 404) {
-    const error = await readError(res);
-    return { status: 404, data: null, error };
+    return { status: 404, data: null, error: truncatedError(await readError(res)) };
   }
   if (!res.ok) {
-    const error = await readError(res);
-    return { status: res.status, data: null, error };
+    return { status: res.status, data: null, error: truncatedError(await readError(res)) };
   }
   try {
     return { status: res.status, data: (await res.json()) as T };
@@ -64,10 +74,13 @@ export async function fetchMe(opts: FetchMeOptions = {}): Promise<SessionUser | 
   return parseMeBody(await res.json());
 }
 
+function truncateBackendMessage(text: string): string {
+  return text.length > 200 ? text.slice(0, 200) : text;
+}
+
 function parseError(text: string): string | undefined {
   try {
-    const body = JSON.parse(text) as { error?: string; message?: string };
-    return body.error ?? body.message;
+    return pickStringError(JSON.parse(text));
   } catch {
     return undefined;
   }
@@ -90,6 +103,20 @@ function fetchMeSync(): SessionUser | null {
   }
 }
 
+
+function loginFailure(status: number, responseText: string): LoginResult {
+  if (status === 429) {
+    // 後端原文（含「請稍後再試」）仍顯示，但與其他後端訊息同樣截斷至約 200 字。
+    const msg = parseError(responseText) ?? "帳號或密碼錯誤，請稍後再試";
+    return { ok: false, status, message: truncateBackendMessage(msg) };
+  }
+  if (status >= 500 || status === 0) {
+    return { ok: false, status, message: "後端無法連線，請稍後再試" };
+  }
+  const raw = parseError(responseText) ?? "帳號或密碼錯誤";
+  return { ok: false, status, message: truncateBackendMessage(raw) };
+}
+
 /** 同步登入：2xx 時 body 僅 {ok:true}，身分改打 /me。 */
 export function loginRequestSync(username: string, password: string): LoginResult {
   const xhr = new XMLHttpRequest();
@@ -101,17 +128,8 @@ export function loginRequestSync(username: string, password: string): LoginResul
   } catch {
     return { ok: false, status: 0, message: "後端無法連線，請稍後再試" };
   }
-  if (xhr.status === 429) {
-    // 後端原文已含「請稍後再試」，UI 原樣顯示、不改寫
-    const msg = parseError(xhr.responseText) ?? "帳號或密碼錯誤，請稍後再試";
-    return { ok: false, status: 429, message: msg };
-  }
-  if (xhr.status >= 500 || xhr.status === 0) {
-    return { ok: false, status: xhr.status, message: "後端無法連線，請稍後再試" };
-  }
   if (xhr.status < 200 || xhr.status >= 300) {
-    const msg = parseError(xhr.responseText) ?? "帳號或密碼錯誤";
-    return { ok: false, status: xhr.status, message: msg };
+    return loginFailure(xhr.status, xhr.responseText);
   }
   const user = fetchMeSync();
   if (!user) return { ok: false, status: 401, message: "帳號或密碼錯誤" };

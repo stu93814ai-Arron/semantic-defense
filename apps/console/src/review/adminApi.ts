@@ -69,11 +69,15 @@ async function readErrorBody(res: Response): Promise<unknown> {
   }
 }
 
+function truncateMessage(text: string): string {
+  return text.length > CLIENT_ERROR_MAX ? text.slice(0, CLIENT_ERROR_MAX) : text;
+}
+
 function mappedErrorMessage(body: unknown): string | undefined {
   if (!body || typeof body !== "object") return undefined;
   const rec = body as { error?: unknown; message?: unknown };
-  if (typeof rec.error === "string") return rec.error;
-  if (typeof rec.message === "string") return rec.message;
+  if (typeof rec.error === "string") return truncateMessage(rec.error);
+  if (typeof rec.message === "string") return truncateMessage(rec.message);
   return undefined;
 }
 
@@ -81,7 +85,7 @@ function clientErrorMessage(body: unknown): string {
   if (!body || typeof body !== "object") return "請求無法完成";
   const error = (body as { error?: unknown }).error;
   if (typeof error !== "string") return "請求無法完成";
-  return error.length > CLIENT_ERROR_MAX ? error.slice(0, CLIENT_ERROR_MAX) : error;
+  return truncateMessage(error);
 }
 
 const STATUS_CODE = {

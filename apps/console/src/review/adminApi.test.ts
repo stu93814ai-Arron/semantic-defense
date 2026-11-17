@@ -332,3 +332,36 @@ describe("adminApi 安全硬化", () => {
     }
   });
 });
+
+
+describe("adminApi 對應 4xx 訊息截斷", () => {
+  it("400／401／403／404／409 的後端字串訊息同樣截斷至約 200 字", async () => {
+    const long = "錯".repeat(250);
+    const cases = [
+      { status: 400, code: "bad_request" },
+      { status: 401, code: "unauthorized" },
+      { status: 403, code: "forbidden" },
+      { status: 404, code: "not_found" },
+      { status: 409, code: "conflict" },
+    ] as const;
+    for (const { status, code } of cases) {
+      const fromError = await createAdminApi({
+        fetch: async () => jsonResponse(status, { error: long }),
+      }).approvePending(PENDING.case_id);
+      expect(fromError.ok).toBe(false);
+      if (!fromError.ok) {
+        expect(fromError.code).toBe(code);
+        expect(fromError.message).toBe("錯".repeat(200));
+        expect(fromError.message.length).toBe(200);
+      }
+      const fromMessage = await createAdminApi({
+        fetch: async () => jsonResponse(status, { message: long }),
+      }).approvePending(PENDING.case_id);
+      expect(fromMessage.ok).toBe(false);
+      if (!fromMessage.ok) {
+        expect(fromMessage.message).toBe("錯".repeat(200));
+        expect(fromMessage.message.length).toBe(200);
+      }
+    }
+  });
+});
