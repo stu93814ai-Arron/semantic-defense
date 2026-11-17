@@ -1,4 +1,5 @@
-import type { Queryable } from "./db.js";
+import type { Db, Queryable } from "./db.js";
+import { writeAudit } from "./audit.js";
 import { parseBoundInt } from "./judge-alerts.js";
 
 /**
@@ -6,12 +7,15 @@ import { parseBoundInt } from "./judge-alerts.js";
  * - 上限：每個 operator 滑動 1 小時內成功核准（blocklist_entries source=manual、approved_by=操作者）達 N 筆後回 429；
  *   被擋的嘗試不計入（計數來源只有成功的 entry）。N 預設 50、範圍 1–200，環境變數 SD_APPROVE_PER_HOUR。
  * - 並發：先 SHARE（白名單）再拿每個 actor 一把 xact advisory lock，才計數；不拿 AUTO_LOCK。
+ * - 被擋：主交易回滾後另開短交易寫 blacklist.approve_blocked {case_id, reason}（不含 IP）；
+ *   cap 同一 operator、其他 reason 同一案件，1 小時內最多一筆。其他 409 不寫。
  */
 export const APPROVE_LOCK = 872_364_215;
 export const APPROVE_WINDOW_MS = 60 * 60_000;
 export const APPROVE_PER_HOUR_DEFAULT = 50;
 export const APPROVE_PER_HOUR_MIN = 1;
 export const APPROVE_PER_HOUR_MAX = 200;
+export const APPROVE_BLOCKED_EVERY_MS = 60 * 60_000;
 export const APPROVE_CAP_MESSAGE = "核准次數已達上限，請稍後再試";
 
 export type ApproveBlockReason = "cap";
@@ -39,10 +43,36 @@ export function resolveApprovePerHour(env: NodeJS.ProcessEnv, opt?: number): num
 
 /** 呼叫端須已持有白名單 SHARE。拿 actor 鎖後計數，達上限即拋 ApproveBlocked（429）。 */
 export async function assertUnderApproveCap(q: Queryable, actor: string, at: number, perHour: number): Promise<void> {
-  await q.query("SELECT pg_advisory_xact_lock($1, hashtext($2))", [APPROVE_LOCK, actor]);
+  await lockApprover(q, actor);
   const r = await q.query<{ n: string }>(
     "SELECT count(*) AS n FROM blocklist_entries WHERE source = 'manual' AND approved_by = $1 AND created_at > $2",
     [actor, at - APPROVE_WINDOW_MS],
   );
   if (Number(r.rows[0]!.n) >= perHour) throw new ApproveBlocked("cap", 429, APPROVE_CAP_MESSAGE);
+}
+
+/** 每個 actor 一把 xact advisory lock（兩參數版本；hashtext 碰撞只會多序列化，不會算錯）。 */
+async function lockApprover(q: Queryable, actor: string): Promise<void> {
+  await q.query("SELECT pg_advisory_xact_lock($1, hashtext($2))", [APPROVE_LOCK, actor]);
+}
+
+export type BlockedCtx = { id: string; at: number; actor: string };
+
+/** 主交易已回滾後呼叫：另開短交易，去重後寫 blacklist.approve_blocked。 */
+export async function recordApproveBlocked(db: Db, c: BlockedCtx, reason: ApproveBlockReason): Promise<void> {
+  await db.tx(async (q) => {
+    await lockApprover(q, c.actor);
+    const since = c.at - APPROVE_BLOCKED_EVERY_MS;
+    const dup = reason === "cap"
+      ? await q.query(
+        `SELECT 1 FROM audit_events WHERE action = 'blacklist.approve_blocked'
+           AND actor = $1 AND detail->>'reason' = 'cap' AND at > $2 LIMIT 1`, [c.actor, since])
+      : await q.query(
+        `SELECT 1 FROM audit_events WHERE action = 'blacklist.approve_blocked'
+           AND detail->>'case_id' = $1 AND detail->>'reason' = $2 AND at > $3 LIMIT 1`, [c.id, reason, since]);
+    if (dup.rows.length > 0) return;
+    await writeAudit(q, {
+      action: "blacklist.approve_blocked", actor: c.actor, sensor_id: null, at: c.at, detail: { case_id: c.id, reason },
+    });
+  });
 }

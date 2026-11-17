@@ -149,6 +149,11 @@ const SCHEMA_STATEMENTS = [
   // A 覆核：auto_suppressed 每個 (ip, reason) 每小時最多一筆，寫前查過去 1 小時（auto-trigger.ts writeSuppressed）用的 partial index。
   `CREATE INDEX IF NOT EXISTS audit_auto_suppressed_ip_reason ON audit_events (action, (detail->>'ip'), (detail->>'reason'), at)
    WHERE action = 'blacklist.auto_suppressed'`,
+  // 核准防護：approve_blocked 去重（cap 依 actor、其他 reason 依 case_id，各查過去 1 小時；approve-guard.ts recordApproveBlocked）。
+  `CREATE INDEX IF NOT EXISTS audit_approve_blocked_actor ON audit_events (actor, (detail->>'reason'), at)
+   WHERE action = 'blacklist.approve_blocked'`,
+  `CREATE INDEX IF NOT EXISTS audit_approve_blocked_case ON audit_events ((detail->>'case_id'), (detail->>'reason'), at)
+   WHERE action = 'blacklist.approve_blocked'`,
   // 告警 outbox（主動推送）：與 blacklist.auto_list 同交易入列；發送在交易外。
   `CREATE TABLE IF NOT EXISTS alert_outbox (
   id BIGSERIAL PRIMARY KEY,

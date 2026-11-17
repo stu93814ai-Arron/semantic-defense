@@ -12,7 +12,7 @@ import { writeAudit } from "./audit.js";
 import { AUTO_LIST_TTL_MS, loadAllowlist } from "./auto-blacklist.js";
 import { lockAllowlistShare } from "./auto-breaker.js";
 import { insertActiveBlocklistEntry } from "./blocklist-store.js";
-import { ApproveBlocked, assertUnderApproveCap, type ApproveGuardConfig } from "./approve-guard.js";
+import { ApproveBlocked, assertUnderApproveCap, recordApproveBlocked, type ApproveGuardConfig } from "./approve-guard.js";
 
 const OPERATOR: Role[] = ["operator"];
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -53,7 +53,9 @@ async function conflictIfUnclaimed(q: Queryable, id: string, at: number): Promis
   throw new PendingConflict("已到期");
 }
 
-async function runPending<T>(reply: FastifyReply, fn: () => Promise<T | 404>): Promise<T | undefined> {
+async function runPending<T>(
+  reply: FastifyReply, fn: () => Promise<T | 404>, onBlocked: (e: ApproveBlocked) => Promise<void>,
+): Promise<T | undefined> {
   try {
     const out = await fn();
     if (out === 404) {
@@ -62,6 +64,7 @@ async function runPending<T>(reply: FastifyReply, fn: () => Promise<T | 404>): P
     }
     return out;
   } catch (e) {
+    if (e instanceof ApproveBlocked) await onBlocked(e);
     if (e instanceof PendingConflict || e instanceof ApproveBlocked) {
       await reply.code(e instanceof ApproveBlocked ? e.status : 409).send({ error: e.error });
       return undefined;
@@ -85,7 +88,8 @@ function postCaseAction<T>(
     const id = req.params.caseId;
     if (!UUID_RE.test(id)) return reply.code(404).send({ error: MISSING });
     const c: CaseCtx = { id, at: now(), actor: req.user!.username };
-    const out = await runPending<T>(reply, () => db.tx((q) => fn(q, c)));
+    // 防護擋下時主交易已回滾；被擋稽核在另一筆短交易寫。
+    const out = await runPending<T>(reply, () => db.tx((q) => fn(q, c)), (e) => recordApproveBlocked(db, c, e.reason));
     if (out !== undefined) return done(reply, out);
   });
 }
