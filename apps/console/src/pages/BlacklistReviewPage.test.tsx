@@ -13,6 +13,7 @@ vi.mock("../review/reviewSource", () => ({
     approve: vi.fn(),
     reject: vi.fn(),
     isUnreachable: vi.fn(() => false),
+    isDemo: vi.fn(() => false),
   },
 }));
 

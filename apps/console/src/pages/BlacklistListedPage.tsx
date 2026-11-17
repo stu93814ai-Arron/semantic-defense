@@ -3,6 +3,7 @@ import { useAuth } from "../auth";
 import { reviewSource } from "../review/reviewSource";
 import type { AdminApiResult } from "../review/adminApi";
 import type { ListedEntry, SourceFilter } from "../review/types";
+import { DemoDataMarker } from "../review/DemoDataMarker";
 
 function applyList<T>(
   r: AdminApiResult<T[]>,
@@ -46,6 +47,7 @@ export function BlacklistListedPage() {
   return (
     <main>
       <h1>黑名單撤回</h1>
+      <DemoDataMarker />
       <div role="group" aria-label="來源篩選">
         {(["all", "auto", "manual"] as const).map((f) => (
           <button

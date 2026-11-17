@@ -3,6 +3,7 @@ import { useAuth } from "../auth";
 import { reviewSource } from "../review/reviewSource";
 import type { AllowlistItem } from "../review/types";
 import { WhitelistThresholdSection } from "../review/WhitelistThresholdSection";
+import { DemoDataMarker } from "../review/DemoDataMarker";
 
 export function WhitelistPage() {
   const { user } = useAuth();
@@ -53,6 +54,7 @@ export function WhitelistPage() {
   return (
     <main>
       <h1>白名單</h1>
+      <DemoDataMarker />
       <WhitelistThresholdSection
         actorId={user?.username}
         onChanged={refresh}

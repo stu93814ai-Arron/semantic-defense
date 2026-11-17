@@ -281,3 +281,49 @@ describe("reviewSource：VITE_DEMO_FALLBACK 與錯誤不回退", () => {
     expect(src).toMatch(/import\.meta\.env\.VITE_DEMO_FALLBACK/);
   });
 });
+
+describe("reviewSource：示範資料模式", () => {
+  it("API 成功時 isDemo 為 false，即使旗標開啟", async () => {
+    resetReviewSource(
+      createAdminApi({
+        fetch: async (input) => {
+          if (String(input).endsWith(ADMIN_API_PATHS.whitelist)) {
+            return json(200, { items: [ALLOW] });
+          }
+          return json(404, { error: "Not Found" });
+        },
+      }),
+      { VITE_DEMO_FALLBACK: "1" },
+    );
+    const items = await reviewSource.listWhitelist();
+    expect(items.ok).toBe(true);
+    expect(reviewSource.isDemo()).toBe(false);
+  });
+
+  it("VITE_DEMO_FALLBACK=1 且 404 回退後 isDemo 為 true", async () => {
+    resetReviewSource(
+      createAdminApi({ fetch: async () => json(404, { error: "Not Found" }) }),
+      { VITE_DEMO_FALLBACK: "1" },
+    );
+    expect(reviewSource.isDemo()).toBe(false);
+    const listed = await reviewSource.listPending();
+    expect(listed.ok).toBe(true);
+    expect(reviewSource.isDemo()).toBe(true);
+  });
+
+  it("403 或旗標關閉的 404 都不進入示範模式", async () => {
+    resetReviewSource(
+      createAdminApi({ fetch: async () => json(403, { error: "權限不足" }) }),
+      { VITE_DEMO_FALLBACK: "1" },
+    );
+    await reviewSource.listPending();
+    expect(reviewSource.isDemo()).toBe(false);
+
+    resetReviewSource(
+      createAdminApi({ fetch: async () => json(404, { error: "Not Found" }) }),
+      { VITE_DEMO_FALLBACK: "" },
+    );
+    await reviewSource.listPending();
+    expect(reviewSource.isDemo()).toBe(false);
+  });
+});

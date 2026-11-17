@@ -7,6 +7,7 @@ vi.mock("../review/reviewSource", () => ({
   reviewSource: {
     listPending: vi.fn(),
     listActive: vi.fn(),
+    isDemo: vi.fn(() => false),
   },
 }));
 

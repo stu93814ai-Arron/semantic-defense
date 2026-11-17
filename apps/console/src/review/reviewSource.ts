@@ -41,6 +41,11 @@ export function reviewSourceIsUnreachable(): boolean {
   return demo.isBackendUnreachable();
 }
 
+/** 目前是否因 VITE_DEMO_FALLBACK=1 的 404 而改提供 demoStore 資料。 */
+export function reviewSourceIsDemo(): boolean {
+  return mode === "demo";
+}
+
 function noteErr(err: AdminApiErr): void {
   if (err.code === "backend_unreachable") demo.setBackendUnreachable(true);
 }
@@ -97,6 +102,7 @@ async function write<T>(
  */
 export const reviewSource = {
   isUnreachable: reviewSourceIsUnreachable,
+  isDemo: reviewSourceIsDemo,
 
   async listPending(): Promise<AdminApiResult<PendingCandidate[]>> {
     return readList(() => api.listPending(), () => demo.listPending());

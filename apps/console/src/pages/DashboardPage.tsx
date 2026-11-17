@@ -4,6 +4,7 @@ import { reviewSource } from "../review/reviewSource";
 import type { ListedEntry, PendingCandidate } from "../review/types";
 import { titleFor } from "../roles";
 import { summarizeListed } from "./dashboardStats";
+import { DemoDataMarker } from "../review/DemoDataMarker";
 
 type LoadState<T> =
   | { status: "loading" }
@@ -88,6 +89,7 @@ export function DashboardPage({ nowIso }: { nowIso?: string } = {}) {
     <main data-testid="dashboard">
       <p className="eyebrow">監看 / 總覽</p>
       <h1>{titleFor("/dashboard")}</h1>
+      <DemoDataMarker />
       <p>今日 00:00 起 · Asia/Taipei</p>
       <p className="mode-pill" data-testid="dashboard-mode">
         模式：尚未接線

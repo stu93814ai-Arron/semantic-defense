@@ -4,6 +4,7 @@ import { isPendingExpired } from "../review/demoStore";
 import { formatPendingHits } from "../review/pendingHits";
 import { reviewSource } from "../review/reviewSource";
 import type { PendingCandidate } from "../review/types";
+import { DemoDataMarker } from "../review/DemoDataMarker";
 
 const CREATED_FMT = new Intl.DateTimeFormat("zh-TW", {
   timeZone: "Asia/Taipei",
@@ -109,6 +110,7 @@ export function BlacklistReviewPage({ nowIso }: { nowIso?: string } = {}) {
   return (
     <main>
       <h1>黑名單審核</h1>
+      <DemoDataMarker />
       <p className="review-banner card">
         <b>{items.length} 件待審</b>
         <span>信心範圍尚未接線。</span>
