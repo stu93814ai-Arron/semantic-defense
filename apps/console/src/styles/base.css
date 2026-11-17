@@ -491,3 +491,44 @@ label {
   font-weight: 700;
   border-radius: var(--radius-control);
 }
+
+
+.health-status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.health-status-card {
+  padding: 10px 12px;
+}
+
+.health-status-card__label {
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.health-status-card ul {
+  margin: 4px 0 0;
+  padding-left: 1.2em;
+}
+
+[data-testid="alert-health"] {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 16px;
+  margin: 0 0 10px;
+}
+
+[data-testid="alert-health"] dt {
+  color: var(--color-text-muted);
+}
+
+[data-testid="alert-health"] dd {
+  margin: 0;
+}
+
+[data-testid="health-alert-feed"] h2 {
+  margin: 0 0 8px;
+}

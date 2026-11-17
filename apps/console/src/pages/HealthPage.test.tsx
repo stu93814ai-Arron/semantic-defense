@@ -1,4 +1,8 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { titleFor } from "../roles";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { HealthPage } from "./HealthPage";
 
@@ -111,5 +115,69 @@ describe("HealthPage 錯誤與時間格式（待 B 組領航員核准）", () =>
     }).format(new Date(at));
     expect(text).toContain(formatted);
     expect(text).not.toContain(String(at));
+  });
+});
+
+const ZERO_ALERTS = {
+  pending: 0, failed: 0, delivered_1h: 0, undelivered: 0, last_failed_at: null,
+};
+
+function okHealth(extra: Record<string, unknown> = {}) {
+  return {
+    status: 200,
+    data: { status: "ok", alerts: ZERO_ALERTS, ...extra },
+  };
+}
+
+describe("HealthPage 版面與判定計數", () => {
+  it("h1 使用 titleFor(\"/health\")，不用寫死文案", async () => {
+    mockedGet.mockResolvedValue(okHealth());
+    render(<HealthPage />);
+    await waitFor(() => expect(screen.getByTestId("empty-state")).toBeTruthy());
+    expect(screen.getByRole("heading", { level: 1, name: titleFor("/health") })).toBeTruthy();
+    const src = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), "HealthPage.tsx"),
+      "utf8",
+    );
+    expect(src).toMatch(/titleFor\("\/health"\)/);
+    expect(src).not.toMatch(/<h1>平台健康<\/h1>/);
+  });
+
+  it("有 judge 時顯示真實計數；缺欄位與 AI 為占位，不發明數字", async () => {
+    mockedGet.mockResolvedValue(okHealth({
+      judge: { tick_fail_streak: 2, cursor_lag_seconds: 15, stale_pending_total: 3 },
+    }));
+    render(<HealthPage />);
+    await waitFor(() => expect(screen.getByTestId("health-status-grid")).toBeTruthy());
+    const grid = screen.getByTestId("health-status-grid").textContent ?? "";
+    expect(grid).toMatch(/判定程序/);
+    expect(grid).toContain("2");
+    expect(grid).toContain("15");
+    expect(grid).toContain("3");
+    expect(grid).toMatch(/連續失敗|游標落後|過期待審/);
+    expect(grid).toMatch(/鏡像接收/);
+    expect(grid).toMatch(/尚未接線/);
+    expect(grid).toMatch(/模型連線/);
+    expect(grid).toMatch(/AI 尚未啟用/);
+    expect(grid).toMatch(/EDL 發布/);
+    expect(grid).toMatch(/資料庫/);
+    expect(grid).toMatch(/簽章金鑰/);
+    expect(grid).toMatch(/運作模式/);
+    expect(grid).toMatch(/控制 API/);
+    expect(grid).toMatch(/可連線/);
+    expect(grid).not.toMatch(/4\.8|只接收鏡像流量/);
+    expect(screen.getByTestId("health-alert-feed").textContent).toMatch(/尚未接線/);
+    expect(screen.queryByTestId("demo-data-marker")).toBeNull();
+  });
+
+  it("沒有 judge 時判定程序為尚未接線，告警計數仍顯示", async () => {
+    mockedGet.mockResolvedValue(okHealth());
+    render(<HealthPage />);
+    await waitFor(() => expect(screen.getByTestId("alert-health")).toBeTruthy());
+    const grid = screen.getByTestId("health-status-grid").textContent ?? "";
+    expect(grid).toMatch(/判定程序/);
+    expect(grid).toMatch(/尚未接線/);
+    expect(grid).not.toMatch(/連續失敗/);
+    expect(screen.getByTestId("empty-state").textContent).toMatch(/尚無未送達告警/);
   });
 });
