@@ -23,6 +23,17 @@ describe("probeExact / probeUrl", () => {
     expect(probeUrl("/judgments")).toBe("/api/judgments");
     expect(probeUrl("/unknown")).toBeNull();
   });
+
+  it("動態路徑的參數一律 encodeURIComponent", () => {
+    const judgmentId = "id?x=1";
+    expect(probeUrl(`/judgments/${judgmentId}`)).toBe(
+      `/api/judgments/${encodeURIComponent(judgmentId)}`,
+    );
+    const appId = "app id";
+    expect(probeUrl(`/apps/${appId}/map`)).toBe(
+      `/api/apps/${encodeURIComponent(appId)}/map`,
+    );
+  });
 });
 
 describe("decideApiGate / resolveProtectedView", () => {

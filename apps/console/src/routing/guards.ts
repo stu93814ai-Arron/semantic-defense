@@ -15,10 +15,11 @@ export function probeUrl(path: string): string | null {
   const exact = probeExact(path);
   if (exact) return exact;
   if (/^\/judgments\/[^/]+$/.test(path)) {
-    return `/api/judgments/${path.slice("/judgments/".length)}`;
+    return `/api/judgments/${encodeURIComponent(path.slice("/judgments/".length))}`;
   }
   const m = /^\/apps\/([^/]+)\/map$/.exec(path);
-  return m ? `/api/apps/${m[1]}/map` : null;
+  const appId = m?.[1];
+  return appId ? `/api/apps/${encodeURIComponent(appId)}/map` : null;
 }
 
 /**
