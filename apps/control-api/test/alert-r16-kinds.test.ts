@@ -88,23 +88,54 @@ describe("ensureAlertKindCheck（資安非阻擋項）", () => {
     );
     const db2 = await openDb(requireDatabaseUrl());
     try {
-      await db2.query(
-        `INSERT INTO alert_outbox (channel, kind, payload, attempts, next_attempt_at, status, created_at)
-         VALUES ('webhook','tick_fail','{"kind":"tick_fail"}',0,$1,'pending',$1)`,
-        [NOW],
-      );
-      const r = await db2.query<{ conname: string; def: string }>(
-        `SELECT c.conname, pg_get_constraintdef(c.oid) AS def
-         FROM pg_constraint c
-         JOIN pg_class t ON t.oid = c.conrelid
-         JOIN pg_namespace n ON n.oid = t.relnamespace
-         WHERE n.nspname = current_schema() AND t.relname = 'alert_outbox' AND c.conname = 'alert_outbox_kind_check'`,
-      );
-      expect(r.rows).toHaveLength(1);
-      expect(r.rows[0]!.def).toContain("tick_fail");
-      expect(r.rows[0]!.def).toContain("stale_pending");
+      await insertKind(db2, "tick_fail");
+      const defs = await kindCheckDefs(db2);
+      expect(defs).toHaveLength(1);
+      expect(defs[0]).toContain("tick_fail");
+      expect(defs[0]).toContain("stale_pending");
+    } finally {
+      await db2.close();
+    }
+  });
+
+  it("舊庫只有 R16 以前的 kind（含 tick_fail）：啟動時升級為含全部 kind，approve_cap／approve_volume 可入列", async () => {
+    await boot();
+    await app.db.exec("ALTER TABLE alert_outbox DROP CONSTRAINT alert_outbox_kind_check");
+    await app.db.exec(`ALTER TABLE alert_outbox ADD CONSTRAINT alert_outbox_kind_check
+      CHECK (kind IN ('auto_list','volume','breaker_open','tick_fail','cursor_lag','stale_pending'))`);
+    const db2 = await openDb(requireDatabaseUrl());
+    try {
+      await insertKind(db2, "approve_cap");
+      await insertKind(db2, "approve_volume");
+      const defs = await kindCheckDefs(db2);
+      expect(defs).toHaveLength(1);
+      for (const k of ["auto_list", "volume", "breaker_open", "tick_fail", "cursor_lag", "stale_pending", "approve_cap", "approve_volume"]) {
+        expect(defs[0]).toContain(`'${k}'`);
+      }
+      await expect(insertKind(db2, "other")).rejects.toMatchObject({ code: "23514" });
     } finally {
       await db2.close();
     }
   });
 });
+
+type Q = { query<T>(sql: string, params?: unknown[]): Promise<{ rows: T[] }> };
+
+async function insertKind(db: Q, kind: string): Promise<void> {
+  await db.query(
+    `INSERT INTO alert_outbox (channel, kind, payload, attempts, next_attempt_at, status, created_at)
+     VALUES ('webhook',$2,jsonb_build_object('kind',$2::text),0,$1,'pending',$1)`,
+    [NOW, kind],
+  );
+}
+
+async function kindCheckDefs(db: Q): Promise<string[]> {
+  const r = await db.query<{ def: string }>(
+    `SELECT pg_get_constraintdef(c.oid) AS def
+     FROM pg_constraint c
+     JOIN pg_class t ON t.oid = c.conrelid
+     JOIN pg_namespace n ON n.oid = t.relnamespace
+     WHERE n.nspname = current_schema() AND t.relname = 'alert_outbox' AND c.conname = 'alert_outbox_kind_check'`,
+  );
+  return r.rows.map((x) => x.def);
+}

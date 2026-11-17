@@ -3,7 +3,9 @@ import { writeAudit } from "./audit.js";
 
 export const ALERT_CHANNELS = ["email", "webhook", "syslog"] as const;
 export type AlertChannel = (typeof ALERT_CHANNELS)[number];
-export const ALERT_KINDS = ["auto_list", "volume", "breaker_open", "tick_fail", "cursor_lag", "stale_pending"] as const;
+export const ALERT_KINDS = [
+  "auto_list", "volume", "breaker_open", "tick_fail", "cursor_lag", "stale_pending", "approve_cap", "approve_volume",
+] as const;
 export type AlertKind = (typeof ALERT_KINDS)[number];
 
 export const ALERT_MAX_ATTEMPTS = 8;

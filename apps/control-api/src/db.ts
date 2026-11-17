@@ -3,6 +3,11 @@ import { CRITICAL_ALLOWLIST_ACTOR, CRITICAL_ALLOWLIST_REASON, parseCriticalAllow
 import { revokeContainedBlocks } from "./revoke-contained.js";
 import { writeAudit } from "./audit.js";
 import { ALLOWLIST_COLS, toAllowlistEntry, type AllowlistRow } from "./allowlist-row.js";
+import { ALERT_KINDS } from "./alert-outbox.js";
+
+const ALERT_KIND_CHECK = "alert_outbox_kind_check";
+/** kind CHECK 一律由 ALERT_KINDS 產生；建表與既有庫升級共用。 */
+const ALERT_KIND_SQL = `CHECK (kind IN (${ALERT_KINDS.map((k) => `'${k}'`).join(",")}))`;
 
 /** 可換驅動的精簡查詢介面；生產與測試皆走 Postgres（via databaseUrl／DATABASE_URL）。 */
 export type Db = {
@@ -147,7 +152,7 @@ const SCHEMA_STATEMENTS = [
   id BIGSERIAL PRIMARY KEY,
   audit_id BIGINT NULL,
   channel TEXT NOT NULL CHECK (channel IN ('email','webhook','syslog')),
-  kind TEXT NOT NULL CHECK (kind IN ('auto_list','volume','breaker_open','tick_fail','cursor_lag','stale_pending')),
+  kind TEXT NOT NULL ${ALERT_KIND_SQL},
   payload JSONB NOT NULL,
   attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
   next_attempt_at BIGINT NOT NULL,
@@ -312,10 +317,8 @@ async function seedCriticalAllowlist(client: pg.PoolClient, now: () => number, l
   }
 }
 
-const ALERT_KIND_CHECK = "alert_outbox_kind_check";
-const ALERT_KIND_SQL = "CHECK (kind IN ('auto_list','volume','breaker_open','tick_fail','cursor_lag','stale_pending'))";
-
-/** 既有庫的 kind CHECK 不含 R16 三種；以精確 conname 查找，在同一短交易（lock_timeout 5s）內 DROP 再 ADD。 */
+/** 既有庫的 kind CHECK 缺任一 ALERT_KINDS（例如 R16 前的庫、核准防護前的庫）就升級；只有全部 kind 都在才跳過。
+ *  以精確 conname 查找，在同一短交易（lock_timeout 5s）內 DROP 再 ADD。 */
 async function ensureAlertKindCheck(q: { query(sql: string, params?: unknown[]): Promise<unknown> }): Promise<void> {
   const found = await q.query(
     `SELECT c.conname, pg_get_constraintdef(c.oid) AS def
@@ -326,7 +329,7 @@ async function ensureAlertKindCheck(q: { query(sql: string, params?: unknown[]):
     [ALERT_KIND_CHECK],
   ) as { rows: Array<{ conname: string; def: string }> };
   const row = found.rows[0];
-  if (row?.def.includes("tick_fail")) return;
+  if (row && ALERT_KINDS.every((k) => row.def.includes(`'${k}'`))) return;
   await q.query("BEGIN");
   try {
     await q.query("SET LOCAL lock_timeout = '5s'");
