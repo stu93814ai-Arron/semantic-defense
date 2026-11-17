@@ -32,10 +32,10 @@ function stub(status: number, error?: string): void {
 }
 
 describe("JudgmentDetailPage 標題與查詢", () => {
-  it("h1 使用 titleFor(\"/judgments/:id\")，並以編碼後的 caseId 查詢", async () => {
-    const caseId = "case/id?x=1";
+  it("h1 使用 titleFor(\"/judgments/:id\")，並以編碼後路徑查詢合法 caseId", async () => {
+    const caseId = "case-fixture-1";
     stub(404, "查無案件");
-    renderPage(`/judgments/${encodeURIComponent(caseId)}`);
+    renderPage(`/judgments/${caseId}`);
     expect(screen.getByRole("heading", { level: 1, name: titleFor("/judgments/:id") })).toBeTruthy();
     await waitFor(() => expect(mockedGet).toHaveBeenCalled());
     expect(mockedGet).toHaveBeenCalledWith(`/api/judgments/${encodeURIComponent(caseId)}`);
@@ -47,6 +47,45 @@ describe("JudgmentDetailPage 標題與查詢", () => {
     await waitFor(() => expect(screen.getByTestId("empty-state")).toBeTruthy());
     expect(screen.getByTestId("empty-state").textContent).toMatch(/尚無此案件資料/);
     expect(screen.getByTestId("empty-state").textContent).toMatch(/尚無|沒有|尚不|暫無/);
+  });
+});
+
+
+describe("JudgmentDetailPage 案件編號驗證", () => {
+  it("不合法或超長 caseId 不發請求、顯示空狀態，且不把原文寫入眉題", async () => {
+    const cases = ["case/id?x=1", "a".repeat(65), "case id", "../etc", "id<script>"];
+    for (const caseId of cases) {
+      cleanup();
+      vi.clearAllMocks();
+      stub(404, "查無案件");
+      renderPage(`/judgments/${encodeURIComponent(caseId)}`);
+      await waitFor(() => expect(screen.getByTestId("empty-state")).toBeTruthy());
+      expect(screen.getByTestId("empty-state").textContent).toMatch(/尚無此案件資料/);
+      expect(mockedGet).not.toHaveBeenCalled();
+      const page = (document.querySelector("main.case-detail") as HTMLElement | null)?.textContent ?? "";
+      expect(page).toMatch(/^\s*待判斷/);
+      expect(page).not.toContain(caseId);
+      expect(page).not.toMatch(/待判斷 \/ /);
+    }
+  });
+
+  it("case-fixture-1 與 64 字安全字元為合法，會發查詢並可出現在眉題", async () => {
+    stub(404, "查無案件");
+    renderPage("/judgments/case-fixture-1");
+    await waitFor(() => expect(mockedGet).toHaveBeenCalledTimes(1));
+    expect(mockedGet).toHaveBeenCalledWith("/api/judgments/case-fixture-1");
+    expect((document.querySelector("main.case-detail") as HTMLElement).textContent).toMatch(/待判斷 \/ case-fixture-1/);
+
+    cleanup();
+    vi.clearAllMocks();
+    const allowed = `${"a".repeat(60)}_.:-`;
+    expect(allowed).toHaveLength(64);
+    stub(404, "查無案件");
+    renderPage(`/judgments/${encodeURIComponent(allowed)}`);
+    await waitFor(() => expect(mockedGet).toHaveBeenCalledTimes(1));
+    expect(mockedGet).toHaveBeenCalledWith(`/api/judgments/${encodeURIComponent(allowed)}`);
+    const page = (document.querySelector("main.case-detail") as HTMLElement | null)?.textContent ?? "";
+    expect(page).toContain(`待判斷 / ${allowed}`);
   });
 });
 
