@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import type { AdminApiResult } from "../review/adminApi";
 import { reviewSource } from "../review/reviewSource";
 import type { ListedEntry, PendingCandidate } from "../review/types";
+import { titleFor } from "../roles";
 import { summarizeListed } from "./dashboardStats";
 
 type LoadState<T> =
@@ -72,37 +73,31 @@ export function DashboardPage({ nowIso }: { nowIso?: string } = {}) {
 
   useEffect(() => {
     let cancelled = false;
-    void Promise.all([reviewSource.listPending(), reviewSource.listActive()]).then(([p, l]) => {
-      if (cancelled) return;
-      setPending(toState(p));
-      setListed(toState(l));
+    void reviewSource.listPending().then((p) => {
+      if (!cancelled) setPending(toState(p));
+    });
+    void reviewSource.listActive().then((l) => {
+      if (!cancelled) setListed(toState(l));
     });
     return () => {
       cancelled = true;
     };
   }, []);
 
-  const loading = pending.status === "loading" || listed.status === "loading";
   return (
     <main data-testid="dashboard">
       <p className="eyebrow">監看 / 總覽</p>
-      <h1>儀表板</h1>
+      <h1>{titleFor("/dashboard")}</h1>
       <p>今日 00:00 起 · Asia/Taipei</p>
       <p className="mode-pill" data-testid="dashboard-mode">
         模式：尚未接線
       </p>
-      {loading ? (
-        <p>載入中…</p>
-      ) : (
-        <>
-          <PendingWidget state={pending} />
-          <ListedWidget state={listed} now={now} />
-          <UnwiredWidgets />
-          <section className="card" data-testid="dashboard-ai">
-            AI 尚未啟用
-          </section>
-        </>
-      )}
+      <PendingWidget state={pending} />
+      <ListedWidget state={listed} now={now} />
+      <UnwiredWidgets />
+      <section className="card" data-testid="dashboard-ai">
+        AI 尚未啟用
+      </section>
     </main>
   );
 }

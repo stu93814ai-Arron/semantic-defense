@@ -10,6 +10,12 @@ vi.mock("../review/reviewSource", () => ({
   },
 }));
 
+vi.mock("../roles", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../roles")>();
+  return { ...actual, titleFor: vi.fn((path: string) => actual.titleFor(path)) };
+});
+
+import { titleFor } from "../roles";
 import { reviewSource } from "../review/reviewSource";
 import { DashboardPage } from "./DashboardPage";
 
@@ -54,6 +60,9 @@ async function renderDash(): Promise<void> {
 beforeEach(() => {
   listPending.mockResolvedValue({ ok: true, value: [] });
   listActive.mockResolvedValue({ ok: true, value: [] });
+  vi.mocked(titleFor).mockImplementation((path: string) =>
+    path === "/dashboard" ? "儀表板" : "頁面",
+  );
 });
 afterEach(() => {
   cleanup();
@@ -122,5 +131,25 @@ describe("DashboardPage 占位與錯誤", () => {
     await renderDash();
     expect(screen.getByTestId("dashboard-pending").textContent).toMatch(/後端無法連線/);
     expect(screen.getByTestId("dashboard-listed").textContent).toMatch(/\b0\b/);
+  });
+});
+
+describe("DashboardPage 標題與獨立載入", () => {
+  it("h1 使用 titleFor(\"/dashboard\")，不用寫死文案", async () => {
+    vi.mocked(titleFor).mockReturnValue("標題來自 titleFor");
+    await renderDash();
+    expect(screen.getByRole("heading", { level: 1, name: "標題來自 titleFor" })).toBeTruthy();
+    expect(titleFor).toHaveBeenCalledWith("/dashboard");
+  });
+
+  it("待審與封鎖各自載入，互不等待", async () => {
+    listPending.mockReturnValue(new Promise(() => undefined));
+    listActive.mockResolvedValue({ ok: true, value: [] });
+    render(<DashboardPage nowIso={NOW} />);
+    await waitFor(() =>
+      expect(screen.getByTestId("dashboard-listed").textContent).toMatch(/\b0\b/),
+    );
+    expect(screen.getByTestId("dashboard-pending").textContent).toMatch(/載入中/);
+    expect(screen.getByTestId("dashboard-unwired")).toBeTruthy();
   });
 });
