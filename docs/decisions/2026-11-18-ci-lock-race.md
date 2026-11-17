@@ -1,0 +1,61 @@
+# 2026-11-18 ci 步驟 1 鎖競態（ci-lock）
+
+分支 team-a-ci-lock，基底 main 1b22e95。本文件不改 PLAN.md、contracts、apps/console，無依賴變更。
+
+## 背景
+
+整疊 68bfdf1（acct-norm＋audit-exc）的正式 ci 連續兩次在步驟 1（必跑測試第一次、帶 coverage）被 `timeout 600` 砍掉。
+不計分診斷 ci（同 68bfdf1、30 秒 sidecar，證據 `ae-drv-diag2-{static,ci,sidecar}.txt`）重現了逾時，且阻擋鏈指向 main 上既有的測試競態，不是 acct-norm 或 audit-exc 帶進來的。
+
+## 阻擋鏈（診斷 sidecar 最後一輪，逾時前約 30 秒）
+
+| 後端 | 狀態 | 持有 | 等待 | 被誰擋 |
+|---|---|---|---|---|
+| T（seed） | active，`TRUNCATE TABLE alert_outbox, audit_events, thresholds, allowlist_entries, …`，約 7 分鐘 | SEED_LOCK（872364202，session advisory）；alert_outbox、audit_events、thresholds 的 AccessExclusive | **看不到任何未授予的鎖、無 wait_event** | — |
+| J（判定 tick） | `SELECT … thresholds` waiting | allowlist_entries 的 ShareLock（lockAllowlistShare） | thresholds 的 AccessShare | T |
+| M1（某測試的 openDb） | `CREATE INDEX` waiting，約 6 分鐘 | SCHEMA_LOCK（872364201） | audit_events 的 ShareLock | T |
+| M2…M10（之後各測試的 openDb） | `SELECT pg_advisory_lock` waiting | — | SCHEMA_LOCK | M1 → 依序排隊 |
+
+T 開著的 TRUNCATE 擋住 J 與 M1；M1 在 SCHEMA_LOCK 下無時限等 audit_events，之後每個 buildApp／openDb 都排在 SCHEMA_LOCK 後面，直到步驟 1 的 600 秒用完。
+
+## 成因與修法
+
+A 組領航員裁示（未經使用者確認）：三項一起修，各有確定性重現測試（`apps/control-api/test/ci-lock-race.test.ts`）。
+
+1. **seed 期間判定 timer 已在跑。** judge-auto.test.ts（約 :247、:525）、judge-tick.test.ts（約 :181）以 `judgeIntervalMs: 20` 呼叫 bootJudgeApp；buildApp 內 hookTimers 先啟 setInterval，bootJudgeApp 之後才 seedPhase2Fixtures（TRUNCATE … CASCADE）。tick 在 seed 中途觸發，與 TRUNCATE 互搶 allowlist_entries／thresholds。
+   - 修法（只改測試輔助，不改正式 buildApp 啟動順序）：要排程時，bootJudgeApp 先用不排程的 app 重建 fixtures、關掉，再開真正的 app。
+   - 測試：假 setInterval；測試先握 SEED_LOCK，讓 seed 卡住，再看此時已排程的 timer 數；修前為 1，修後為 0，seed 完成後為 1。
+2. **SEED_LOCK 泄漏。** seedPhase2Fixtures 以 `app.db.query`（pg.Pool）分別送出 pg_advisory_lock、TRUNCATE、pg_advisory_unlock；三者可能落在不同連線，unlock 落空（回 false），session 鎖留在借出 lock 的那條連線上，直到 pool 關閉。
+   - 修法：整段在 `db.withSession()` 內，同一條連線 lock → TRUNCATE → 種子 → unlock。
+   - 測試：假 Db 把第一個查詢（lock）分到連線 A、其餘分到 B（模擬 pool），seed 後查 pg_locks；修前 A 仍持有 SEED_LOCK，修後沒有。
+3. **遷移語句無 lock_timeout。** apps/control-api/src/db.ts 的 migrate 在 SCHEMA_LOCK 下逐條執行 SCHEMA_STATEMENTS；`CREATE INDEX IF NOT EXISTS` 即使索引已存在也要先取表的 ShareLock，表被鎖就無限等，SCHEMA_LOCK 也一直握著。
+   - 修法（正式啟動行為）：每條遷移語句各自在短交易內 `SET LOCAL lock_timeout = '5s'`（比照 acct-norm 5633f6c）；逾時（55P03）即拒絕啟動，訊息「無法在時限內取得資料表的鎖以套用結構遷移，已拒絕啟動；請確認沒有長時間交易佔用資料表後再重試」，不含 IP、時間戳、憑證、URL、SQL 或例外字串；SCHEMA_LOCK 於 finally 釋放。
+   - 測試：另一交易以 ACCESS EXCLUSIVE 鎖住 audit_events，openDb 必須在 9 秒內以上述訊息失敗，且之後沒有人持有 SCHEMA_LOCK；修前 openDb 卡住（9 秒時仍握 SCHEMA_LOCK）。
+
+駕駛員自行決定（交 A 組領航員）：
+- lock_timeout 套用到**全部** SCHEMA_STATEMENTS，不只 CREATE INDEX。`ALTER TABLE … ADD COLUMN IF NOT EXISTS` 即使欄位已存在也要取 ACCESS EXCLUSIVE，會擋所有 SELECT，風險比 CREATE INDEX 更大。若只要 CREATE INDEX，可在 runSchemaStatement 前加判斷收窄。
+- 修法 1 只在 judgeIntervalMs 或 alertDeliverIntervalMs > 0 時走「先 seed 再開 app」，其餘 bootJudgeApp 呼叫維持原路徑（不多開一次 app）。
+- 修法 3 的訊息不寫表名，與 acct-norm 的「帳號資料表」不同，因為遷移語句涵蓋多張表。
+
+## 突變（暫時改動後還原，皆轉紅）
+
+- 拿掉 migrate 的 `SET LOCAL lock_timeout` → ③ 紅（openDb 9 秒仍卡住）。
+- seedPhase2Fixtures 改回 pool.query（1b22e95 版）→ ② 紅（SEED_LOCK 仍被持有）。
+- bootJudgeApp 改回先開 app（含 timer）再 seed（1b22e95 版）→ ① 紅（seed 期間 timer 數為 1）。
+
+## 未證實
+
+- **TRUNCATE 為何一直 active 約 7 分鐘卻看不到未授予的鎖：未證實。**
+  探查（`cl-drv-truncate-probe.txt`，未入庫）：一條連線先握 allowlist_entries 的 SHARE（模擬 tick），另一條跑同一句 TRUNCATE，再讓前者 SELECT thresholds。結果 TRUNCATE 顯示 `wait_event=Lock/relation`、allowlist_entries 的 AccessExclusive `granted=false`，約 1 秒（deadlock_timeout）後被 40P01 中止，tick 繼續。
+  也就是說，單純的重量級鎖循環會被死結偵測解開，且一定看得到未授予的鎖；ci 中看到的狀態（active、無 wait_event、無未授予的鎖、0% CPU）不是這種情況。可能與 coverage 下的 fast-path 鎖轉移或其他非重量級等待有關，目前沒有證據。
+- 修法 1 消除了 tick 與 seed 的重疊，修法 3 讓遷移在 5 秒內失敗而不是排長龍；即使上述機制未明，ci 也應從「必逾時」變成「通過或可觀測的紅」。是否完全消除，要等整疊正式 ci 驗證。
+
+## 另切：強化清單
+
+A 組領航員裁示（未經使用者確認）：以下第 4 項不在本切片，列入強化清單另切：
+- CI 覆寫 `SD_FLOW_INDEX_TIMEOUT_MS`（遠小於步驟預算），讓 flow-store 的 CREATE INDEX CONCURRENTLY 先失敗，而不是吃光 600 秒。
+- 評估在 CONCURRENTLY 前釋放 FLOW_SCHEMA_LOCK（packages/flow-store/src/write.ts）；涉及 flow-store 啟動語意，需另行裁示。
+
+## 合入路線（尚未執行）
+
+A 組領航員裁示（未經使用者確認）：本切片先交 A 審；之後排成 1b22e95 → ci-lock → acct-norm 4 顆 → audit-exc 1 顆（新分支 team-a-lock-acct-audit），整疊 strict rebase -x、range-diff、jscpd，再跑一次正式 ci 10/10（保留 30 秒 sidecar），證據前綴 cl-drv-*。資安在 ci-lock 審查時介入。
