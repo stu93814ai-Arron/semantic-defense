@@ -135,3 +135,14 @@ A 組領航員裁示（未經使用者確認）：建立與登入已將使用者
 ## A 組領航員裁示（未經使用者確認）（告警推送測試清單 §2 與 §9）
 
 A 組領航員裁示（未經使用者確認）：測試清單 `/workspace/exec-a-logs/push-design-tests.md` 的 §9 優先於 §2。§2 僅保留以下對本機假伺服器的行為測試：伺服器未宣告 STARTTLS 則發送必須失敗（`requireTLS`）；自簽或主機名不符的憑證必須失敗；明文 opt-in 模式不送 AUTH；dot-stuffing；位址含 CRLF 或格式不正確則拒絕。不撰寫協定內部測試（重新送 EHLO、pipelining、行或總量上限）；那些是 nodemailer 的職責。測試清單本文未改。
+
+## 自動上榜總開關（`/api/settings/auto-list`）：開啟前條件
+
+A 組領航員裁示（未經使用者確認）；資安提出的條目另標。詳見 `docs/decisions/2026-11-17-auto-list-setting.md`。
+
+- 開關預設 `false`。**(d) 三向交握佐證（tcp_hs）合併並上線之前，不得開啟。** 程式目前以 `HANDSHAKE_EVIDENCE_READY = false` 擋住：PUT `{"enabled":true}` 回 409「三向交握佐證尚未上線，暫不能開啟自動封鎖」，並寫 `settings.auto_list.update_blocked` 稽核（軟體大總召裁示（未經使用者確認），依 11/9 使用者決定）。
+- 現況下若開啟，E3.A 條件成立但沒有三向交握佐證的來源會**直接寫進 EDL**。
+- 開啟前必須：完成白名單（含 `SD_CRITICAL_ALLOWLIST`）審查；所有寫入方法都有 `Origin` 或 `Sec-Fetch-Site` 檢查（資安提出；目前只有這條 PUT 有）。
+- 開關值只能經這條 PUT 改（`platform_admin`），不得以 SQL 直接改 `auto_list_settings`；tick 不另檢查。（「不得以 SQL 直接改」為駕駛員自行決定（交 A 組領航員））
+- 生產不得傳 `autoListEnabled`／`autoListHandshakeReady`：`NODE_ENV` 不是 `test` 時傳入會拒絕啟動（資安提出）。
+- 關閉不撤銷既有自動上榜項目（自然到期）；開啟只影響之後的判定。
