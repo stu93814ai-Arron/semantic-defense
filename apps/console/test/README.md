@@ -36,6 +36,7 @@
 - `operator`：`/judgments*`、`/constraints`、`/blacklist/review`、`/blacklist`
 - `app_owner`：`/apps/new`、`/apps/:appId/map`（僅己應用）
 - `platform_admin`：`/admin/users`、`/audit`、`/versions`、`/health`、`/whitelist`
+- `operator`（console v2 `roles.ts` @7d0739a）：另含 `/dashboard`（標題「儀表板」）。此路徑由 `roles-pages` 另案涵蓋，**不**列入 `OPERATOR_ROUTES`／`PLAN_ROUTES`（儀表板無 `empty-state`，以免 `routes-empty-states` 誤紅）。
 
 未授權路由 → **無權限**頁（`data-testid="no-permission"`），**不是**空白頁。
 

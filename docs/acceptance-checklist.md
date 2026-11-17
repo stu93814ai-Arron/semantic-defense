@@ -61,6 +61,14 @@
 4. 門檻調整的 UI 路徑或 API；是否第 3 階段就要做，或僅後端預設常數。
 
 ---
+
+## console v2（儀表板）
+
+| 狀態 | 項目 | 依據／位置 |
+| --- | --- | --- |
+| **已測** | `/dashboard` 僅 operator 可見標題「儀表板」；platform_admin／app_owner 直接進入為無權限 | console v2 `roles.ts` @7d0739a；`apps/console/e2e/roles-pages.spec.ts`（不列入 `OPERATOR_ROUTES`，以免空狀態規格誤紅） |
+
+---
 ## 第 4 階段（流量平面：gateway-adapter／入口）— 待辦（尚無自動測試）
 
 下列對齊平面分離 P2／P4／P5 與使用者（經總召）要求；**標記為 pending**，待入口實作後補紅／綠燈，**現階段不要當成已通過**。

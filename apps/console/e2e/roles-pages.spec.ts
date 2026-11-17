@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 import { loginAs } from "./helpers/auth.js";
 import {
   ADMIN_ROUTES,
+  DASHBOARD_ROUTE,
   OPERATOR_ROUTES,
   OWNER_ROUTES,
 } from "./helpers/routes.js";
@@ -16,6 +17,11 @@ test.describe("準則1／5：角色頁面隔離與無權限", () => {
       await expect(page.getByTestId("no-permission")).toHaveCount(0);
       await expect(page.locator("body")).not.toBeEmpty();
     }
+    // console v2 roles.ts @7d0739a：/dashboard 為 operator-only，title「儀表板」
+    await page.goto(DASHBOARD_ROUTE);
+    await expect(page.getByTestId("no-permission")).toHaveCount(0);
+    await expect(page.locator("body")).not.toBeEmpty();
+    await expect(page.getByRole("heading", { level: 1, name: "儀表板" })).toBeVisible();
     for (const path of [...OWNER_ROUTES, ...ADMIN_ROUTES]) {
       await page.goto(path);
       await expect(page.getByTestId("no-permission")).toBeVisible();
@@ -33,6 +39,9 @@ test.describe("準則1／5：角色頁面隔離與無權限", () => {
       await page.goto(path);
       await expect(page.getByTestId("no-permission")).toBeVisible();
     }
+    // console v2 roles.ts @7d0739a：非 operator 直接進入 /dashboard 為無權限
+    await page.goto(DASHBOARD_ROUTE);
+    await expect(page.getByTestId("no-permission")).toBeVisible();
   });
 
   test("platform_admin 可見管理頁，越權為無權限", async ({ page }) => {
@@ -45,5 +54,8 @@ test.describe("準則1／5：角色頁面隔離與無權限", () => {
       await page.goto(path);
       await expect(page.getByTestId("no-permission")).toBeVisible();
     }
+    // console v2 roles.ts @7d0739a：非 operator 直接進入 /dashboard 為無權限
+    await page.goto(DASHBOARD_ROUTE);
+    await expect(page.getByTestId("no-permission")).toBeVisible();
   });
 });

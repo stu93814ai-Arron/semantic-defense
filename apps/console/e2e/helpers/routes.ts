@@ -44,3 +44,10 @@ export const ADMIN_ROUTES = [
   "/health",
   "/whitelist", // 附錄 96f29d9
 ] as const;
+
+/**
+ * console v2 第②片新路由（roles.ts @7d0739a）：operator-only，title「儀表板」。
+ * 不列入 OPERATOR_ROUTES／PLAN_ROUTES：儀表板是總覽計數頁，沒有 empty-state，
+ * 若併入會讓 routes-empty-states 誤紅。roles-pages 另案涵蓋。
+ */
+export const DASHBOARD_ROUTE = "/dashboard";
