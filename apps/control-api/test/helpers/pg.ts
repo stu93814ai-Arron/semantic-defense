@@ -13,11 +13,14 @@ export function requireDatabaseUrl(): string {
   return url;
 }
 
-/** 清空第 2 階段表，讓共用 Postgres 上的案例可重跑。 */
+/** 清空第 2 階段表，讓共用 Postgres 上的案例可重跑；自動上榜總開關重設為關閉（缺列則補回）。 */
 export async function truncatePhase2Tables(db: {
   exec(sql: string): Promise<unknown>;
 }): Promise<void> {
   await db.exec(
     "TRUNCATE TABLE alert_outbox, audit_events, thresholds, allowlist_entries, blocklist_entries, blacklist_cases, case_hits, judge_cursor, sensor_tokens, sessions, apps, users RESTART IDENTITY CASCADE",
+  );
+  await db.exec(
+    "INSERT INTO auto_list_settings (id, enabled) VALUES (TRUE, FALSE) ON CONFLICT (id) DO UPDATE SET enabled = FALSE",
   );
 }

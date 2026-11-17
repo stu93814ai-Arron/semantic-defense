@@ -38,6 +38,7 @@ async function restoreSchema(): Promise<void> {
     await c.end();
   }
   const db = await openDb(url);
+  await db.exec("INSERT INTO auto_list_settings (id, enabled) VALUES (TRUE, FALSE) ON CONFLICT (id) DO UPDATE SET enabled = FALSE");
   await db.close();
 }
 

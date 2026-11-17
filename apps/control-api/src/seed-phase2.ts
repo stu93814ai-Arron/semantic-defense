@@ -65,6 +65,10 @@ export async function seedPhase2Fixtures(app: SeedApp): Promise<void> {
     );
     await q.query("UPDATE auto_breaker SET opened_at = NULL, volume_held = FALSE");
     await q.query("UPDATE approve_guard SET volume_held = FALSE");
+    // 自動上榜總開關回到預設關閉（缺列則補回），避免前一個測試的 enabled=true 外洩
+    await q.query(
+      "INSERT INTO auto_list_settings (id, enabled) VALUES (TRUE, FALSE) ON CONFLICT (id) DO UPDATE SET enabled = FALSE",
+    );
     for (const row of prepared) {
       const id = await insertUser(q, { username: row.username, password_hash: row.password_hash, role: row.role });
       if (row.appId) {

@@ -105,6 +105,9 @@ const SCHEMA_STATEMENTS = [
   "CREATE TABLE IF NOT EXISTS approve_guard (id BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (id), volume_held BOOLEAN NOT NULL DEFAULT FALSE)",
   "INSERT INTO approve_guard (id) VALUES (TRUE) ON CONFLICT (id) DO NOTHING",
   "ALTER TABLE auto_breaker ADD COLUMN IF NOT EXISTS volume_held BOOLEAN NOT NULL DEFAULT FALSE",
+  // 自動上榜總開關（單列，預設關閉；無環境變數。A 組領航員裁示，未經使用者確認）。
+  "CREATE TABLE IF NOT EXISTS auto_list_settings (id BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (id), enabled BOOLEAN NOT NULL DEFAULT FALSE)",
+  "INSERT INTO auto_list_settings (id) VALUES (TRUE) ON CONFLICT (id) DO NOTHING",
   // 成案流程 commit 6（計畫 §5）：待審與命中明細。註：IF NOT EXISTS 不會改舊表；本階段不做 migration。
   `CREATE TABLE IF NOT EXISTS blacklist_cases (
   case_id UUID PRIMARY KEY,
