@@ -38,8 +38,7 @@ function PendingRow(props: {
       <td>尚未接線</td>
       <td data-testid={`ai-reason-${item.case_id}`}>AI 尚未啟用</td>
       <td className="mono">{item.confidence}</td>
-      <td>尚未接線</td>
-      <td>尚未接線</td>
+      <td>核准後封鎖 24 小時</td>
       <td className="review-actions">
         {expired ? (
           <p data-testid={`expired-${item.case_id}`} role="status">
@@ -163,7 +162,6 @@ function PendingList(props: {
               <th>目的端</th>
               <th>手法與 AI 理由</th>
               <th>信心</th>
-              <th>建議封鎖</th>
               <th>期間</th>
               <th>動作</th>
             </tr>

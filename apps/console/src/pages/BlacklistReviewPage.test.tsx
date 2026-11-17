@@ -80,6 +80,10 @@ describe("BlacklistReviewPage 待審列", () => {
     expect(screen.getByTestId(`hits-${CASE}`).textContent).toMatch(/命中 3 次/);
     expect(screen.getAllByText("AI 尚未啟用").length).toBeGreaterThan(0);
     expect(screen.getAllByText("尚未接線").length).toBeGreaterThan(0);
+    expect(screen.queryByRole("columnheader", { name: "建議封鎖" })).toBeNull();
+    expect(row).not.toMatch(/建議封鎖|\/32/);
+    expect(screen.getByRole("columnheader", { name: "期間" })).toBeTruthy();
+    expect(row).toMatch(/核准後封鎖 24 小時/);
     expect(screen.queryByText("0.50")).toBeNull();
     expect(screen.queryByText("退回理由")).toBeNull();
     expect(screen.getByTestId(`approve-${CASE}`).textContent).toMatch(/核准/);
