@@ -93,7 +93,7 @@ describe("判定 tick 讀取自動上榜開關", () => {
     expect([await autoListed(), await states()]).toEqual([1, ["auto_listed"]]);
   });
 
-  it.fails("DB 為 true、未傳覆寫、HANDSHAKE_EVIDENCE_READY=false → 不自動上榜，案件仍開案留待審", async () => {
+  it("DB 為 true、未傳覆寫、HANDSHAKE_EVIDENCE_READY=false → 不自動上榜，案件仍開案留待審", async () => {
     await start();
     await app!.db.query("UPDATE auto_list_settings SET enabled = TRUE");
     await qualify();
