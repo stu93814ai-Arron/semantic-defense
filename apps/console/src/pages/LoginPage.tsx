@@ -47,7 +47,7 @@ function LoginForm(props: {
       <div className="login-page__form-wrap">
         <p className="eyebrow">Welcome back</p>
         <h1>值勤登入</h1>
-        <p className="login-page__lead">請以公司帳號登入。寫入操作將留存稽核紀錄。</p>
+        <p className="login-page__lead">請以管理端帳號登入。寫入操作將留存稽核紀錄。</p>
         {props.expired ? (
           <p className="login-page__timeout" role="status">
             工作階段已逾時，請重新登入。

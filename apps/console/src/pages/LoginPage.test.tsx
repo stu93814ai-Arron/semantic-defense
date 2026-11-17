@@ -81,7 +81,7 @@ describe("LoginPage 版面（對開品牌與表單）", () => {
     expect(text).toMatch(/安靜地/);
     expect(text).toMatch(/守護每一次請求/);
     expect(text).toMatch(/Welcome back/i);
-    expect(text).toMatch(/請以公司帳號登入。寫入操作將留存稽核紀錄。/);
+    expect(text).toMatch(/請以管理端帳號登入。寫入操作將留存稽核紀錄。/);
     expect(text).toMatch(/Semantic Defense/);
   });
 
@@ -95,8 +95,20 @@ describe("LoginPage 版面（對開品牌與表單）", () => {
   it("稽核說明不含「所有操作」", () => {
     renderLogin();
     const text = document.querySelector("main.login-page")?.textContent ?? "";
-    expect(text).toMatch(/請以公司帳號登入/);
+    expect(text).toMatch(/請以管理端帳號登入/);
     expect(text).not.toMatch(/所有操作/);
+  });
+
+  it("導引文案為請以管理端帳號登入", () => {
+    renderLogin();
+    const text = document.querySelector("main.login-page")?.textContent ?? "";
+    expect(text).toMatch(/請以管理端帳號登入/);
+  });
+
+  it("登入頁任何位置都不出現「公司帳號」", () => {
+    renderLogin();
+    const text = document.querySelector("main.login-page")?.textContent ?? "";
+    expect(text).not.toMatch(/公司帳號/);
   });
 
   it("帳號與密碼欄位預設為空", () => {
