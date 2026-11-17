@@ -96,6 +96,8 @@ const SCHEMA_STATEMENTS = [
   "CREATE INDEX IF NOT EXISTS blocklist_ip_revoked ON blocklist_entries (ip, revoked_at)",
   // 成案流程 commit 11（計畫 §5／§6.3）：熔斷數滑動 1 小時的 auto 筆數；auto_breaker 單列只記開關（判斷轉換寫稽核）。
   "CREATE INDEX IF NOT EXISTS blocklist_auto_created ON blocklist_entries (created_at) WHERE source = 'auto'",
+  // 核准防護：每個 operator 滑動 1 小時的 manual 核准數（approve-guard.ts assertUnderApproveCap）。
+  "CREATE INDEX IF NOT EXISTS blocklist_manual_approver ON blocklist_entries (approved_by, created_at) WHERE source = 'manual'",
   "CREATE TABLE IF NOT EXISTS auto_breaker (id BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (id), opened_at BIGINT NULL)",
   "INSERT INTO auto_breaker (id) VALUES (TRUE) ON CONFLICT (id) DO NOTHING",
   "ALTER TABLE auto_breaker ADD COLUMN IF NOT EXISTS volume_held BOOLEAN NOT NULL DEFAULT FALSE",

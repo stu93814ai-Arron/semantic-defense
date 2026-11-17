@@ -7,11 +7,13 @@ let app: ControlApi;
 afterEach(async () => { if (app) await app.close(); });
 
 const SECRET = "fakeQuerySecretMarker1111111111111111111111";
+/** 啟動時的核准防護設定 log（只含數字）不是本檔驗證對象，收集時略過。 */
+const pushLog = (lines: string[], l: string): void => { if (!l.includes('"msg":"approve guard"')) lines.push(l); };
 const QS = `?token=sdst_aaaaaaaa-2222-4333-8444-55555555beef.${SECRET}&x=1`;
 async function boot(lines: string[]): Promise<ControlApi> {
   app = await buildApp({
     idleTimeoutMs: 60_000, databaseUrl: requireDatabaseUrl(),
-    logger: { level: "info", stream: { write: (l: string) => { lines.push(l); } } },
+    logger: { level: "info", stream: { write: (l: string) => { pushLog(lines, l); } } },
     beforeReady: (a) => { a.get("/api/__qs_boom", { config: { roles: "public" } }, async () => { throw new Error("boom"); }); },
   });
   return app;
@@ -46,7 +48,7 @@ describe("control-api err serializer 去掉 query（資安殘留：reply-already
     const lines: string[] = [];
     app = await buildApp({
       idleTimeoutMs: 60_000, databaseUrl: requireDatabaseUrl(),
-      logger: { level: "info", stream: { write: (l: string) => { lines.push(l); } } },
+      logger: { level: "info", stream: { write: (l: string) => { pushLog(lines, l); } } },
       beforeReady: (a) => { a.get("/api/__qs_twice", { config: { roles: "public" } }, async (_req, reply) => {
         await reply.send({ ok: 1 });
         return { ok: 2 };
@@ -66,7 +68,7 @@ describe("control-api logMethod 處理直接傳 Error（A 組領航員修正 3�
   it("log.error(new Error(\"…/p?token=S\")) 與帶字串 msg 的寫法 → log 不含 S，path 仍在", async () => {
     const lines: string[] = [];
     app = await buildApp({ idleTimeoutMs: 60_000, databaseUrl: requireDatabaseUrl(),
-      logger: { level: "info", stream: { write: (l: string) => { lines.push(l); } } } });
+      logger: { level: "info", stream: { write: (l: string) => { pushLog(lines, l); } } } });
     app.log.error(new Error(`fail at /p${QS}`));
     app.log.error(new Error(`fail at /q${QS}`), `while GET /q${QS}`);
     const out = lines.join("\n");
@@ -81,7 +83,7 @@ describe("control-api noQuery 遇到引號不中斷（資安退回 R1）", () =>
   it("/p?a\"b&token=SECRET：err.message、msg、stack 都不含 SECRET", async () => {
     const lines: string[] = [];
     app = await buildApp({ idleTimeoutMs: 60_000, databaseUrl: requireDatabaseUrl(),
-      logger: { level: "info", stream: { write: (l: string) => { lines.push(l); } } } });
+      logger: { level: "info", stream: { write: (l: string) => { pushLog(lines, l); } } } });
     const e = new Error(`fail at /p?a"b&token=${SECRET}`);
     app.log.error(e);
     app.log.error({ err: e }, `while GET /p?a"b&token=${SECRET}`);
@@ -95,7 +97,7 @@ describe("control-api noQuery 遇到引號不中斷（資安退回 R1）", () =>
   it("path 內有未編碼的引號（/p\"x?token=SECRET）：err.message、msg、stack 都不含 SECRET", async () => {
     const lines: string[] = [];
     app = await buildApp({ idleTimeoutMs: 60_000, databaseUrl: requireDatabaseUrl(),
-      logger: { level: "info", stream: { write: (l: string) => { lines.push(l); } } } });
+      logger: { level: "info", stream: { write: (l: string) => { pushLog(lines, l); } } } });
     const url = `/p"x?token=${SECRET}`;
     app.log.error(new Error(`fail at ${url}`));
     app.log.error({ err: new Error(`fail at ${url}`) }, `while GET ${url}`);
@@ -107,7 +109,7 @@ describe("control-api noQuery 遇到引號不中斷（資安退回 R1）", () =>
   it("asterisk-form（OPTIONS *?token=SECRET）：err.message、msg、stack 都不含 SECRET（R7）", async () => {
     const lines: string[] = [];
     app = await buildApp({ idleTimeoutMs: 60_000, databaseUrl: requireDatabaseUrl(),
-      logger: { level: "info", stream: { write: (l: string) => { lines.push(l); } } } });
+      logger: { level: "info", stream: { write: (l: string) => { pushLog(lines, l); } } } });
     app.log.error(new Error(`bad target *?token=${SECRET}`));
     app.log.error({ err: new Error(`bad target *?token=${SECRET}`) }, `while OPTIONS *?token=${SECRET}`);
     const recs = lines.map((l) => JSON.parse(l) as { msg?: string; err?: { message?: string; stack?: string } });

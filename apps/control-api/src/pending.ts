@@ -12,6 +12,7 @@ import { writeAudit } from "./audit.js";
 import { AUTO_LIST_TTL_MS, loadAllowlist } from "./auto-blacklist.js";
 import { lockAllowlistShare } from "./auto-breaker.js";
 import { insertActiveBlocklistEntry } from "./blocklist-store.js";
+import { ApproveBlocked, assertUnderApproveCap, type ApproveGuardConfig } from "./approve-guard.js";
 
 const OPERATOR: Role[] = ["operator"];
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -61,8 +62,8 @@ async function runPending<T>(reply: FastifyReply, fn: () => Promise<T | 404>): P
     }
     return out;
   } catch (e) {
-    if (e instanceof PendingConflict) {
-      await reply.code(409).send({ error: e.error });
+    if (e instanceof PendingConflict || e instanceof ApproveBlocked) {
+      await reply.code(e instanceof ApproveBlocked ? e.status : 409).send({ error: e.error });
       return undefined;
     }
     throw e;
@@ -89,7 +90,7 @@ function postCaseAction<T>(
   });
 }
 
-export function registerPendingRoutes(app: FastifyInstance, db: Db, now: () => number): void {
+export function registerPendingRoutes(app: FastifyInstance, db: Db, now: () => number, guard: ApproveGuardConfig): void {
   app.get(P.blacklistPending, { config: { roles: OPERATOR } }, async () => {
     const r = await db.query<PendingRow>(
       `SELECT case_id, ip, max_confidence, hit_count, created_at, last_hit_at
@@ -113,6 +114,8 @@ export function registerPendingRoutes(app: FastifyInstance, db: Db, now: () => n
   postCaseAction<BlocklistEntry>(app, db, now, P.blacklistPendingApprove, async (q, { id, at, actor }) => {
     // 先 SHARE 再改案件：與白名單寫入同一鎖順序，核准當下重查白名單。
     await lockAllowlistShare(q);
+    // 上限先判（SHARE 之後拿 actor 鎖再計數）：超限後不再透露案件狀態。
+    await assertUnderApproveCap(q, actor, at, guard.perHour);
     const r = await q.query<{ case_id: string; ip: string; max_confidence: number }>(
       `UPDATE blacklist_cases
        SET state = 'approved', resolved_by = $2, resolved_at = $3

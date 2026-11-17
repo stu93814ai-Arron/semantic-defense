@@ -21,6 +21,7 @@ import { judgeHealthCounts, parseJudgeAlertConfig, runJudgeTickWithAlerts, type 
 import { parseWebhookConfig, webhookSender, type WebhookHooks } from "./alert-webhook.js";
 import { parseSyslogConfig, syslogSender, type SyslogHooks } from "./alert-syslog.js";
 import { parseSmtpConfig, smtpSender, type SmtpHooks } from "./alert-smtp.js";
+import { resolveApprovePerHour, type ApproveGuardConfig } from "./approve-guard.js";
 
 export type BuildAppOptions = {
   idleTimeoutMs?: number;
@@ -39,6 +40,8 @@ export type BuildAppOptions = {
   judgeIntervalMs?: number;
   /** E3.A 熔斷上限 N：滑動 1 小時內 source=auto 最多 N 筆（正整數，預設 50；計畫 §6.3，這一刀不做管理頁）。 */
   autoBreakerPerHour?: number;
+  /** 人工核准上限：每個 operator 滑動 1 小時最多幾筆（1–200）；省略則讀 SD_APPROVE_PER_HOUR，再省略為 50。 */
+  approvePerHour?: number;
   /** E3.A 自動上榜總開關；省略＝AUTO_LIST_ENABLED_DEFAULT（false，關）。關時判定 tick 只開案、不自動上榜。 */
   autoListEnabled?: boolean;
   /** 測試用：ready／listen 前掛額外路由（例如無 roles 探針）。 */
@@ -267,6 +270,7 @@ function hookTimers(app: ControlApi, db: Db, now: Clock, opts: BuildAppOptions, 
 
 export async function buildApp(opts: BuildAppOptions = {}): Promise<ControlApi> {
   assertBreakerLimit(opts.autoBreakerPerHour);
+  const guard: ApproveGuardConfig = { perHour: resolveApprovePerHour(process.env, opts.approvePerHour) };
   const judgeAlerts = parseJudgeAlertConfig(process.env);
   parseWebhookConfig(process.env);
   parseSyslogConfig(process.env);
@@ -276,6 +280,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<ControlApi> 
   const now = opts.now ?? Date.now;
   const app = Fastify({ trustProxy: opts.trustProxy ?? false, logger: withSafeReqLog(opts.logger) });
   if (smtp?.allowPlaintext) app.log.warn({ smtp_plaintext: true }, "smtp plaintext allowed");
+  app.log.info({ approve_per_hour: guard.perHour }, "approve guard");
   try {
     const db = await openDb(resolveDatabaseUrl(opts.databaseUrl), { now, log: app.log });
     const limiter = new LoginLimiter(db, rl.maxFailures, rl.windowMs, now);
@@ -294,7 +299,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<ControlApi> 
     registerThresholdRoutes(app, db, now);
     registerWhitelistRoutes(app, db, now);
     registerBlacklistRoutes(app, db, now);
-    registerPendingRoutes(app, db, now);
+    registerPendingRoutes(app, db, now, guard);
     app.setNotFoundHandler((_req, reply) => reply.code(404).send({ error: "Not Found" }));
     await readyOrListen(app, opts);
     return app;

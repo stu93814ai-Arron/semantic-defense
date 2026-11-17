@@ -31,7 +31,7 @@ function throwInvalid(name: string, hint: string): never {
   throw new Error(`${name} ${hint}`);
 }
 
-function parseBoundInt(raw: string | undefined, fallback: number, min: number, max: number, name: string): number {
+export function parseBoundInt(raw: string | undefined, fallback: number, min: number, max: number, name: string): number {
   if (raw === undefined || raw.trim() === "") return fallback;
   const n = Number(raw);
   if (!Number.isSafeInteger(n) || n < min || n > max) throwInvalid(name, `必須是 ${min}–${max} 的整數`);
