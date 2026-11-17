@@ -48,8 +48,10 @@ export type BuildAppOptions = {
   approvePerHour?: number;
   /** 人工核准可封鎖的內網範圍；省略則讀 SD_APPROVE_INTERNAL_SCOPE，再省略為 APPROVE_INTERNAL_SCOPE_DEFAULT。 */
   approveInternalScope?: ApproveInternalScope;
-  /** 僅測試覆寫 E3.A 自動上榜總開關（有傳入則 tick 不讀 DB）。生產不傳、無環境變數：每個 tick 讀 auto_list_settings（預設 false；缺列／讀失敗＝關）。 */
+  /** 僅測試覆寫 E3.A 自動上榜總開關（有傳入則 tick 不讀 DB；NODE_ENV 不是 test 時拒絕啟動）。生產不傳、無環境變數：每個 tick 讀 auto_list_settings（預設 false；缺列／讀失敗＝關）。 */
   autoListEnabled?: boolean;
+  /** 僅測試覆寫：把三向交握佐證視為已就緒（省略＝HANDSHAKE_EVIDENCE_READY，false）。與 autoListEnabled 同受 NODE_ENV=test 限制。 */
+  autoListHandshakeReady?: boolean;
   /** 測試用：ready／listen 前掛額外路由（例如無 roles 探針）。 */
   beforeReady?: (app: ControlApi) => void | Promise<void>;
   /** 告警推送間隔（ms）；預設 1000，0＝關閉（測試直接呼叫 deliverDueAlerts）。 */
@@ -228,6 +230,14 @@ function assertBreakerLimit(n: number | undefined): void {
   if (n !== undefined && !(Number.isSafeInteger(n) && n > 0)) throw new Error("autoBreakerPerHour 必須是正整數");
 }
 
+/** 自動上榜的測試覆寫只能在 NODE_ENV=test 使用（資安提出；A 組領航員裁示）：否則拒絕啟動，訊息固定。 */
+function assertTestOnlyAutoListOverrides(opts: BuildAppOptions): void {
+  if (opts.autoListEnabled === undefined && opts.autoListHandshakeReady === undefined) return;
+  if (process.env.NODE_ENV !== "test") {
+    throw new Error("自動上榜的測試覆寫（autoListEnabled、autoListHandshakeReady）只能在 NODE_ENV=test 使用，拒絕啟動");
+  }
+}
+
 /** 定期跑判定 tick（同一實例不重疊）；回傳的 stop 清 timer 並等進行中的 tick 結束。 */
 function startJudgeTimer(app: ControlApi, db: Db, now: Clock, ms: number, opts: TickOpts, cfg: JudgeAlertConfig): () => Promise<void> {
   if (ms <= 0) return async () => {};
@@ -279,6 +289,7 @@ function hookTimers(app: ControlApi, db: Db, now: Clock, opts: BuildAppOptions, 
 
 export async function buildApp(opts: BuildAppOptions = {}): Promise<ControlApi> {
   assertBreakerLimit(opts.autoBreakerPerHour);
+  assertTestOnlyAutoListOverrides(opts);
   const guard: ApproveGuardConfig = {
     perHour: resolveApprovePerHour(process.env, opts.approvePerHour),
     internalScope: resolveApproveInternalScope(process.env, opts.approveInternalScope),
@@ -310,7 +321,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<ControlApi> 
     registerSensorTokenRoutes(app, db, now);
     registerAuditRoute(app, db);
     registerThresholdRoutes(app, db, now);
-    registerAutoListSettingRoutes(app, db, now);
+    registerAutoListSettingRoutes(app, db, now, opts.autoListHandshakeReady);
     registerWhitelistRoutes(app, db, now);
     registerBlacklistRoutes(app, db, now);
     registerPendingRoutes(app, db, now, guard);
