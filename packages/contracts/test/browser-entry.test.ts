@@ -43,9 +43,9 @@ describe("contracts ./browser 入口（瀏覽器安全）", () => {
 
   const EXPORTS = [
     "ADMIN_API_PATHS", "AllowlistCreateSchema", "AllowlistEntrySchema", "AllowlistListSchema", "AllowlistUpdateSchema",
-    "BlocklistEntrySchema", "BlocklistListSchema", "PendingCandidateListSchema", "PendingCandidateSchema",
-    "THRESHOLD_BOUNDS", "ThresholdsSchema", "assertAllowlistCidr", "assertIpOrCidr", "isHostPrefix", "parseCidr",
-    "thresholdsViolation",
+    "AutoListSettingSchema", "BlocklistEntrySchema", "BlocklistListSchema", "PendingCandidateListSchema",
+    "PendingCandidateSchema", "THRESHOLD_BOUNDS", "ThresholdsSchema", "assertAllowlistCidr", "assertIpOrCidr",
+    "isHostPrefix", "parseCidr", "thresholdsViolation",
   ] as const;
 
   it("轉出的 API 只有 console 用到的這些", () => {
@@ -56,6 +56,12 @@ describe("contracts ./browser 入口（瀏覽器安全）", () => {
     const b = new Map(Object.entries(browser)).get(name);
     expect(b).toBeDefined();
     expect(b).toBe(new Map(Object.entries(main)).get(name));
+  });
+
+  it("browser 入口帶有自動上榜開關路徑與 AutoListSetting schema", () => {
+    expect(browser.ADMIN_API_PATHS.autoList).toBe("/api/settings/auto-list");
+    expect(browser.AutoListSettingSchema.safeParse({ enabled: false }).success).toBe(true);
+    expect(browser.AutoListSettingSchema.safeParse({ enabled: true, extra: 1 }).success).toBe(false);
   });
 
   it("browser 入口帶有待審核准／退回路徑與新版待審候選 schema（hit_count、last_hit_at）", () => {

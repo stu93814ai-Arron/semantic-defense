@@ -8,10 +8,11 @@ import { Reason, Rfc3339 } from "./primitives.js";
 /**
  * 管理面 HTTP 契約（control-api ↔ console）：路徑常數與請求／回應本文。
  * 欄位只取自 PLAN-ADDENDUM-MONITOR §3／§7、V2 裁示；全部 strictObject，多欄位、缺欄位整份拒絕。
- * 角色（MONITOR §7a，A 組領航員裁示）：黑名單讀取／撤回、待審核准／退回＝operator；白名單 CRUD、門檻讀寫＝platform_admin。
+ * 角色（MONITOR §7a，A 組領航員裁示）：黑名單讀取／撤回、待審核准／退回＝operator；白名單 CRUD、門檻讀寫、自動上榜總開關＝platform_admin。
  */
 export const ADMIN_API_PATHS = Object.freeze({
   thresholds: "/api/thresholds",
+  autoList: "/api/settings/auto-list",
   blacklist: "/api/blacklist",
   blacklistRevoke: "/api/blacklist/:entryId/revoke",
   blacklistPending: "/api/blacklist/pending",
@@ -20,6 +21,13 @@ export const ADMIN_API_PATHS = Object.freeze({
   whitelist: "/api/whitelist",
   whitelistEntry: "/api/whitelist/:entryId",
 } as const);
+
+/**
+ * 自動上榜總開關；GET 回應與 PUT 請求同形。僅 { enabled: boolean }，strict，多欄／缺欄拒絕。
+ * 角色：僅 platform_admin（A 組領航員裁示，未經使用者確認）。
+ */
+export const AutoListSettingSchema = z.strictObject({ enabled: z.boolean() });
+export type AutoListSetting = z.infer<typeof AutoListSettingSchema>;
 
 const Unit = z.number().finite().min(0).max(1);
 

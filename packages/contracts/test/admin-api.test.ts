@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
-  ADMIN_API_PATHS, AllowlistCreateSchema, AllowlistListSchema, AllowlistUpdateSchema, BlocklistListSchema,
-  DEFAULT_THRESHOLDS, PendingCandidateListSchema, PendingCandidateSchema, THRESHOLD_BOUNDS, ThresholdsSchema,
-  ThresholdsShapeSchema, thresholdsViolation,
+  ADMIN_API_PATHS, AllowlistCreateSchema, AllowlistListSchema, AllowlistUpdateSchema, AutoListSettingSchema,
+  BlocklistListSchema, DEFAULT_THRESHOLDS, PendingCandidateListSchema, PendingCandidateSchema, THRESHOLD_BOUNDS,
+  ThresholdsSchema, ThresholdsShapeSchema, thresholdsViolation,
 } from "../src/admin-api.js";
 import * as main from "../src/index.js";
 
@@ -11,9 +11,10 @@ const T = "2026-11-09T00:00:00Z";
 const CASE = "11111111-1111-4111-8111-111111111111";
 
 describe("管理面 HTTP 契約：路徑常數", () => {
-  it("黑名單待審／上榜／撤回、白名單 CRUD、門檻：固定路徑，皆在 /api 下", () => {
+  it("黑名單待審／上榜／撤回、白名單 CRUD、門檻、自動上榜開關：固定路徑，皆在 /api 下", () => {
     expect(ADMIN_API_PATHS).toEqual({
       thresholds: "/api/thresholds",
+      autoList: "/api/settings/auto-list",
       blacklist: "/api/blacklist",
       blacklistRevoke: "/api/blacklist/:entryId/revoke",
       blacklistPending: "/api/blacklist/pending",
@@ -29,6 +30,23 @@ describe("管理面 HTTP 契約：路徑常數", () => {
     expect(main.ADMIN_API_PATHS).toBe(ADMIN_API_PATHS);
     expect(main.ThresholdsSchema).toBe(ThresholdsSchema);
     expect(main.PendingCandidateSchema).toBe(PendingCandidateSchema);
+    expect(main.AutoListSettingSchema).toBe(AutoListSettingSchema);
+  });
+});
+
+describe("自動上榜總開關 {enabled}", () => {
+  it("接受 {enabled:true} 與 {enabled:false}", () => {
+    expect(ok(AutoListSettingSchema, { enabled: true })).toBe(true);
+    expect(ok(AutoListSettingSchema, { enabled: false })).toBe(true);
+  });
+
+  it("缺欄、非布林、多餘鍵、非物件皆拒絕（strict）", () => {
+    for (const bad of [
+      {}, { enabled: "true" }, { enabled: 1 }, { enabled: null }, { enabled: true, extra: 1 },
+      [], true, null, undefined,
+    ]) {
+      expect(ok(AutoListSettingSchema, bad), JSON.stringify(bad)).toBe(false);
+    }
   });
 });
 
