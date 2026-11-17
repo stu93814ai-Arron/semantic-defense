@@ -190,7 +190,7 @@ const settingAudits = async () => (await api!.db.query<{ action: string; actor: 
 )).rows;
 
 describe("PUT 來源檢查（資安提出；A 組領航員裁示，未經使用者確認）", () => {
-  it.fails("跨來源 Origin，或 Sec-Fetch-Site 為 cross-site／same-site → 403 請求來源不符，值不變、無稽核", async () => {
+  it("跨來源 Origin，或 Sec-Fetch-Site 為 cross-site／same-site → 403 請求來源不符，值不變、無稽核", async () => {
     await start(READY);
     const cookie = await session("admin1", "pass-admin-1");
     const bad: Record<string, string>[] = [
@@ -223,7 +223,7 @@ describe("PUT 來源檢查（資安提出；A 組領航員裁示，未經使用�
 describe("三向交握佐證未就緒時不能開啟（軟體大總召裁示，未經使用者確認）", () => {
   const BLOCKED = { error: "三向交握佐證尚未上線，暫不能開啟自動封鎖" };
 
-  it.fails("PUT enabled:true → 409 固定本文，開關維持 false，寫一筆 update_blocked", async () => {
+  it("PUT enabled:true → 409 固定本文，開關維持 false，寫一筆 update_blocked", async () => {
     await start();
     const cookie = await session("admin1", "pass-admin-1");
     const res = await putSetting(cookie, { enabled: true });
@@ -235,7 +235,7 @@ describe("三向交握佐證未就緒時不能開啟（軟體大總召裁示，�
     }]);
   });
 
-  it.fails("被擋之後 PUT enabled:false → 200，值為 false，不寫 update 稽核", async () => {
+  it("被擋之後 PUT enabled:false → 200，值為 false，不寫 update 稽核", async () => {
     await start();
     const cookie = await session("admin1", "pass-admin-1");
     await putSetting(cookie, { enabled: true });
@@ -244,7 +244,7 @@ describe("三向交握佐證未就緒時不能開啟（軟體大總召裁示，�
     expect(await updates()).toEqual([]);
   });
 
-  it.fails("順序：格式錯誤（400）與來源不符（403）都不寫 update_blocked", async () => {
+  it("順序：格式錯誤（400）與來源不符（403）都不寫 update_blocked", async () => {
     await start();
     const cookie = await session("admin1", "pass-admin-1");
     expect((await putSetting(cookie, { enabled: true, extra: 1 })).statusCode).toBe(400);
@@ -272,14 +272,14 @@ describe("自動上榜測試覆寫只限 NODE_ENV=test（A 組領航員裁示，
   const boot = (extra: Partial<BuildAppOptions>) => buildApp({ databaseUrl: requireDatabaseUrl(), ...extra })
     .then(async (a) => { await a.close(); return "started"; }, (e: unknown) => (e as Error).message);
 
-  it.fails("NODE_ENV 不是 test 時傳 autoListEnabled（true 或 false）→ 拒絕啟動，固定中文訊息", async () => {
+  it("NODE_ENV 不是 test 時傳 autoListEnabled（true 或 false）→ 拒絕啟動，固定中文訊息", async () => {
     for (const env of ["production", "development"]) {
       vi.stubEnv("NODE_ENV", env);
       for (const v of [true, false]) expect(await boot({ autoListEnabled: v }), `${env}/${v}`).toBe(REFUSE);
     }
   });
 
-  it.fails("NODE_ENV 不是 test 時傳三向交握就緒覆寫 → 拒絕啟動，固定中文訊息", async () => {
+  it("NODE_ENV 不是 test 時傳三向交握就緒覆寫 → 拒絕啟動，固定中文訊息", async () => {
     for (const env of ["production", "development"]) {
       vi.stubEnv("NODE_ENV", env);
       expect(await boot(READY), env).toBe(REFUSE);
