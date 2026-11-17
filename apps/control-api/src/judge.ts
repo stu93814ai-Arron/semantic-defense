@@ -9,6 +9,7 @@ import { accumulateCase, expireOpenCases, raiseCaseMax, upsertCaseHit } from "./
 import { hostCidr, loadAllowlist } from "./auto-blacklist.js";
 import { writeAudit } from "./audit.js";
 import { autoListCase, countHighSeverity, e3aHolds, writeSuppressed } from "./auto-trigger.js";
+import { readAutoListEnabledInTx } from "./auto-list-settings.js";
 import { AUTO_BREAKER_PER_HOUR, recoverBreakerIfOpen } from "./auto-breaker.js";
 import type { AlertChannel } from "./alert-outbox.js";
 
@@ -62,11 +63,12 @@ type ScanRow = KeyRow & Pick<FlowEventRow, "received_at"> & { convertible_ms: st
  */
 export type TickHooks = { beforeAutoList?: () => Promise<void>; afterAllowlistShare?: () => Promise<void>; afterLock?: () => Promise<void> };
 /**
- * 自動上榜總開關的預設值（唯一來源）：關。關時 tick 完全不做自動上榜——不評估 E3.A、不判熔斷恢復、
- * 不寫 auto_list／auto_suppressed／auto_breaker_*，案件只留在待審。buildApp 的 autoListEnabled 與測試明確開啟。
+ * 自動上榜總開關：生產來源是 auto_list_settings 列（預設 false，platform_admin 經 /api/settings/auto-list 切換），
+ * 每個 tick 讀一次；缺列或讀失敗＝AUTO_LIST_ENABLED_DEFAULT（關）。關時 tick 完全不做自動上榜——不評估 E3.A、
+ * 不判熔斷恢復（熔斷凍結）、不寫 auto_list／auto_suppressed／auto_breaker_*，案件只留在待審。
  */
-export const AUTO_LIST_ENABLED_DEFAULT = false;
-/** runJudgeTick 第 4 個參數：掛勾＋熔斷上限 N（buildApp 的 autoBreakerPerHour，預設 50）＋自動上榜總開關。 */
+export { AUTO_LIST_ENABLED_DEFAULT } from "./auto-list-settings.js";
+/** runJudgeTick 第 4 個參數：掛勾＋熔斷上限 N（buildApp 的 autoBreakerPerHour，預設 50）＋自動上榜總開關的測試覆寫（有傳入則不讀 DB）。 */
 export type TickOpts = TickHooks & { autoBreakerPerHour?: number; autoListEnabled?: boolean; alertChannels?: readonly AlertChannel[] };
 /** 一個 tick 內共用：門檻、白名單（每個 tick 只讀一次；只決定要不要開案）、時間、log、掛勾、本 tick 計數（去重的 hit_while_listed、failed 的 SQLSTATE）。 */
 type TickCtx = { th: FlowThresholds; isAllowlisted: (ip: string) => boolean; now: number; log?: TickLog; hooks: TickHooks; breakerPerHour: number;
@@ -278,10 +280,14 @@ function logTickCounts(log: TickLog | undefined, n: { skipped: number; failed: n
   if (stats.stalePending > 0) log.error({ stale_pending: stats.stalePending }, "judge tick skipped stale pending backfill");
 }
 
-/** 自動上榜設定（總開關、熔斷 N）；開著才在 tick 開頭判熔斷恢復（關時熔斷狀態原樣不動、不寫 auto_breaker_close）。 */
+/**
+ * 自動上榜設定（總開關、熔斷 N）。總開關：TickOpts.autoListEnabled 僅供測試覆寫（有傳入則不讀 DB）；
+ * 省略則每個 tick 讀 auto_list_settings 一次（SAVEPOINT，失敗／缺列＝關）。
+ * 開著才在 tick 開頭判熔斷恢復（關時熔斷狀態原樣不動、不寫 auto_breaker_close；開關本身不重設熔斷）。
+ */
 async function prepareAutoList(q: Queryable, opts: TickOpts, now: number, log?: TickLog): Promise<{ breakerPerHour: number; autoList: boolean }> {
   const breakerPerHour = opts.autoBreakerPerHour ?? AUTO_BREAKER_PER_HOUR;
-  const autoList = opts.autoListEnabled ?? AUTO_LIST_ENABLED_DEFAULT;
+  const autoList = opts.autoListEnabled ?? (await readAutoListEnabledInTx(q, log));
   if (autoList) await recoverBreakerIfOpen(q, breakerPerHour, now, log, opts.alertChannels ?? []);
   return { breakerPerHour, autoList };
 }

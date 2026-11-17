@@ -48,7 +48,7 @@ export type BuildAppOptions = {
   approvePerHour?: number;
   /** 人工核准可封鎖的內網範圍；省略則讀 SD_APPROVE_INTERNAL_SCOPE，再省略為 APPROVE_INTERNAL_SCOPE_DEFAULT。 */
   approveInternalScope?: ApproveInternalScope;
-  /** E3.A 自動上榜總開關；省略＝AUTO_LIST_ENABLED_DEFAULT（false，關）。關時判定 tick 只開案、不自動上榜。 */
+  /** 僅測試覆寫 E3.A 自動上榜總開關（有傳入則 tick 不讀 DB）。生產不傳、無環境變數：每個 tick 讀 auto_list_settings（預設 false；缺列／讀失敗＝關）。 */
   autoListEnabled?: boolean;
   /** 測試用：ready／listen 前掛額外路由（例如無 roles 探針）。 */
   beforeReady?: (app: ControlApi) => void | Promise<void>;
