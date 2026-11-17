@@ -37,8 +37,8 @@
   log 只寫 `log.error({ error_class: "auto_list_setting_read" }, "auto-list setting read failed")`：固定錯誤碼與固定訊息，不含例外正文、SQL、IP 或 URL。
 - `AUTO_LIST_ENABLED_DEFAULT`（`false`）保留，只作缺列／讀失敗時的 fallback，不再是生產開關。
 - `buildApp({ autoListEnabled })` 與 `runJudgeTick` 的 `TickOpts.autoListEnabled` **只供測試覆寫**：有傳入就不讀 DB；生產不傳。
-- `buildApp({ autoListHandshakeReady })` 也只供測試（讓「開啟成功」路徑可測）。兩個覆寫只要傳了任一個而 `NODE_ENV` 不是 `test`，`buildApp` 就**拒絕啟動**，訊息固定為中文（**資安提出**；A 組領航員裁示（未經使用者確認））。
-- tick **不**另做三向交握檢查：上述 PUT 是開關值進 DB 的**唯一途徑**（另有 migrate 種子列，固定 `false`）。不得以 SQL 直接改這一列。（「不得以 SQL 直接改」為駕駛員自行決定（交 A 組領航員））
+- `buildApp({ autoListHandshakeReady })` 與 `TickOpts.autoListHandshakeReady` 也只供測試：把三向交握佐證視為已就緒，讓 PUT「開啟成功」路徑與 tick 自動上榜路徑可測；buildApp 會把它傳進排程 tick。兩個覆寫只要傳了任一個而 `NODE_ENV` 不是 `test`，`buildApp` 就**拒絕啟動**，訊息固定為中文（**資安提出**；A 組領航員裁示（未經使用者確認））。
+- tick 也會 AND 上 `HANDSHAKE_EVIDENCE_READY`：自動上榜＝（`autoListEnabled` 覆寫 ?? DB 讀值）且（`autoListHandshakeReady` 覆寫 ?? `HANDSHAKE_EVIDENCE_READY`）；未就緒時即使 DB 已是 `true` 也不自動上榜，案件照常開案留待審。上述 PUT 是開關值**唯一核准的寫入管道**（另有 migrate 種子列，固定 `false`），但不是單獨決定是否自動上榜的地方。不得以 SQL 直接改這一列。（「不得以 SQL 直接改」為駕駛員自行決定（交 A 組領航員））
 
 ## 開、關的效果
 
@@ -73,3 +73,4 @@
 - 415（不支援的 Content-Type）目前回 Fastify 預設本文，與其他錯誤的 `{ error }` 形狀不一致：統一本文。
 - 讀開關失敗目前只有 log，沒有告警：加告警。
 - 所有寫入方法的全域 `Origin`／`Sec-Fetch-Site` 檢查。
+- 部署檢查表補上：trustProxy 只能信任特定 proxy IP、不得設成 true。
