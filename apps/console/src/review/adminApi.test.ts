@@ -70,6 +70,12 @@ describe("adminApi 路徑與 base URL", () => {
     expect(fillPath(ADMIN_API_PATHS.blacklistRevoke, { entryId: "e1" })).toBe(
       "/api/blacklist/e1/revoke",
     );
+    expect(fillPath(ADMIN_API_PATHS.blacklistPendingApprove, { caseId: PENDING.case_id })).toBe(
+      `/api/blacklist/pending/${PENDING.case_id}/approve`,
+    );
+    expect(fillPath(ADMIN_API_PATHS.blacklistPendingReject, { caseId: PENDING.case_id })).toBe(
+      `/api/blacklist/pending/${PENDING.case_id}/reject`,
+    );
   });
 });
 
@@ -178,5 +184,83 @@ describe("adminApi 錯誤", () => {
     }).listPending();
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.code).toBe("invalid_response");
+  });
+});
+
+describe("adminApi 待審核准與退回", () => {
+  const approveUrl = `/api/blacklist/pending/${PENDING.case_id}/approve`;
+  const rejectUrl = `/api/blacklist/pending/${PENDING.case_id}/reject`;
+
+  it("核准 POST 無本文，回應為 BlocklistEntry", async () => {
+    const seen: { url: string; method?: string; body?: BodyInit | null; type?: string | null }[] = [];
+    const api = createAdminApi({
+      fetch: async (input, init) => {
+        const headers = new Headers(init?.headers);
+        seen.push({
+          url: String(input),
+          method: init?.method,
+          body: init?.body,
+          type: headers.get("Content-Type"),
+        });
+        return jsonResponse(200, LISTED);
+      },
+    });
+    const r = await api.approvePending(PENDING.case_id);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value).toEqual(LISTED);
+    expect(seen).toEqual([
+      { url: approveUrl, method: "POST", body: undefined, type: null },
+    ]);
+  });
+
+  it("退回 POST 無本文，204 無本體", async () => {
+    const seen: { url: string; method?: string; body?: BodyInit | null }[] = [];
+    const api = createAdminApi({
+      fetch: async (input, init) => {
+        seen.push({ url: String(input), method: init?.method, body: init?.body });
+        return new Response(null, { status: 204 });
+      },
+    });
+    const r = await api.rejectPending(PENDING.case_id);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value).toBeUndefined();
+    expect(seen).toEqual([{ url: rejectUrl, method: "POST", body: undefined }]);
+  });
+
+  it("404 顯示後端訊息，不改寫成通用查無資料", async () => {
+    const r = await createAdminApi({
+      fetch: async () => jsonResponse(404, { error: "查無待審案件" }),
+    }).approvePending(PENDING.case_id);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.status).toBe(404);
+      expect(r.code).toBe("not_found");
+      expect(r.message).toBe("查無待審案件");
+    }
+  });
+
+  it("409 原樣顯示後端訊息", async () => {
+    const r = await createAdminApi({
+      fetch: async () => jsonResponse(409, { error: "已自動上榜" }),
+    }).rejectPending(PENDING.case_id);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.status).toBe(409);
+      expect(r.code).toBe("conflict");
+      expect(r.message).toBe("已自動上榜");
+    }
+  });
+
+  it("未知 4xx 顯示後端訊息，不視為無法連線", async () => {
+    const r = await createAdminApi({
+      fetch: async () => jsonResponse(429, { error: "已達每小時上限" }),
+    }).approvePending(PENDING.case_id);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.status).toBe(429);
+      expect(r.code).toBe("client_error");
+      expect(r.message).toBe("已達每小時上限");
+      expect(r.code).not.toBe("backend_unreachable");
+    }
   });
 });

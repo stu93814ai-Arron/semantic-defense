@@ -29,7 +29,8 @@ export type AdminApiErr = {
     | "not_found"
     | "bad_request"
     | "invalid_response"
-    | "unauthorized";
+    | "unauthorized"
+    | "client_error";
   message: string;
 };
 export type AdminApiResult<T> = AdminApiOk<T> | AdminApiErr;
@@ -78,6 +79,10 @@ function statusErr(status: number, message: string | undefined): AdminApiErr {
   const mapped = STATUS_CODE[status as keyof typeof STATUS_CODE];
   if (mapped) {
     return { ok: false, status, code: mapped.code, message: message ?? mapped.fallback };
+  }
+  // 其餘 4xx（含日後新增的上限／私網等防護）原樣顯示後端訊息，不視為無法連線。
+  if (status >= 400 && status < 500) {
+    return { ok: false, status, code: "client_error", message: message ?? "請求無法完成" };
   }
   return {
     ok: false,
@@ -128,21 +133,44 @@ function parse<T>(schema: Schema<T>, body: unknown): AdminApiResult<T> {
 
 export type AdminApi = ReturnType<typeof createAdminApi>;
 
+function jsonInit(method: string, body?: unknown): RequestInit {
+  return {
+    method,
+    headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  };
+}
+
+async function getItems<T>(
+  fetchImpl: FetchLike,
+  target: string,
+  schema: Schema<{ items: T[] }>,
+): Promise<AdminApiResult<T[]>> {
+  const r = await request(fetchImpl, target, { method: "GET" });
+  if (!r.ok) return r;
+  const parsed = parse(schema, r.body);
+  return parsed.ok ? { ok: true as const, value: parsed.value.items } : parsed;
+}
+
+async function postParsed<T>(
+  fetchImpl: FetchLike,
+  target: string,
+  schema: Schema<T>,
+): Promise<AdminApiResult<T>> {
+  const r = await request(fetchImpl, target, jsonInit("POST"));
+  if (!r.ok) return r;
+  return parse(schema, r.body);
+}
+
 /**
  * 管理面 HTTP 客戶端：路徑與 schema 取自 contracts/browser。
- * 不含待審核准／退回（A 組批次 4 尚未合併）。fetch 可注入以便測試。
+ * 待審核准／退回走 ADMIN_API_PATHS，無請求本文。fetch 可注入以便測試。
  */
 export function createAdminApi(opts: { fetch?: FetchLike; baseUrl?: string } = {}) {
   const fetchImpl = opts.fetch ?? fetch;
   const base = opts.baseUrl ?? adminApiBaseUrl();
   const url = (path: string, params?: Record<string, string>) =>
     joinUrl(base, params ? fillPath(path, params) : path);
-
-  const jsonInit = (method: string, body?: unknown): RequestInit => ({
-    method,
-    headers: body === undefined ? undefined : { "Content-Type": "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
 
   return {
     async getThresholds(): Promise<AdminApiResult<Thresholds>> {
@@ -155,33 +183,29 @@ export function createAdminApi(opts: { fetch?: FetchLike; baseUrl?: string } = {
       if (!r.ok) return r;
       return parse(ThresholdsSchema, r.body);
     },
-    async listPending() {
-      const r = await request(fetchImpl, url(ADMIN_API_PATHS.blacklistPending), { method: "GET" });
-      if (!r.ok) return r;
-      const parsed = parse(PendingCandidateListSchema, r.body);
-      return parsed.ok ? { ok: true as const, value: parsed.value.items } : parsed;
-    },
-    async listBlacklist() {
-      const r = await request(fetchImpl, url(ADMIN_API_PATHS.blacklist), { method: "GET" });
-      if (!r.ok) return r;
-      const parsed = parse(BlocklistListSchema, r.body);
-      return parsed.ok ? { ok: true as const, value: parsed.value.items } : parsed;
-    },
-    async revokeBlacklist(entryId: string) {
+    listPending: () =>
+      getItems(fetchImpl, url(ADMIN_API_PATHS.blacklistPending), PendingCandidateListSchema),
+    listBlacklist: () =>
+      getItems(fetchImpl, url(ADMIN_API_PATHS.blacklist), BlocklistListSchema),
+    revokeBlacklist: (entryId: string) =>
+      postParsed(fetchImpl, url(ADMIN_API_PATHS.blacklistRevoke, { entryId }), BlocklistEntrySchema),
+    approvePending: (caseId: string) =>
+      postParsed(
+        fetchImpl,
+        url(ADMIN_API_PATHS.blacklistPendingApprove, { caseId }),
+        BlocklistEntrySchema,
+      ),
+    async rejectPending(caseId: string) {
       const r = await request(
         fetchImpl,
-        url(ADMIN_API_PATHS.blacklistRevoke, { entryId }),
+        url(ADMIN_API_PATHS.blacklistPendingReject, { caseId }),
         jsonInit("POST"),
       );
       if (!r.ok) return r;
-      return parse(BlocklistEntrySchema, r.body);
+      return { ok: true as const, value: undefined };
     },
-    async listWhitelist() {
-      const r = await request(fetchImpl, url(ADMIN_API_PATHS.whitelist), { method: "GET" });
-      if (!r.ok) return r;
-      const parsed = parse(AllowlistListSchema, r.body);
-      return parsed.ok ? { ok: true as const, value: parsed.value.items } : parsed;
-    },
+    listWhitelist: () =>
+      getItems(fetchImpl, url(ADMIN_API_PATHS.whitelist), AllowlistListSchema),
     async createWhitelist(input: AllowlistCreate) {
       const body = AllowlistCreateSchema.parse(input);
       const r = await request(fetchImpl, url(ADMIN_API_PATHS.whitelist), jsonInit("POST", body));
