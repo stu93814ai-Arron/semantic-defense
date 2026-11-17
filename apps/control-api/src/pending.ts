@@ -13,7 +13,7 @@ import { AUTO_LIST_TTL_MS, loadAllowlist } from "./auto-blacklist.js";
 import { lockAllowlistShare } from "./auto-breaker.js";
 import { insertActiveBlocklistEntry } from "./blocklist-store.js";
 import {
-  ApproveBlocked, assertUnderApproveCap, maybeEnqueueApproveVolume, recordApproveBlocked, type ApproveGuardConfig,
+  ApproveBlocked, assertApprovableScope, assertUnderApproveCap, maybeEnqueueApproveVolume, recordApproveBlocked, type ApproveGuardConfig,
 } from "./approve-guard.js";
 
 const OPERATOR: Role[] = ["operator"];
@@ -135,6 +135,7 @@ export function registerPendingRoutes(app: FastifyInstance, db: Db, now: () => n
     const row = r.rows[0];
     if (!row) return conflictIfUnclaimed(q, id, at);
     if ((await loadAllowlist(q, at))(row.ip)) throw new PendingConflict("已在白名單");
+    assertApprovableScope(row.ip, guard.internalScope);
     const entry = await insertActiveBlocklistEntry(q, {
       entry_id: randomUUID(),
       ip: row.ip,

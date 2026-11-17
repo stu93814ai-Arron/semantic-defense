@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isGlobalUnicast } from "../src/net-scope.js";
+import { approveScope, isGlobalUnicast } from "../src/net-scope.js";
 
 /** B5：每個排除範圍的頭尾（false）與緊鄰的外側（true）；內嵌 v4（::ffff:/96、64:ff9b::/96、64:ff9b:1::/48、2002::/16）依 v4 規則；fec0::/10 排除。 */
 const P = true;
@@ -42,5 +42,32 @@ const CASES: Array<[string, boolean]> = [
 describe("isGlobalUnicast（B5：常數排除清單，不可注入）", () => {
   it.each(CASES)("%s → %s", (ip, expected) => {
     expect(isGlobalUnicast(ip)).toBe(expected);
+  });
+});
+
+/** 人工核准分類（A 組領航員裁示，未經使用者確認）：public 必須與 isGlobalUnicast 一致；內網分 v4／v6；其餘一律 never。 */
+const SCOPES: Array<[string, ReturnType<typeof approveScope>]> = [
+  ["64.0.113.20/32", "public"], ["2400:cb00::7/128", "public"],
+  ["10.0.0.0", "internal_v4"], ["10.255.255.255/32", "internal_v4"], ["172.16.0.1", "internal_v4"], ["172.31.255.255", "internal_v4"],
+  ["192.168.0.1", "internal_v4"], ["100.64.0.0", "internal_v4"], ["100.127.255.255/32", "internal_v4"],
+  ["fc00::", "internal_v6"], ["fd12:3456::1/128", "internal_v6"], [`fdff:${F}:ffff`, "internal_v6"],
+  ["198.18.0.0", "never"], ["198.19.255.255/32", "never"], ["192.0.0.8", "never"], ["192.0.0.255", "never"],
+  ["0.0.0.1", "never"], ["127.0.0.1", "never"], ["169.254.1.1", "never"], ["192.0.2.1", "never"], ["198.51.100.1", "never"],
+  ["203.0.113.1", "never"], ["224.0.0.1", "never"], ["240.0.0.1", "never"], ["255.255.255.255", "never"],
+  ["::", "never"], ["::1", "never"], ["fe80::1", "never"], ["fec0::1", "never"], ["ff02::1", "never"], ["2001:db8::1", "never"],
+  ["100::1", "never"], ["2001:2::1", "never"], ["3fff::1", "never"],
+  // 內嵌私網或保留 v4 的 v6 一律 never，不歸 internal_v6
+  ["::ffff:10.0.0.1", "never"], ["::ffff:a00:1", "never"], ["64:ff9b::a00:1", "never"], ["64:ff9b::6440:1", "never"],
+  ["64:ff9b:1:a00:0:100::", "never"], ["2002:a00:1::", "never"], ["2002:c0a8:1::", "never"], ["::ffff:0:a00:1", "never"],
+  ["not-an-ip", "never"], ["", "never"],
+];
+
+describe("approveScope", () => {
+  it.each(SCOPES)("%s → %s", (ip, expected) => {
+    expect(approveScope(ip)).toBe(expected);
+  });
+
+  it.each(CASES)("%s：public 與 isGlobalUnicast 一致", (ip, expected) => {
+    expect(approveScope(ip) === "public").toBe(expected);
   });
 });

@@ -2,6 +2,7 @@ import type { Db, Queryable } from "./db.js";
 import { writeAudit } from "./audit.js";
 import { enqueueAlerts, type AlertChannel } from "./alert-outbox.js";
 import { volumeThreshold } from "./auto-breaker.js";
+import { approveScope } from "./net-scope.js";
 import { parseBoundInt } from "./judge-alerts.js";
 
 /**
@@ -11,6 +12,9 @@ import { parseBoundInt } from "./judge-alerts.js";
  * - 並發：先 SHARE（白名單）再拿每個 actor 一把 xact advisory lock，才計數；不拿 AUTO_LOCK。
  * - 被擋：主交易回滾後另開短交易寫 blacklist.approve_blocked {case_id, reason}（不含 IP）；
  *   cap 同一 operator、其他 reason 同一案件，1 小時內最多一筆。其他 409 不寫。
+ * - 位址範圍：內網（RFC1918、CGNAT、ULA）預設可封鎖（使用者決定，由軟體大總召轉達）；
+ *   SD_APPROVE_INTERNAL_SCOPE 改成 none／v4／v6 即禁止封鎖對應內網，回 409。never 類不受開關影響，一律 409。
+ *   白名單先判（已在白名單 409 優先）。
  * - 告警：approve_cap 跟 cap 稽核同一筆短交易、同一去重；approve_volume 在成功核准的交易內判，
  *   單一 operator ≥ ceil(0.8×上限) 或全體 ≥ 100／小時即入列，approve_guard.volume_held 旗標每段只告一次。
  */
@@ -23,7 +27,14 @@ export const APPROVE_BLOCKED_EVERY_MS = 60 * 60_000;
 export const APPROVE_VOLUME_GLOBAL_PER_HOUR = 100;
 export const APPROVE_CAP_MESSAGE = "核准次數已達上限，請稍後再試";
 
-export type ApproveBlockReason = "cap";
+export type ApproveBlockReason = "cap" | "internal_scope" | "never_scope";
+
+export const APPROVE_INTERNAL_SCOPES = ["none", "v4", "v6", "all"] as const;
+export type ApproveInternalScope = (typeof APPROVE_INTERNAL_SCOPES)[number];
+/** 內網是否預設可封鎖：只改這個常數（與部署檢查表）。使用者決定（由軟體大總召轉達）：all。 */
+export const APPROVE_INTERNAL_SCOPE_DEFAULT: ApproveInternalScope = "all";
+export const APPROVE_INTERNAL_MESSAGE = "內網位址不可核准";
+export const APPROVE_NEVER_MESSAGE = "此位址不可核准";
 
 /** 防護擋下：主交易回滾，由路由回 status＋error（不含 IP）。 */
 export class ApproveBlocked extends Error {
@@ -33,7 +44,26 @@ export class ApproveBlocked extends Error {
   }
 }
 
-export type ApproveGuardConfig = { perHour: number; channels: readonly AlertChannel[] };
+export type ApproveGuardConfig = { perHour: number; internalScope: ApproveInternalScope; channels: readonly AlertChannel[] };
+
+/** buildApp 選項優先（測試注入）；否則讀 SD_APPROVE_INTERNAL_SCOPE，未設定用預設常數。無效值啟動時拋錯。 */
+export function resolveApproveInternalScope(env: NodeJS.ProcessEnv, opt?: ApproveInternalScope): ApproveInternalScope {
+  const raw = opt ?? env.SD_APPROVE_INTERNAL_SCOPE?.trim();
+  if (raw === undefined || raw === "") return APPROVE_INTERNAL_SCOPE_DEFAULT;
+  const hit = APPROVE_INTERNAL_SCOPES.find((v) => v === raw);
+  if (!hit) throw new Error(`SD_APPROVE_INTERNAL_SCOPE 必須是 ${APPROVE_INTERNAL_SCOPES.join("／")}`);
+  return hit;
+}
+
+
+/** 案件位址不在允許範圍即拋 ApproveBlocked（409）：never 一律擋；內網依設定。 */
+export function assertApprovableScope(ip: string, setting: ApproveInternalScope): void {
+  const scope = approveScope(ip);
+  if (scope === "public") return;
+  if (scope === "never") throw new ApproveBlocked("never_scope", 409, APPROVE_NEVER_MESSAGE);
+  const family = scope === "internal_v4" ? "v4" : "v6";
+  if (setting !== "all" && setting !== family) throw new ApproveBlocked("internal_scope", 409, APPROVE_INTERNAL_MESSAGE);
+}
 
 /** buildApp 選項優先（測試注入）；否則讀環境變數。無效值啟動時拋錯。 */
 export function resolveApprovePerHour(env: NodeJS.ProcessEnv, opt?: number): number {

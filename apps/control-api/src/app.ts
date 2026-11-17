@@ -21,7 +21,9 @@ import { judgeHealthCounts, parseJudgeAlertConfig, runJudgeTickWithAlerts, type 
 import { parseWebhookConfig, webhookSender, type WebhookHooks } from "./alert-webhook.js";
 import { parseSyslogConfig, syslogSender, type SyslogHooks } from "./alert-syslog.js";
 import { parseSmtpConfig, smtpSender, type SmtpHooks } from "./alert-smtp.js";
-import { resolveApprovePerHour, type ApproveGuardConfig } from "./approve-guard.js";
+import {
+  resolveApproveInternalScope, resolveApprovePerHour, type ApproveGuardConfig, type ApproveInternalScope,
+} from "./approve-guard.js";
 
 export type BuildAppOptions = {
   idleTimeoutMs?: number;
@@ -42,6 +44,8 @@ export type BuildAppOptions = {
   autoBreakerPerHour?: number;
   /** 人工核准上限：每個 operator 滑動 1 小時最多幾筆（1–200）；省略則讀 SD_APPROVE_PER_HOUR，再省略為 50。 */
   approvePerHour?: number;
+  /** 人工核准可封鎖的內網範圍；省略則讀 SD_APPROVE_INTERNAL_SCOPE，再省略為 APPROVE_INTERNAL_SCOPE_DEFAULT。 */
+  approveInternalScope?: ApproveInternalScope;
   /** E3.A 自動上榜總開關；省略＝AUTO_LIST_ENABLED_DEFAULT（false，關）。關時判定 tick 只開案、不自動上榜。 */
   autoListEnabled?: boolean;
   /** 測試用：ready／listen 前掛額外路由（例如無 roles 探針）。 */
@@ -272,6 +276,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<ControlApi> 
   assertBreakerLimit(opts.autoBreakerPerHour);
   const guard: ApproveGuardConfig = {
     perHour: resolveApprovePerHour(process.env, opts.approvePerHour),
+    internalScope: resolveApproveInternalScope(process.env, opts.approveInternalScope),
     channels: enabledAlertChannels(process.env, opts.alertChannels),
   };
   const judgeAlerts = parseJudgeAlertConfig(process.env);
@@ -283,7 +288,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<ControlApi> 
   const now = opts.now ?? Date.now;
   const app = Fastify({ trustProxy: opts.trustProxy ?? false, logger: withSafeReqLog(opts.logger) });
   if (smtp?.allowPlaintext) app.log.warn({ smtp_plaintext: true }, "smtp plaintext allowed");
-  app.log.info({ approve_per_hour: guard.perHour }, "approve guard");
+  app.log.info({ approve_per_hour: guard.perHour, approve_internal_scope: guard.internalScope }, "approve guard");
   try {
     const db = await openDb(resolveDatabaseUrl(opts.databaseUrl), { now, log: app.log });
     const limiter = new LoginLimiter(db, rl.maxFailures, rl.windowMs, now);

@@ -131,3 +131,23 @@ export function isGlobalUnicast(ip: string): boolean {
   }
   return !NON_PUBLIC.check(addr, v === 6 ? "ipv6" : "ipv4");
 }
+
+/**
+ * 人工核准的位址分類（A 組領航員裁示，未經使用者確認）：public 等於 isGlobalUnicast；
+ * internal_v4 = 10/8、172.16/12、192.168/16、100.64/10（CGNAT）；internal_v6 = fc00::/7（ULA）；
+ * 其餘一律 never（含 198.18/15、192.0.0/24，以及內嵌私網或保留 v4 的 v6）。Teredo 等另列追蹤項。
+ */
+export type ApproveScope = "public" | "internal_v4" | "internal_v6" | "never";
+
+const INTERNAL = new BlockList();
+for (const [a, p] of [["10.0.0.0", 8], ["172.16.0.0", 12], ["192.168.0.0", 16], ["100.64.0.0", 10]] as const) INTERNAL.addSubnet(a, p, "ipv4");
+INTERNAL.addSubnet("fc00::", 7, "ipv6");
+
+export function approveScope(ip: string): ApproveScope {
+  if (isGlobalUnicast(ip)) return "public";
+  const addr = ip.split("/")[0]!;
+  const v = isIP(addr);
+  if (v === 4) return INTERNAL.check(addr, "ipv4") ? "internal_v4" : "never";
+  if (v === 6 && embeddedV4(addr) === null && INTERNAL.check(addr, "ipv6")) return "internal_v6";
+  return "never";
+}
