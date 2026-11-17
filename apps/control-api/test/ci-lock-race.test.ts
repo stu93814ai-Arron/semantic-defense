@@ -47,7 +47,7 @@ async function waitAdvisoryWaiter(key: number, timeoutMs = 5_000): Promise<boole
 }
 
 describe("① 判定 timer 不得在 seed 期間就已啟動", () => {
-  it.fails("bootJudgeApp(judgeIntervalMs>0)：seed 卡在 SEED_LOCK 時沒有任何已排程 timer；seed 完才啟", async () => {
+  it("bootJudgeApp(judgeIntervalMs>0)：seed 卡在 SEED_LOCK 時沒有任何已排程 timer；seed 完才啟", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const holder = await client();
     await holder.query("SELECT pg_advisory_lock($1)", [SEED_LOCK]);
@@ -67,7 +67,7 @@ describe("① 判定 timer 不得在 seed 期間就已啟動", () => {
 });
 
 describe("② SEED_LOCK 的 lock／TRUNCATE／unlock 必須在同一條連線", () => {
-  it.fails("pool 把第一個查詢分到 A、其餘分到 B 時，seed 結束後沒有任何連線持有 SEED_LOCK", async () => {
+  it("pool 把第一個查詢分到 A、其餘分到 B 時，seed 結束後沒有任何連線持有 SEED_LOCK", async () => {
     app = await buildApp({ databaseUrl: requireDatabaseUrl() });
     const [a, b, s] = [await client(), await client(), await client()];
     let first = true;
@@ -92,7 +92,7 @@ describe("② SEED_LOCK 的 lock／TRUNCATE／unlock 必須在同一條連線", 
 });
 
 describe("③ 啟動遷移的 CREATE INDEX 遇到被鎖的表：時限內拒絕啟動並放掉 SCHEMA_LOCK", () => {
-  it.fails("audit_events 被另一交易 ACCESS EXCLUSIVE 鎖住 → openDb 於 lock_timeout（5s）內以中文訊息失敗", async () => {
+  it("audit_events 被另一交易 ACCESS EXCLUSIVE 鎖住 → openDb 於 lock_timeout（5s）內以中文訊息失敗", async () => {
     // 先確保表已存在（遷移冪等）
     await (await openDb(requireDatabaseUrl())).close();
     const holder = await client();

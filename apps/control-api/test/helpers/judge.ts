@@ -9,11 +9,26 @@ export const T0 = Date.parse("2026-11-09T00:00:00Z");
 export const MIN = 60_000;
 export const DAY = 24 * 60 * MIN;
 
-export async function bootJudgeApp(opts: Partial<BuildAppOptions> = {}): Promise<ControlApi> {
-  const app = await buildApp({ idleTimeoutMs: 60_000, databaseUrl: requireDatabaseUrl(), now: () => T0, ...opts });
+async function resetFixtures(app: ControlApi): Promise<void> {
   await seedPhase2Fixtures(app);
   await app.db.exec("DROP TABLE IF EXISTS flow_events, flow_rejections");
   await createFlowTables(app.db);
+}
+
+/**
+ * 要排程（judgeIntervalMs／alertDeliverIntervalMs > 0）時，先用不排程的 app 重建 fixtures、關掉，
+ * 再開真正的 app：seed 期間不會有 tick 與 TRUNCATE 互鎖（A 組領航員裁示，未經使用者確認；不改 buildApp 啟動順序）。
+ */
+export async function bootJudgeApp(opts: Partial<BuildAppOptions> = {}): Promise<ControlApi> {
+  const base = { idleTimeoutMs: 60_000, databaseUrl: requireDatabaseUrl(), now: () => T0 };
+  const timed = (opts.judgeIntervalMs ?? 0) > 0 || (opts.alertDeliverIntervalMs ?? 0) > 0;
+  if (timed) {
+    const seeder = await buildApp({ ...base, databaseUrl: opts.databaseUrl ?? base.databaseUrl });
+    try { await resetFixtures(seeder); } finally { await seeder.close(); }
+    return buildApp({ ...base, ...opts });
+  }
+  const app = await buildApp({ ...base, ...opts });
+  await resetFixtures(app);
   return app;
 }
 

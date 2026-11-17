@@ -359,12 +359,34 @@ function quoteIdent(name: string): string {
   return `"${name}"`;
 }
 
+const MIGRATE_LOCK_FAILED =
+  "無法在時限內取得資料表的鎖以套用結構遷移，已拒絕啟動；請確認沒有長時間交易佔用資料表後再重試";
+
+/**
+ * A 組領航員裁示（未經使用者確認）：遷移語句（CREATE INDEX IF NOT EXISTS 即使索引已存在也要先取表鎖）
+ * 各自在短交易內以 lock_timeout 5s 執行；取不到鎖即拒絕啟動（fail-closed），不在 SCHEMA_LOCK 下無限等待。
+ * 套用到全部 SCHEMA_STATEMENTS（含 ALTER TABLE）為駕駛員自行決定（交 A 組領航員）。
+ * 錯誤訊息固定中文，不含 IP、時間戳、憑證、URL、SQL 或例外字串。
+ */
+async function runSchemaStatement(q: Queryable, sql: string): Promise<void> {
+  await q.query("BEGIN");
+  try {
+    await q.query("SET LOCAL lock_timeout = '5s'");
+    await q.query(sql);
+    await q.query("COMMIT");
+  } catch (err) {
+    try { await q.query("ROLLBACK"); } catch { /* 仍拋原錯 */ }
+    if ((err as { code?: string }).code === "55P03") throw new Error(MIGRATE_LOCK_FAILED);
+    throw err;
+  }
+}
+
 async function migrate(client: pg.PoolClient, now: () => number, log?: SeedLog): Promise<void> {
 
   await client.query("SELECT pg_advisory_lock($1)", [SCHEMA_LOCK]);
   try {
     for (const sql of SCHEMA_STATEMENTS) {
-      await client.query(sql);
+      await runSchemaStatement(client, sql);
     }
     await ensureAlertKindCheck(client);
     await seedCriticalAllowlist(client, now, log);
