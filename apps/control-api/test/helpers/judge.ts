@@ -3,6 +3,7 @@ import type { FlowMetadataEvent } from "@semantic-defense/contracts";
 import { createFlowTables } from "@semantic-defense/flow-store/testing";
 import { buildApp, seedPhase2Fixtures, type BuildAppOptions, type ControlApi } from "./app.js";
 import { requireDatabaseUrl } from "./pg.js";
+import type { TickOpts } from "../../src/judge.js";
 
 /** 判定 tick 測試共用：固定時鐘、建 app＋seed、以 ./testing 入口重建 flow_events、flow 產生器。 */
 export const T0 = Date.parse("2026-11-09T00:00:00Z");
@@ -31,6 +32,13 @@ export async function bootJudgeApp(opts: Partial<BuildAppOptions> = {}): Promise
   await resetFixtures(app);
   return app;
 }
+
+/**
+ * 測試專用 tick 覆寫：三向交握佐證視為已就緒（生產固定 HANDSHAKE_EVIDENCE_READY=false）。
+ * AUTO_ON＝明確開啟總開關且視為就緒；要驗自動上榜的 tick 測試用它。
+ */
+export const HS_READY = { autoListHandshakeReady: true } as unknown as TickOpts;
+export const AUTO_ON: TickOpts = { autoListEnabled: true, ...HS_READY };
 
 /** 可疑：打很多 port、短連線無回應、低封包（30 筆 → confidence 1.0）；正常：同 port、有回應 → 低分。 */
 export const flowEvent = (src_ip: string, ts: number, dst_port: number, susp: boolean, app_id = "app-1"): FlowMetadataEvent => ({

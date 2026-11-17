@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { insertFlowEvents } from "@semantic-defense/flow-store/testing";
 import { type ControlApi } from "./helpers/app.js";
-import { DAY, MIN, T0, bootJudgeApp, flowEvent } from "./helpers/judge.js";
+import { DAY, HS_READY, MIN, T0, bootJudgeApp, flowEvent } from "./helpers/judge.js";
 import { AUTO_LIST_ENABLED_DEFAULT, runJudgeTick } from "../src/judge.js";
 import * as als from "../src/auto-list-settings.js";
 import type { Queryable } from "../src/db.js";
@@ -85,12 +85,21 @@ describe("判定 tick 讀取自動上榜開關", () => {
     expect(AUTO_LIST_ENABLED_DEFAULT).toBe(false);
   });
 
-  it("未傳覆寫且 DB 為 true：E3.A 成立則自動上榜", async () => {
+  it("對照：DB 為 true、只傳三向交握就緒覆寫（不傳 autoListEnabled）→ 讀 DB，E3.A 成立則自動上榜", async () => {
     await start();
     await app!.db.query("UPDATE auto_list_settings SET enabled = TRUE");
     await qualify();
-    await runJudgeTick(app!.db, T0);
+    await runJudgeTick(app!.db, T0, undefined, HS_READY);
     expect([await autoListed(), await states()]).toEqual([1, ["auto_listed"]]);
+  });
+
+  it.fails("DB 為 true、未傳覆寫、HANDSHAKE_EVIDENCE_READY=false → 不自動上榜，案件仍開案留待審", async () => {
+    await start();
+    await app!.db.query("UPDATE auto_list_settings SET enabled = TRUE");
+    await qualify();
+    const result = await runJudgeTick(app!.db, T0);
+    expect(result.hits).toBeGreaterThan(0);
+    expect([await autoListed(), await states()]).toEqual([0, ["open"]]);
   });
 
   it("未傳覆寫且 DB 為 false：E3.A 成立也只留待審、不上榜", async () => {
@@ -120,7 +129,7 @@ describe("判定 tick 讀取自動上榜開關", () => {
     expect([await closes(), await opened()]).toEqual([0, at]);
     await app!.db.query("UPDATE auto_list_settings SET enabled = TRUE");
     expect(await opened()).toBe(at);
-    await runJudgeTick(app!.db, T0 + MIN);
+    await runJudgeTick(app!.db, T0 + MIN, undefined, HS_READY);
     expect([await closes(), await opened()]).toEqual([1, null]);
   });
 });
@@ -129,7 +138,7 @@ describe("測試覆寫跳過 DB、讀失敗 fail-closed", () => {
   it("autoListEnabled:true 覆寫：DB 為 false 仍上榜（不讀列）", async () => {
     await start();
     await qualify();
-    await runJudgeTick(app!.db, T0, undefined, { autoListEnabled: true });
+    await runJudgeTick(app!.db, T0, undefined, { autoListEnabled: true, ...HS_READY });
     expect([await autoListed(), await states()]).toEqual([1, ["auto_listed"]]);
   });
 
