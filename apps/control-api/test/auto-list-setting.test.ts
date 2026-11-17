@@ -1,6 +1,6 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ADMIN_API_PATHS } from "@semantic-defense/contracts";
-import { buildApp, seedPhase2Fixtures, type ControlApi } from "./helpers/app.js";
+import { buildApp, seedPhase2Fixtures, type BuildAppOptions, type ControlApi } from "./helpers/app.js";
 import { cookieHeader, login } from "./helpers/session.js";
 import { requireDatabaseUrl, truncatePhase2Tables } from "./helpers/pg.js";
 
@@ -23,8 +23,14 @@ afterEach(async () => {
   }
 });
 
-async function start(): Promise<ControlApi> {
-  api = await buildApp({ idleTimeoutMs: 60_000, databaseUrl: requireDatabaseUrl(), now: () => CLOCK });
+/**
+ * 測試專用：把三向交握佐證視為已就緒，讓「開啟成功」路徑可測（僅 NODE_ENV=test 允許，見下方啟動拒絕測試）。
+ * 未傳＝HANDSHAKE_EVIDENCE_READY（false），PUT enabled:true 回 409。
+ */
+const READY = { autoListHandshakeReady: true } as unknown as Partial<BuildAppOptions>;
+
+async function start(extra: Partial<BuildAppOptions> = {}): Promise<ControlApi> {
+  api = await buildApp({ idleTimeoutMs: 60_000, databaseUrl: requireDatabaseUrl(), now: () => CLOCK, ...extra });
   await seedPhase2Fixtures(api);
   return api;
 }
@@ -56,7 +62,7 @@ describe("自動上榜總開關 API：讀寫與稽核", () => {
   });
 
   it("開啟後 GET 讀回，並寫一筆物件形 before／after 稽核（actor 為正規化帳號）", async () => {
-    await start();
+    await start(READY);
     const cookie = await session("admin1", "pass-admin-1");
     const res = await putSetting(cookie, { enabled: true });
     expect([res.statusCode, res.json()]).toEqual([200, { enabled: true }]);
@@ -67,7 +73,7 @@ describe("自動上榜總開關 API：讀寫與稽核", () => {
   });
 
   it("值未變再 PUT：200 現值且不新增稽核；改回 false 才寫第二筆", async () => {
-    await start();
+    await start(READY);
     const cookie = await session("admin1", "pass-admin-1");
     expect((await putSetting(cookie, { enabled: true })).statusCode).toBe(200);
     const same = await putSetting(cookie, { enabled: true });
@@ -125,7 +131,7 @@ describe("自動上榜總開關 API：格式、角色與原子性", () => {
   });
 
   it("稽核寫入失敗時整筆 tx 回滾：500 固定本文，開關維持關閉", async () => {
-    await start();
+    await start(READY);
     const cookie = await session("admin1", "pass-admin-1");
     await api!.db.exec(
       "ALTER TABLE audit_events ADD CONSTRAINT al_no_upd CHECK (action <> 'settings.auto_list.update') NOT VALID",
@@ -151,7 +157,7 @@ describe("自動上榜總開關 API：格式、角色與原子性", () => {
 
 describe("自動上榜總開關 API：與熔斷、測試清理的關係", () => {
   it("PUT 開關不重設、不清空熔斷：auto_breaker.opened_at 原樣保留", async () => {
-    await start();
+    await start(READY);
     const cookie = await session("admin1", "pass-admin-1");
     await api!.db.query("UPDATE auto_breaker SET opened_at = $1 WHERE id", [CLOCK - 60_000]);
     const breaker = async () => (await api!.db.query<{ opened_at: string | null }>("SELECT opened_at FROM auto_breaker")).rows;
@@ -172,5 +178,118 @@ describe("自動上榜總開關 API：與熔斷、測試清理的關係", () => 
     await api!.db.query("DELETE FROM auto_list_settings");
     await truncatePhase2Tables(api!.db);
     expect(await rows()).toEqual([{ id: true, enabled: false }]);
+  });
+});
+
+const HOST = "admin.example.test";
+const OWN = `http://${HOST}`;
+const putFrom = (cookie: string, extra: Record<string, string>, body: unknown) =>
+  api!.inject({ method: "PUT", url: PATH, headers: { ...cookieHeader(cookie), host: HOST, ...extra }, payload: body as object });
+const settingAudits = async () => (await api!.db.query<{ action: string; actor: string; detail: unknown }>(
+  "SELECT action, actor, detail FROM audit_events WHERE action LIKE 'settings.auto_list.%' ORDER BY id",
+)).rows;
+
+describe("PUT 來源檢查（資安提出；A 組領航員裁示，未經使用者確認）", () => {
+  it.fails("跨來源 Origin，或 Sec-Fetch-Site 為 cross-site／same-site → 403 請求來源不符，值不變、無稽核", async () => {
+    await start(READY);
+    const cookie = await session("admin1", "pass-admin-1");
+    const bad: Record<string, string>[] = [
+      { origin: "https://evil.example" }, { origin: "null" }, { origin: `https://${HOST}` },
+      { "sec-fetch-site": "cross-site" }, { "sec-fetch-site": "same-site" },
+      { origin: OWN, "sec-fetch-site": "cross-site" },
+    ];
+    for (const h of bad) {
+      const res = await putFrom(cookie, h, { enabled: true });
+      expect([res.statusCode, res.json()], JSON.stringify(h)).toEqual([403, { error: "請求來源不符" }]);
+    }
+    expect((await getSetting(cookie)).json()).toEqual({ enabled: false });
+    expect(await settingAudits()).toEqual([]);
+  });
+
+  it("對照：同源 Origin、Sec-Fetch-Site same-origin／none、兩者皆無（非瀏覽器管理用戶端）→ 照常寫入", async () => {
+    await start(READY);
+    const cookie = await session("admin1", "pass-admin-1");
+    const ok: Record<string, string>[] = [{ origin: OWN }, { "sec-fetch-site": "same-origin" }, { "sec-fetch-site": "none" }, {}];
+    let enabled = false;
+    for (const h of ok) {
+      enabled = !enabled;
+      const res = await putFrom(cookie, h, { enabled });
+      expect([res.statusCode, res.json()], JSON.stringify(h)).toEqual([200, { enabled }]);
+    }
+    expect(await updates()).toHaveLength(4);
+  });
+});
+
+describe("三向交握佐證未就緒時不能開啟（軟體大總召裁示，未經使用者確認）", () => {
+  const BLOCKED = { error: "三向交握佐證尚未上線，暫不能開啟自動封鎖" };
+
+  it.fails("PUT enabled:true → 409 固定本文，開關維持 false，寫一筆 update_blocked", async () => {
+    await start();
+    const cookie = await session("admin1", "pass-admin-1");
+    const res = await putSetting(cookie, { enabled: true });
+    expect([res.statusCode, res.json()]).toEqual([409, BLOCKED]);
+    expect((await getSetting(cookie)).json()).toEqual({ enabled: false });
+    expect(await settingAudits()).toEqual([{
+      action: "settings.auto_list.update_blocked", actor: "admin1",
+      detail: { requested: { enabled: true }, reason: "handshake_not_ready" },
+    }]);
+  });
+
+  it.fails("被擋之後 PUT enabled:false → 200，值為 false，不寫 update 稽核", async () => {
+    await start();
+    const cookie = await session("admin1", "pass-admin-1");
+    await putSetting(cookie, { enabled: true });
+    const off = await putSetting(cookie, { enabled: false });
+    expect([off.statusCode, off.json()]).toEqual([200, { enabled: false }]);
+    expect(await updates()).toEqual([]);
+  });
+
+  it.fails("順序：格式錯誤（400）與來源不符（403）都不寫 update_blocked", async () => {
+    await start();
+    const cookie = await session("admin1", "pass-admin-1");
+    expect((await putSetting(cookie, { enabled: true, extra: 1 })).statusCode).toBe(400);
+    expect((await putFrom(cookie, { origin: "https://evil.example" }, { enabled: true })).statusCode).toBe(403);
+    expect(await settingAudits()).toEqual([]);
+  });
+
+  it("關閉一律允許：未就緒時 DB 原為 true → PUT false 200，寫一筆 update", async () => {
+    await start();
+    const cookie = await session("admin1", "pass-admin-1");
+    await api!.db.query("UPDATE auto_list_settings SET enabled = TRUE");
+    const off = await putSetting(cookie, { enabled: false });
+    expect([off.statusCode, off.json()]).toEqual([200, { enabled: false }]);
+    expect(await updates()).toEqual([
+      { action: ACTION, actor: "admin1", detail: { before: { enabled: true }, after: { enabled: false } } },
+    ]);
+  });
+});
+
+describe("自動上榜測試覆寫只限 NODE_ENV=test（A 組領航員裁示，未經使用者確認）", () => {
+  const REFUSE = "自動上榜的測試覆寫（autoListEnabled、autoListHandshakeReady）只能在 NODE_ENV=test 使用，拒絕啟動";
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  /** 啟動成功就立刻關掉並回 "started"；失敗回錯誤訊息。 */
+  const boot = (extra: Partial<BuildAppOptions>) => buildApp({ databaseUrl: requireDatabaseUrl(), ...extra })
+    .then(async (a) => { await a.close(); return "started"; }, (e: unknown) => (e as Error).message);
+
+  it.fails("NODE_ENV 不是 test 時傳 autoListEnabled（true 或 false）→ 拒絕啟動，固定中文訊息", async () => {
+    for (const env of ["production", "development"]) {
+      vi.stubEnv("NODE_ENV", env);
+      for (const v of [true, false]) expect(await boot({ autoListEnabled: v }), `${env}/${v}`).toBe(REFUSE);
+    }
+  });
+
+  it.fails("NODE_ENV 不是 test 時傳三向交握就緒覆寫 → 拒絕啟動，固定中文訊息", async () => {
+    for (const env of ["production", "development"]) {
+      vi.stubEnv("NODE_ENV", env);
+      expect(await boot(READY), env).toBe(REFUSE);
+    }
+  });
+
+  it("對照：NODE_ENV=production 不傳覆寫 → 正常啟動；NODE_ENV=test 傳覆寫 → 正常啟動", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    expect(await boot({})).toBe("started");
+    vi.stubEnv("NODE_ENV", "test");
+    expect(await boot({ autoListEnabled: true, ...READY })).toBe("started");
   });
 });
