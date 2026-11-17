@@ -424,3 +424,58 @@ label {
   padding-left: 1.2em;
 }
 
+
+
+.review-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 12px;
+  margin-bottom: 8px;
+}
+
+.review-banner b {
+  font-size: 15px;
+}
+
+.review-queue h2 {
+  margin: 0 0 8px;
+}
+
+.review-table-wrap {
+  overflow-x: auto;
+}
+
+.review-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.review-table th,
+.review-table td {
+  text-align: left;
+  vertical-align: top;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text);
+}
+
+.review-table th {
+  color: var(--color-text-muted);
+  font-weight: 600;
+}
+
+.review-table .mono,
+.review-table .mono + p {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.review-actions {
+  white-space: nowrap;
+}
+
+.review-actions .btn {
+  min-height: 40px;
+  padding: 0 12px;
+  letter-spacing: 0;
+}

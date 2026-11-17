@@ -3,102 +3,86 @@ import { useAuth } from "../auth";
 import { isPendingExpired } from "../review/demoStore";
 import { formatPendingHits } from "../review/pendingHits";
 import { reviewSource } from "../review/reviewSource";
-import { DEFAULT_THRESHOLDS } from "../review/thresholds";
-import { ThresholdReadonly } from "../review/ThresholdReadonly";
-import {
-  REJECT_REASONS,
-  type PendingCandidate,
-  type RejectReason,
-} from "../review/types";
+import type { PendingCandidate } from "../review/types";
 
-function reasonFor(
-  map: ReadonlyMap<string, RejectReason>,
-  caseId: string,
-): RejectReason {
-  return map.get(caseId) ?? REJECT_REASONS[0];
+const CREATED_FMT = new Intl.DateTimeFormat("zh-TW", {
+  timeZone: "Asia/Taipei",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hour12: false,
+});
+
+function formatCreatedAt(iso: string): string {
+  const ms = Date.parse(iso);
+  return Number.isFinite(ms) ? CREATED_FMT.format(ms) : iso;
 }
 
 function PendingRow(props: {
   item: PendingCandidate;
   now: string;
-  reason: RejectReason;
-  onReason: (caseId: string, reason: RejectReason) => void;
   onApprove: (caseId: string) => void;
   onReject: (caseId: string) => void;
 }) {
-  const { item, now, reason, onReason, onApprove, onReject } = props;
+  const { item, now, onApprove, onReject } = props;
   const expired = isPendingExpired(item, now);
   return (
-    <li className="card">
-      <p>
-        {item.ip}（信心 {item.confidence}）
-      </p>
-      <p data-testid={`hits-${item.case_id}`}>{formatPendingHits(item)}</p>
-      {expired ? (
-        <p data-testid={`expired-${item.case_id}`} role="status">
-          already_expired：此項目已到期
-        </p>
-      ) : null}
-      <label>
-        退回理由
-        <select
-          data-testid={`reject-reason-${item.case_id}`}
-          value={reason}
-          onChange={(ev) => onReason(item.case_id, ev.target.value as RejectReason)}
+    <tr>
+      <td className="mono">{item.case_id}</td>
+      <td className="mono">{formatCreatedAt(item.created_at)}</td>
+      <td>
+        <span className="mono">{item.ip}</span>
+        <p data-testid={`hits-${item.case_id}`}>{formatPendingHits(item)}</p>
+      </td>
+      <td>尚未接線</td>
+      <td data-testid={`ai-reason-${item.case_id}`}>AI 尚未啟用</td>
+      <td className="mono">{item.confidence}</td>
+      <td>尚未接線</td>
+      <td>尚未接線</td>
+      <td className="review-actions">
+        {expired ? (
+          <p data-testid={`expired-${item.case_id}`} role="status">
+            already_expired：此項目已到期
+          </p>
+        ) : null}
+        <button
+          type="button"
+          className="btn btn-primary"
+          data-testid={`approve-${item.case_id}`}
+          onClick={() => onApprove(item.case_id)}
           disabled={expired}
         >
-          {REJECT_REASONS.map((r) => (
-            <option key={r} value={r}>
-              {r}
-            </option>
-          ))}
-        </select>
-      </label>{" "}
-      <button
-        type="button"
-        className="btn btn-primary"
-        data-testid={`approve-${item.case_id}`}
-        onClick={() => onApprove(item.case_id)}
-        disabled={expired}
-      >
-        核准
-      </button>{" "}
-      <button
-        type="button"
-        className="btn"
-        data-testid={`reject-${item.case_id}`}
-        onClick={() => onReject(item.case_id)}
-        disabled={expired}
-      >
-        退回
-      </button>
-    </li>
+          核准
+        </button>{" "}
+        <button
+          type="button"
+          className="btn"
+          data-testid={`reject-${item.case_id}`}
+          onClick={() => onReject(item.case_id)}
+          disabled={expired}
+        >
+          駁回
+        </button>
+      </td>
+    </tr>
   );
 }
 
-export function BlacklistReviewPage() {
+export function BlacklistReviewPage({ nowIso }: { nowIso?: string } = {}) {
   const { user } = useAuth();
   const [tick, setTick] = useState(0);
   const [message, setMessage] = useState<string | null>(null);
   const [items, setItems] = useState<PendingCandidate[]>([]);
-  const [thresholds, setThresholds] = useState(DEFAULT_THRESHOLDS);
-  const [reasons, setReasons] = useState<Map<string, RejectReason>>(() => new Map());
   const unreachable = reviewSource.isUnreachable();
-  const now = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+  const now = nowIso ?? new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
 
   useEffect(() => {
     let cancelled = false;
-    void (async () => {
-      const [pending, th] = await Promise.all([
-        reviewSource.listPending(),
-        reviewSource.getThresholds(),
-      ]);
+    void reviewSource.listPending().then((pending) => {
       if (cancelled) return;
       setItems(pending.ok ? pending.value : []);
-      if (th.ok) setThresholds(th.value);
-      if (!pending.ok) setMessage(pending.message);
-      else if (!th.ok) setMessage(th.message);
-    })();
+      setMessage(pending.ok ? null : pending.message);
+    });
     return () => {
       cancelled = true;
     };
@@ -125,7 +109,11 @@ export function BlacklistReviewPage() {
   return (
     <main>
       <h1>黑名單審核</h1>
-      <ThresholdReadonly value={thresholds} />
+      <p className="review-banner card">
+        <b>{items.length} 件待審</b>
+        <span>信心範圍尚未接線。</span>
+        <span data-testid="review-ai-status">AI 尚未啟用</span>
+      </p>
       {message ? (
         <p role="status" data-testid="review-status">
           {message}
@@ -145,10 +133,6 @@ export function BlacklistReviewPage() {
         items={items}
         hidden={unreachable}
         now={now}
-        reasons={reasons}
-        onReason={(caseId, reason) =>
-          setReasons((prev) => new Map(prev).set(caseId, reason))
-        }
         onApprove={(id) => void onApprove(id)}
         onReject={(id) => void onReject(id)}
       />
@@ -160,25 +144,41 @@ function PendingList(props: {
   items: PendingCandidate[];
   hidden: boolean;
   now: string;
-  reasons: ReadonlyMap<string, RejectReason>;
-  onReason: (caseId: string, reason: RejectReason) => void;
   onApprove: (caseId: string) => void;
   onReject: (caseId: string) => void;
 }) {
   if (props.hidden || props.items.length === 0) return null;
   return (
-    <ul data-testid="blacklist-pending-list">
-      {props.items.map((item) => (
-        <PendingRow
-          key={item.case_id}
-          item={item}
-          now={props.now}
-          reason={reasonFor(props.reasons, item.case_id)}
-          onReason={props.onReason}
-          onApprove={props.onApprove}
-          onReject={props.onReject}
-        />
-      ))}
-    </ul>
+    <section className="card review-queue">
+      <h2>待審佇列</h2>
+      <div className="review-table-wrap">
+        <table data-testid="blacklist-pending-list" className="review-table">
+          <thead>
+            <tr>
+              <th>案件</th>
+              <th>成案</th>
+              <th>來源</th>
+              <th>目的端</th>
+              <th>手法與 AI 理由</th>
+              <th>信心</th>
+              <th>建議封鎖</th>
+              <th>期間</th>
+              <th>動作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {props.items.map((row) => (
+              <PendingRow
+                key={row.case_id}
+                item={row}
+                now={props.now}
+                onApprove={props.onApprove}
+                onReject={props.onReject}
+              />
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
   );
 }
