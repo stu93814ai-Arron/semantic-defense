@@ -13,7 +13,6 @@ import type {
   AuditRecord,
   ListedEntry,
   PendingCandidate,
-  RejectReason,
   SourceFilter,
 } from "./types";
 
@@ -133,7 +132,7 @@ export function reviewApprove(caseId: string, actorId: string) {
 export function reviewReject(
   caseId: string,
   actorId: string,
-  reason: RejectReason | string,
+  reason: string,
 ) {
   if (backendUnreachable) {
     return {

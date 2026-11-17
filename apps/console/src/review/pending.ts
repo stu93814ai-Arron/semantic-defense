@@ -4,9 +4,11 @@ import type {
   Decision,
   ListedEntry,
   PendingCandidate,
-  RejectReason,
 } from "./types";
-import { REJECT_REASONS } from "./types";
+
+/** 本地 demo 退回仍限三類理由；已不從 types 匯出。 */
+const REJECT_REASONS = ["正常業務", "範圍過寬", "對象錯誤"] as const;
+type RejectReason = (typeof REJECT_REASONS)[number];
 
 export type ApproveContext = {
   actorId: string;

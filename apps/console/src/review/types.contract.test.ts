@@ -5,6 +5,7 @@ import {
   PendingCandidateSchema,
 } from "@semantic-defense/contracts/browser";
 import type { AllowlistItem, ListedEntry, PendingCandidate } from "./types";
+import * as types from "./types";
 
 describe("console 類型對齊 contracts（欄位形狀）", () => {
   it("PendingCandidate 核心欄位可過 PendingCandidateSchema", () => {
@@ -55,5 +56,10 @@ describe("console 類型對齊 contracts（欄位形狀）", () => {
       expires_at: null,
     };
     expect(AllowlistEntrySchema.safeParse(a).success).toBe(true);
+  });
+
+  it("不匯出已不再使用的 REJECT_REASONS", () => {
+    expect("REJECT_REASONS" in types).toBe(false);
+    expect("RejectReason" in types).toBe(false);
   });
 });

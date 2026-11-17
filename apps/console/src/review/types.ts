@@ -34,14 +34,6 @@ export type AllowlistItem = Omit<AllowlistEntry, "entry_id" | "created_by"> & {
 
 export type SourceFilter = "all" | "auto" | "manual";
 
-/** 退回理由三類（V2-DECISIONS O7／§2）；非自由文字，不走 Reason schema。 */
-export const REJECT_REASONS = [
-  "正常業務",
-  "範圍過寬",
-  "對象錯誤",
-] as const;
-export type RejectReason = (typeof REJECT_REASONS)[number];
-
 export type AuditRecord = {
   action: string;
   actor_id: string;
