@@ -1,6 +1,6 @@
 import { accessFor, titleFor, type SessionUser } from "../roles";
 
-/** 頂部頁籤。項目來自既有靜態路由，不含尚未建立的儀表板。 */
+/** 頂部頁籤。項目來自既有靜態路由；儀表板僅值班可見。 */
 export type NavTab = {
   id: string;
   label: string;
@@ -24,6 +24,7 @@ export type NavGroup = {
 };
 
 export const NAV_TABS: readonly NavTab[] = [
+  { id: "dashboard", label: "儀表板" },
   { id: "review", label: "封鎖與審核" },
   { id: "health", label: "告警與健康" },
   { id: "judgments", label: "判斷紀錄" },
@@ -32,6 +33,7 @@ export const NAV_TABS: readonly NavTab[] = [
 
 /** 值勤與管理面分組；參數路由不列入，由前綴對應頁籤。 */
 export const NAV_ITEMS: readonly NavItem[] = [
+  { path: "/dashboard", tabId: "dashboard", group: "監看" },
   { path: "/blacklist/review", tabId: "review", group: "封鎖" },
   { path: "/blacklist", tabId: "review", group: "封鎖" },
   { path: "/whitelist", tabId: "review", group: "存取例外" },

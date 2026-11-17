@@ -27,6 +27,7 @@ const KNOWN_PATHS = new Set([
   "/audit",
   "/versions",
   "/health",
+  "/dashboard",
 ]);
 
 describe("NAV_ITEMS", () => {
@@ -51,6 +52,8 @@ describe("matchNavItem／activeTabId", () => {
     expect(activeTabId("/judgments/history", op)).toBe("judgments");
     expect(matchNavItem("/health")).toBe("/health");
     expect(activeTabId("/health", admin)).toBe("health");
+    expect(matchNavItem("/dashboard")).toBe("/dashboard");
+    expect(activeTabId("/dashboard", op)).toBe("dashboard");
   });
 
   it("參數路徑命中最長前綴；/apps/:id/map 只亮應用頁籤", () => {
@@ -62,6 +65,8 @@ describe("matchNavItem／activeTabId", () => {
 
   it("越權或未知路徑不亮頁籤", () => {
     expect(activeTabId("/health", op)).toBeUndefined();
+    expect(activeTabId("/dashboard", admin)).toBeUndefined();
+    expect(activeTabId("/dashboard", owner)).toBeUndefined();
     expect(activeTabId("/judgments", admin)).toBeUndefined();
     expect(activeTabId("/login", op)).toBeUndefined();
     expect(matchNavItem("/no-such")).toBeUndefined();
@@ -72,13 +77,15 @@ describe("依角色過濾可見項目（前端顯示，非授權）", () => {
   it("operator 只見值勤路由，不見管理面或應用", () => {
     const paths = visibleItemsFor(op).map((i) => i.path);
     expect(paths).toEqual([
+      "/dashboard",
       "/blacklist/review",
       "/blacklist",
       "/judgments",
       "/judgments/history",
       "/constraints",
     ]);
-    expect(visibleTabsFor(op).map((t) => t.id)).toEqual(["review", "judgments"]);
+    expect(visibleTabsFor(op).map((t) => t.id)).toEqual(["dashboard", "review", "judgments"]);
+    expect(tabHref("dashboard", op)).toBe("/dashboard");
     expect(tabHref("review", op)).toBe("/blacklist/review");
     expect(tabHref("judgments", op)).toBe("/judgments");
   });
@@ -93,8 +100,10 @@ describe("依角色過濾可見項目（前端顯示，非授權）", () => {
       "/admin/users",
     ]);
     expect(visibleTabsFor(admin).map((t) => t.id)).toEqual(["review", "health"]);
+    expect(visibleItemsFor(admin).some((i) => i.path === "/dashboard")).toBe(false);
     expect(visibleItemsFor(owner).map((i) => i.path)).toEqual(["/apps/new"]);
     expect(visibleTabsFor(owner).map((t) => t.id)).toEqual(["apps"]);
+    expect(visibleItemsFor(owner).some((i) => i.path === "/dashboard")).toBe(false);
     expect(tabHref("apps", owner)).toBe("/apps/new");
   });
 

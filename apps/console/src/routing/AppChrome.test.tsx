@@ -59,6 +59,30 @@ describe("AppChrome 登入頁不掛外框", () => {
   });
 });
 
+describe("AppChrome 儀表板可見性", () => {
+  it("operator 在儀表板頁籤與監看側欄為現行；不含 AI 項目", async () => {
+    await renderApp("/dashboard", op);
+    expect(within(tabs()).getByRole("link", { name: "儀表板" }).getAttribute("aria-current")).toBe(
+      "page",
+    );
+    expect(
+      within(tree()).getByRole("link", { name: titleFor("/dashboard") }).getAttribute("aria-current"),
+    ).toBe("page");
+    expect(within(tree()).queryByRole("link", { name: "AI 判斷" })).toBeNull();
+    expect(within(tree()).queryByRole("link", { name: "威脅紀錄" })).toBeNull();
+  });
+
+  it("platform_admin 與 app_owner 看不見儀表板頁籤，直接進入為無權限", async () => {
+    await renderApp("/dashboard", admin);
+    expect(within(tabs()).queryByRole("link", { name: "儀表板" })).toBeNull();
+    expect(screen.getByTestId("no-permission")).toBeTruthy();
+    cleanup();
+    await renderApp("/dashboard", owner);
+    expect(within(tabs()).queryByRole("link", { name: "儀表板" })).toBeNull();
+    expect(screen.getByTestId("no-permission")).toBeTruthy();
+  });
+});
+
 describe("AppChrome 頁籤與側欄來自路由", () => {
   it("operator 在待判斷可見值勤頁籤，現行項目為待判斷", async () => {
     await renderApp("/judgments", op);
@@ -68,7 +92,7 @@ describe("AppChrome 頁籤與側欄來自路由", () => {
     expect(within(tabs()).getByRole("link", { name: "封鎖與審核" })).toBeTruthy();
     expect(within(tabs()).queryByRole("link", { name: "告警與健康" })).toBeNull();
     expect(within(tabs()).queryByRole("link", { name: "應用" })).toBeNull();
-    expect(within(tabs()).queryByRole("link", { name: "儀表板" })).toBeNull();
+    expect(within(tabs()).getByRole("link", { name: "儀表板" }).getAttribute("aria-current")).toBeNull();
     expect(
       within(tree()).getByRole("link", { name: titleFor("/judgments") }).getAttribute("aria-current"),
     ).toBe("page");
@@ -77,6 +101,7 @@ describe("AppChrome 頁籤與側欄來自路由", () => {
     expect(within(tree()).queryByRole("link", { name: titleFor("/whitelist") })).toBeNull();
   });
 
+
   it("platform_admin 在健康頁只見管理面；app_owner 只見應用", async () => {
     await renderApp("/health", admin);
     expect(within(tabs()).getByRole("link", { name: "告警與健康" }).getAttribute("aria-current")).toBe(
@@ -84,6 +109,7 @@ describe("AppChrome 頁籤與側欄來自路由", () => {
     );
     expect(within(tabs()).getByRole("link", { name: "封鎖與審核" })).toBeTruthy();
     expect(within(tabs()).queryByRole("link", { name: "判斷紀錄" })).toBeNull();
+    expect(within(tabs()).queryByRole("link", { name: "儀表板" })).toBeNull();
     expect(
       within(tree()).getByRole("link", { name: titleFor("/health") }).getAttribute("aria-current"),
     ).toBe("page");

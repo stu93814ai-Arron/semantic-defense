@@ -11,7 +11,8 @@ function isOperatorPath(path: string): boolean {
     path === "/constraints" ||
     path.startsWith("/constraints/") ||
     path === "/blacklist" ||
-    path.startsWith("/blacklist/")
+    path.startsWith("/blacklist/") ||
+    path === "/dashboard"
   );
 }
 
@@ -53,6 +54,7 @@ const TITLES: Record<string, string> = {
   "/blacklist/review": "黑名單審核",
   "/blacklist": "黑名單撤回",
   "/whitelist": "白名單",
+  "/dashboard": "儀表板",
 };
 
 function staticTitle(path: string): string | undefined {

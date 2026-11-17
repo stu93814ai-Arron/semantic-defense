@@ -31,6 +31,7 @@ describe("accessFor", () => {
     expect(accessFor("/constraints/x", op)).toBe("ok");
     expect(accessFor("/blacklist", op)).toBe("ok");
     expect(accessFor("/blacklist/review", op)).toBe("ok");
+    expect(accessFor("/dashboard", op)).toBe("ok");
     expect(accessFor("/whitelist", op)).toBe("deny");
     expect(accessFor("/apps/new", op)).toBe("deny");
     expect(accessFor("/admin/users", op)).toBe("deny");
@@ -40,6 +41,7 @@ describe("accessFor", () => {
     expect(accessFor("/apps/new", owner)).toBe("ok");
     expect(accessFor("/apps/app-alpha/map", owner)).toBe("ok");
     expect(accessFor("/judgments", owner)).toBe("deny");
+    expect(accessFor("/dashboard", owner)).toBe("deny");
     expect(accessFor("/admin/users", owner)).toBe("deny");
   });
 
@@ -50,6 +52,7 @@ describe("accessFor", () => {
     expect(accessFor("/health", admin)).toBe("ok");
     expect(accessFor("/whitelist", admin)).toBe("ok");
     expect(accessFor("/blacklist", admin)).toBe("deny");
+    expect(accessFor("/dashboard", admin)).toBe("deny");
     expect(accessFor("/judgments", admin)).toBe("deny");
     expect(accessFor("/apps/new", admin)).toBe("deny");
   });
@@ -57,6 +60,15 @@ describe("accessFor", () => {
   it("未知路徑 deny", () => {
     expect(accessFor("/nope", op)).toBe("deny");
     expect(accessFor("/", admin)).toBe("deny");
+  });
+});
+
+describe("儀表板僅值班可見", () => {
+  it("operator 可進；platform_admin 與 app_owner 為 deny", () => {
+    expect(accessFor("/dashboard", op)).toBe("ok");
+    expect(accessFor("/dashboard", admin)).toBe("deny");
+    expect(accessFor("/dashboard", owner)).toBe("deny");
+    expect(titleFor("/dashboard")).toBe("儀表板");
   });
 });
 
@@ -73,6 +85,7 @@ describe("titleFor / isAppMapPath", () => {
     expect(titleFor("/blacklist/review")).toBe("黑名單審核");
     expect(titleFor("/blacklist")).toBe("黑名單撤回");
     expect(titleFor("/whitelist")).toBe("白名單");
+    expect(titleFor("/dashboard")).toBe("儀表板");
     expect(titleFor("/apps/app-alpha/map")).toBe("應用地圖");
     expect(titleFor("/judgments/case-1")).toBe("單一判斷");
     expect(titleFor("/unknown")).toBe("頁面");

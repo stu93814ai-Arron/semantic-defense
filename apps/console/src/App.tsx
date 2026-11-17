@@ -8,6 +8,7 @@ import { EmptyDataPage } from "./pages/EmptyDataPage";
 import { LoginPage } from "./pages/LoginPage";
 import { NoPermissionPage } from "./pages/NoPermissionPage";
 import { WhitelistPage } from "./pages/WhitelistPage";
+import { DashboardPage } from "./pages/DashboardPage";
 import { HealthPage } from "./pages/HealthPage";
 import { AppChrome } from "./routing/AppChrome";
 import { ThemeSwitch } from "./theme/ThemeSwitch";
@@ -122,6 +123,14 @@ export function App() {
           <Route path="/constraints" element={<ProtectedRoute hint="尚無生效限制" />} />
           <Route path="/audit" element={<ProtectedRoute hint="尚無稽核紀錄" />} />
           <Route path="/versions" element={<ProtectedRoute hint="尚無版本資料" />} />
+          <Route
+            path="/dashboard"
+            element={
+              <ProtectedRoute>
+                <DashboardPage />
+              </ProtectedRoute>
+            }
+          />
           <Route path="/health" element={<ProtectedRoute><HealthPage /></ProtectedRoute>} />
           <Route path="*" element={<NoPermissionPage />} />
         </Route>
