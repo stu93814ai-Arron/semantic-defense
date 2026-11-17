@@ -5,7 +5,7 @@ import { ADMIN_API_PATHS } from "@semantic-defense/contracts";
 import type { ControlApi } from "./helpers/app.js";
 import { bootWithPhase2, requireLoginCookie } from "./helpers/boot-fixtures.js";
 import { cookieHeader } from "./helpers/session.js";
-import { DAY, MIN, T0, bootJudgeApp, flowEvent } from "./helpers/judge.js";
+import { AUTO_ON, DAY, MIN, T0, bootJudgeApp, flowEvent } from "./helpers/judge.js";
 import { runJudgeTick } from "../src/judge.js";
 import {
   LOCK_TEST_TIMEOUT_MS, lockGuardedUrl, waitShareWaiter,
@@ -171,7 +171,7 @@ describe("新增白名單與判定 tick 並行", () => {
     const admin = await prime();
     let status = 0;
     await runJudgeTick(app.db, T0, undefined, {
-      autoListEnabled: true,
+      ...AUTO_ON,
       beforeAutoList: async () => { status = (await postWl(admin, "64.0.113.0/24")).statusCode; },
     });
     expect(status).toBe(201);
@@ -185,7 +185,7 @@ describe("新增白名單與判定 tick 並行", () => {
     let waiter: number | null = null;
     let pending: ReturnType<typeof postWl> | undefined;
     await runJudgeTick(app.db, T0, undefined, {
-      autoListEnabled: true,
+      ...AUTO_ON,
       afterAllowlistShare: async () => {
         pending = postWl(admin, "64.0.113.0/24");
         waiter = await waitShareWaiter(app.db, 3000, "RowExclusiveLock");

@@ -286,6 +286,14 @@ describe("自動上榜測試覆寫只限 NODE_ENV=test（A 組領航員裁示，
     }
   });
 
+  it("NODE_ENV 未設定（stubEnv 移除）時傳任一覆寫 → 拒絕啟動，固定中文訊息", async () => {
+    vi.stubEnv("NODE_ENV", undefined);
+    expect(process.env.NODE_ENV).toBeUndefined();
+    for (const extra of [{ autoListEnabled: false }, { autoListEnabled: true }, READY]) {
+      expect(await boot(extra), JSON.stringify(extra)).toBe(REFUSE);
+    }
+  });
+
   it("對照：NODE_ENV=production 不傳覆寫 → 正常啟動；NODE_ENV=test 傳覆寫 → 正常啟動", async () => {
     vi.stubEnv("NODE_ENV", "production");
     expect(await boot({})).toBe("started");

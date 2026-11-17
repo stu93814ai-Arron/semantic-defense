@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import { insertFlowEvents } from "@semantic-defense/flow-store/testing";
 import { buildApp, type ControlApi } from "./helpers/app.js";
-import { DAY, MIN, T0, auditIndexDefAfterReinit, bootJudgeApp, flowEvent } from "./helpers/judge.js";
+import { DAY, MIN, T0, auditIndexDefAfterReinit, bootJudgeApp, flowEvent, AUTO_ON } from "./helpers/judge.js";
 import { AUTO_LIST_ENABLED_DEFAULT, runJudgeTick, type TickOpts } from "../src/judge.js";
 import { autoListInTx } from "../src/auto-blacklist.js";
 import { writeAutoBlocklistEntry } from "./helpers/auto-list.js";
@@ -41,7 +41,7 @@ const kases = async () => (await app.db.query<{ case_id: string; ip: string; sta
 const audits = async (action: string) => (await app.db.query<{ actor: string; sensor_id: string | null; detail: Record<string, unknown> }>(
   "SELECT actor, sensor_id, detail FROM audit_events WHERE action = $1 ORDER BY id", [action])).rows;
 /** 本檔測 E3.A 自動上榜：tick 一律明確開啟總開關（預設關，見檔尾 autoListEnabled 測試）。 */
-const ON = { autoListEnabled: true } as const;
+const ON = AUTO_ON; // 總開關開啟＋三向交握就緒（測試覆寫）
 const tick = (at = T0, opts: TickOpts = {}) => runJudgeTick(app.db, at, undefined, { ...ON, ...opts });
 /** 三個不同窗（T0−25m、−15m、−5m）的命中。 */
 const three = async (apps: [string, string, string], sensors: [string, string, string] = ["s-1", "s-1", "s-1"]) => {
@@ -244,7 +244,7 @@ describe("E3.A 熔斷（1 小時內 source=auto ≥ N 筆 → 退回人工審核
 
   it("tick 路徑：熔斷中 E3.A 成立 → auto_suppressed{breaker}、warn、case 仍 open；N 來自 buildApp autoBreakerPerHour", async () => {
     const warns: string[] = [];
-    await boot(undefined, { judgeIntervalMs: 20, autoBreakerPerHour: 3, autoListEnabled: true,
+    await boot(undefined, { judgeIntervalMs: 20, autoBreakerPerHour: 3, autoListEnabled: true, autoListHandshakeReady: true,
       logger: { level: "warn", stream: { write: (l: string) => { warns.push(l); } } } });
     await autos(3);
     await three(["app-1", "app-2", "app-1"]);
