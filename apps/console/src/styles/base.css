@@ -411,3 +411,16 @@ label {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
 }
+
+.dashboard-metric {
+  font-family: var(--font-sans);
+  font-size: 26px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.dashboard-listed-stats {
+  margin: 0;
+  padding-left: 1.2em;
+}
+
