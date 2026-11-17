@@ -2,6 +2,7 @@ import argon2 from "argon2";
 import { randomBytes } from "node:crypto";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import type { Db } from "./db.js";
+import { normalizeUsername } from "./users.js";
 
 export type Role = "operator" | "app_owner" | "platform_admin";
 export type SessionUser = { id: number; username: string; role: Role };
@@ -70,11 +71,12 @@ export class LoginLimiter {
   ) {}
 
   async blocked(u: string, ip: string): Promise<boolean> {
+    const username = normalizeUsername(u);
     const cutoff = this.now() - this.windowMs;
     const r = await this.db.query<{ failure_count: number; window_started_at: string | number }>(
       `SELECT failure_count, window_started_at FROM login_failures
        WHERE username = $1 AND ip = $2`,
-      [u, ip],
+      [username, ip],
     );
     const row = r.rows[0];
     if (!row) return false;
@@ -83,6 +85,7 @@ export class LoginLimiter {
   }
 
   async fail(u: string, ip: string): Promise<void> {
+    const username = normalizeUsername(u);
     const t = this.now();
     const cutoff = t - this.windowMs;
     await this.db.query(
@@ -97,14 +100,14 @@ export class LoginLimiter {
            WHEN login_failures.window_started_at <= $4 THEN $3
            ELSE login_failures.window_started_at
          END`,
-      [u, ip, t, cutoff],
+      [username, ip, t, cutoff],
     );
   }
 
   async reset(u: string, ip: string): Promise<void> {
     await this.db.query(
       "DELETE FROM login_failures WHERE username = $1 AND ip = $2",
-      [u, ip],
+      [normalizeUsername(u), ip],
     );
   }
 }

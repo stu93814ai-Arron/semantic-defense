@@ -46,7 +46,7 @@ describe("核准上限合併大小寫分身", () => {
   const logs = closeAfterEach(() => app);
   const { seedCase, approve, audits, caseRow } = pendingOps(() => app, logs);
 
-  it.fails("operator1 與 OPERATOR1 登入同一 id；上限 2 時第三次 429，approved_by 與稽核 actor 皆為 operator1", async () => {
+  it("operator1 與 OPERATOR1 登入同一 id；上限 2 時第三次 429，approved_by 與稽核 actor 皆為 operator1", async () => {
     app = await bootPending({ approvePerHour: 2 }, logs);
     const a = await login(app, { username: "operator1", password: "pass-operator-1" });
     const b = await login(app, { username: "OPERATOR1", password: "pass-operator-1" });
@@ -73,7 +73,7 @@ describe("核准上限合併大小寫分身", () => {
 });
 
 describe("建立帳號：正規化後撞名與保留前綴、字元集", () => {
-  it.fails("已有 operator1 時，Operator1 與全形 Ｏｐｅｒａｔｏｒ１ 都不得寫入", async () => {
+  it("已有 operator1 時，Operator1 與全形 Ｏｐｅｒａｔｏｒ１ 都不得寫入", async () => {
     const db = await openDb(requireDatabaseUrl());
     try {
       await truncatePhase2Tables(db);
@@ -97,7 +97,7 @@ describe("建立帳號：正規化後撞名與保留前綴、字元集", () => {
     }
   });
 
-  it.fails("正規化後以 system: 開頭的名稱一律拒絕，且不寫入", async () => {
+  it("正規化後以 system: 開頭的名稱一律拒絕，且不寫入", async () => {
     const db = await openDb(requireDatabaseUrl());
     try {
       await truncatePhase2Tables(db);
@@ -114,7 +114,7 @@ describe("建立帳號：正規化後撞名與保留前綴、字元集", () => {
     }
   });
 
-  it.fails("正規化後不符字元集的名稱拒絕建立", async () => {
+  it("正規化後不符字元集的名稱拒絕建立", async () => {
     const db = await openDb(requireDatabaseUrl());
     try {
       await truncatePhase2Tables(db);
@@ -136,7 +136,7 @@ describe("登入與失敗計數走正規化名稱", () => {
   let app: ControlApi;
   afterEach(async () => { if (app) await app.close(); });
 
-  it.fails("同一來源下大小寫分身的失敗次數合併", async () => {
+  it("同一來源下大小寫分身的失敗次數合併", async () => {
     app = await buildApp({
       idleTimeoutMs: 60_000,
       loginRateLimit: { maxFailures: 5, windowMs: 60_000 },
@@ -176,7 +176,7 @@ describe("登入與失敗計數走正規化名稱", () => {
 describe("舊庫啟動掃描", () => {
   afterEach(async () => { await restoreSchema(); });
 
-  it.fails("未正規化或正規化後碰撞的列會拒絕啟動，錯誤只列帳號名", async () => {
+  it("未正規化或正規化後碰撞的列會拒絕啟動，錯誤只列帳號名", async () => {
     const url = requireDatabaseUrl();
     const db = await openDb(url);
     await db.exec(`ALTER TABLE users DROP CONSTRAINT IF EXISTS ${USERS_CHECK}`);
@@ -204,7 +204,7 @@ describe("舊庫啟動掃描", () => {
     expect(msg).not.toMatch(/platform_admin|\bx\b/);
   });
 
-  it.fails("已是小寫加 trim 但字元集不合法的列也拒絕啟動，錯誤只列帳號名", async () => {
+  it("已是小寫加 trim 但字元集不合法的列也拒絕啟動，錯誤只列帳號名", async () => {
     const url = requireDatabaseUrl();
     const db = await openDb(url);
     await db.exec(`ALTER TABLE users DROP CONSTRAINT IF EXISTS ${USERS_CHECK}`);
@@ -266,7 +266,7 @@ async function catalogHas(url: string): Promise<{ index: boolean; check: boolean
 describe("啟動時 users 鎖：已具約束即略過，缺約束時 lock_timeout 內拒絕啟動", () => {
   afterEach(async () => { await restoreSchema(); });
 
-  it.fails("索引與 CHECK 都在時，users 被他連線鎖住仍於 2 秒內正常啟動", async () => {
+  it("索引與 CHECK 都在時，users 被他連線鎖住仍於 2 秒內正常啟動", async () => {
     const url = requireDatabaseUrl();
     await (await openDb(url)).close();
     expect(await catalogHas(url)).toEqual({ index: true, check: true });
@@ -282,7 +282,7 @@ describe("啟動時 users 鎖：已具約束即略過，缺約束時 lock_timeou
     }
   }, 20_000);
 
-  it.fails("缺索引且 users 被鎖住時，於 lock_timeout 內拒絕啟動並給出清楚訊息", async () => {
+  it("缺索引且 users 被鎖住時，於 lock_timeout 內拒絕啟動並給出清楚訊息", async () => {
     const url = requireDatabaseUrl();
     const db0 = await openDb(url);
     await db0.exec(`DROP INDEX IF EXISTS ${USERS_LOWER_IDX}`);

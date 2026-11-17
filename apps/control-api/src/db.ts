@@ -4,6 +4,7 @@ import { revokeContainedBlocks } from "./revoke-contained.js";
 import { writeAudit } from "./audit.js";
 import { ALLOWLIST_COLS, toAllowlistEntry, type AllowlistRow } from "./allowlist-row.js";
 import { ALERT_KINDS } from "./alert-outbox.js";
+import { hasUsernameCharset, normalizeUsername } from "./users.js";
 
 const ALERT_KIND_CHECK = "alert_outbox_kind_check";
 /** kind CHECK 一律由 ALERT_KINDS 產生；建表與既有庫升級共用。 */
@@ -359,6 +360,79 @@ function quoteIdent(name: string): string {
   return `"${name}"`;
 }
 
+const USERS_USERNAME_CHECK = "users_username_normalized";
+const USERS_USERNAME_LOWER_IDX = "users_username_lower";
+
+/**
+ * 啟動掃描（A 組領航員裁示，未經使用者確認）：加約束之前先查碰撞、未正規化與字元集不合法的列。
+ * 若有命中，拒絕啟動；錯誤只列涉及的帳號名稱。不做回填。
+ */
+async function assertUsernamesNormalized(q: Queryable): Promise<void> {
+  const r = await q.query<{ username: string }>("SELECT username FROM users");
+  const involved = new Set<string>();
+  const groups = new Map<string, string[]>();
+  for (const row of r.rows) {
+    const n = normalizeUsername(row.username);
+    if (row.username !== n || !hasUsernameCharset(row.username)) involved.add(row.username);
+    const g = groups.get(n) ?? [];
+    g.push(row.username);
+    groups.set(n, g);
+  }
+  for (const g of groups.values()) {
+    if (g.length >= 2) for (const name of g) involved.add(name);
+  }
+  if (involved.size === 0) return;
+  throw new Error(`帳號名稱未正規化、發生碰撞或字元集不符，請手動修正後再啟動：${[...involved].sort().join("、")}`);
+}
+
+async function usernameConstraintsPresent(q: Queryable): Promise<{ index: boolean; check: boolean }> {
+  const idx = await q.query(
+    "SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND tablename = 'users' AND indexname = $1",
+    [USERS_USERNAME_LOWER_IDX],
+  );
+  const chk = await q.query(
+    `SELECT 1 FROM pg_constraint c
+     JOIN pg_class t ON t.oid = c.conrelid
+     JOIN pg_namespace n ON n.oid = t.relnamespace
+     WHERE n.nspname = current_schema() AND t.relname = 'users' AND c.conname = $1`,
+    [USERS_USERNAME_CHECK],
+  );
+  return { index: idx.rows.length > 0, check: chk.rows.length > 0 };
+}
+
+const USERS_LOCK_FAILED = "無法在時限內取得帳號資料表的鎖，已拒絕啟動；請確認沒有長時間交易佔用帳號資料表後再重試";
+
+/**
+ * A 組領航員裁示（未經使用者確認）：先查目錄（不取 users 的鎖）；唯一索引與 CHECK 都在就整段略過。
+ * 缺任一項才開一個短交易：lock_timeout 5s、LOCK users IN SHARE ROW EXCLUSIVE MODE，
+ * 同交易內掃描後建索引與 CHECK。取不到鎖即拒絕啟動（fail-closed），不無限等待。
+ */
+async function ensureUsernameNormalized(q: Queryable): Promise<void> {
+  const present = await usernameConstraintsPresent(q);
+  if (present.index && present.check) return;
+  await q.query("BEGIN");
+  try {
+    await q.query("SET LOCAL lock_timeout = '5s'");
+    try {
+      await q.query("LOCK TABLE users IN SHARE ROW EXCLUSIVE MODE");
+    } catch (err) {
+      if ((err as { code?: string }).code === "55P03") throw new Error(USERS_LOCK_FAILED);
+      throw err;
+    }
+    await assertUsernamesNormalized(q);
+    await q.query(`CREATE UNIQUE INDEX IF NOT EXISTS ${USERS_USERNAME_LOWER_IDX} ON users (lower(username))`);
+    if (!(await usernameConstraintsPresent(q)).check) {
+      await q.query(
+        `ALTER TABLE users ADD CONSTRAINT ${USERS_USERNAME_CHECK} CHECK (username = lower(trim(username)))`,
+      );
+    }
+    await q.query("COMMIT");
+  } catch (err) {
+    try { await q.query("ROLLBACK"); } catch { /* 仍拋原錯 */ }
+    throw err;
+  }
+}
+
 async function migrate(client: pg.PoolClient, now: () => number, log?: SeedLog): Promise<void> {
 
   await client.query("SELECT pg_advisory_lock($1)", [SCHEMA_LOCK]);
@@ -366,6 +440,7 @@ async function migrate(client: pg.PoolClient, now: () => number, log?: SeedLog):
     for (const sql of SCHEMA_STATEMENTS) {
       await client.query(sql);
     }
+    await ensureUsernameNormalized(client);
     await ensureAlertKindCheck(client);
     await seedCriticalAllowlist(client, now, log);
   } finally {
