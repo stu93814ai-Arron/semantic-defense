@@ -532,3 +532,105 @@ label {
 [data-testid="health-alert-feed"] h2 {
   margin: 0 0 8px;
 }
+
+
+/* 登入頁：對開木紋品牌＋表單；色彩隨北歐／義式 token 切換。 */
+main.login-page {
+  max-width: none;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+  display: flex;
+}
+
+.login-page__brand {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: var(--space-8) var(--space-8) var(--space-9);
+  color: var(--color-on-wood);
+  background:
+    var(--texture-wood),
+    linear-gradient(180deg, var(--color-wood-from), var(--color-wood-to));
+}
+
+.login-page__product,
+.login-page__tagline {
+  font-family: var(--font-serif);
+  font-weight: var(--font-title-weight);
+  margin: 0;
+  letter-spacing: 0.03em;
+  color: var(--color-on-wood);
+}
+
+.login-page__product {
+  font-size: 26px;
+  line-height: 1.2;
+}
+
+.login-page__tagline {
+  font-size: clamp(32px, 4vw, 52px);
+  line-height: 1.2;
+  margin: 0 0 var(--space-4);
+}
+
+.login-page__on-wood {
+  color: var(--color-on-wood-muted);
+  margin: var(--space-2) 0 0;
+}
+
+.login-page__panel {
+  width: min(620px, 100%);
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-8) var(--space-6);
+}
+
+.login-page__form-wrap {
+  width: min(400px, 100%);
+}
+
+.login-page__form-wrap h1 {
+  font-size: var(--text-title);
+  line-height: 1.15;
+  margin: var(--space-1) 0 var(--space-2);
+}
+
+.login-page__lead {
+  color: var(--color-text-muted);
+  margin: 0 0 var(--space-5);
+  line-height: 1.7;
+}
+
+.login-page__timeout {
+  margin: 0 0 var(--space-5);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--color-warning);
+  border-radius: var(--radius-md);
+  color: var(--color-warning);
+  background: color-mix(in srgb, var(--color-warning) 8%, var(--color-surface));
+}
+
+.login-page__submit {
+  width: 100%;
+}
+
+@media (max-width: 800px) {
+  main.login-page {
+    flex-direction: column;
+  }
+
+  .login-page__brand {
+    min-height: auto;
+    padding: var(--space-6);
+  }
+
+  .login-page__panel {
+    width: 100%;
+  }
+}
