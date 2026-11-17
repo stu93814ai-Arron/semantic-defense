@@ -14,6 +14,7 @@ import { registerThresholdRoutes } from "./thresholds.js";
 import { registerWhitelistRoutes } from "./whitelist.js";
 import { registerBlacklistRoutes } from "./blacklist.js";
 import { registerPendingRoutes } from "./pending.js";
+import { hasUsernameCharset, normalizeUsername } from "./users.js";
 import { badJsonError, installErrorHandler, safeErr, withSafeReqLog } from "./errors.js";
 import { type TickOpts } from "./judge.js";
 import { alertHealthCounts, deliverDueAlerts, enabledAlertChannels, type AlertChannel, type AlertSender } from "./alert-outbox.js";
@@ -86,9 +87,12 @@ type Clock = () => number;
 async function verifyCredentials(
   db: Db, username: string, password: string,
 ): Promise<number | undefined> {
-  const r = await db.query<{ id: number; password_hash: string }>(
-    "SELECT id, password_hash FROM users WHERE username = $1", [username],
-  );
+  const norm = normalizeUsername(username);
+  const r = hasUsernameCharset(norm)
+    ? await db.query<{ id: number; password_hash: string }>(
+      "SELECT id, password_hash FROM users WHERE username = $1", [norm],
+    )
+    : { rows: [] as Array<{ id: number; password_hash: string }> };
   const row = r.rows[0];
   const hash = row?.password_hash ?? (await getDummyHash());
   const ok = (await argon2.verify(hash, password).catch(() => false)) && !!row;
