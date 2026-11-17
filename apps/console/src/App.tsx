@@ -10,6 +10,7 @@ import { NoPermissionPage } from "./pages/NoPermissionPage";
 import { WhitelistPage } from "./pages/WhitelistPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { HealthPage } from "./pages/HealthPage";
+import { JudgmentDetailPage } from "./pages/JudgmentDetailPage";
 import { AppChrome } from "./routing/AppChrome";
 import { ThemeSwitch } from "./theme/ThemeSwitch";
 import { apiGet } from "./api";
@@ -119,7 +120,7 @@ export function App() {
           <Route path="/apps/:appId/map" element={<ProtectedRoute hint="尚無地圖資料" />} />
           <Route path="/judgments" element={<ProtectedRoute hint="尚無待判斷案件" />} />
           <Route path="/judgments/history" element={<ProtectedRoute hint="尚無判斷紀錄" />} />
-          <Route path="/judgments/:caseId" element={<ProtectedRoute hint="尚無此案件資料" />} />
+          <Route path="/judgments/:caseId" element={<ProtectedRoute><JudgmentDetailPage /></ProtectedRoute>} />
           <Route path="/constraints" element={<ProtectedRoute hint="尚無生效限制" />} />
           <Route path="/audit" element={<ProtectedRoute hint="尚無稽核紀錄" />} />
           <Route path="/versions" element={<ProtectedRoute hint="尚無版本資料" />} />

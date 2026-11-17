@@ -634,3 +634,51 @@ main.login-page {
     width: 100%;
   }
 }
+
+
+/* 案件詳情：對開連線事實與 AI 分析；數值未接線時不填示範資料。 */
+.case-detail__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: stretch;
+  min-height: 0;
+}
+
+.case-detail__facts,
+.case-detail__ai {
+  flex: 1 1 280px;
+  min-width: 0;
+}
+
+.case-detail__facts h2,
+.case-detail__ai h2 {
+  margin: 0 0 8px;
+}
+
+.case-detail__ai {
+  box-shadow: inset 4px 0 0 var(--color-info);
+}
+
+.case-detail__fact {
+  display: flex;
+  gap: 12px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.case-detail__fact:last-child {
+  border-bottom: 0;
+}
+
+.case-detail__k {
+  width: 92px;
+  flex: none;
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.case-detail__v {
+  flex: 1;
+  min-width: 0;
+}
