@@ -2,19 +2,11 @@ import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { apiGet } from "../api";
 import { titleFor } from "../roles";
+import { isJudgmentCaseId } from "../routing/safeSegment";
 
 const UNREACHABLE_MESSAGE = "後端無法連線，請稍後再試";
 const EMPTY_HINT = "尚無此案件資料";
 const MESSAGE_MAX = 200;
-
-/** 契約沒有 GET /api/judgments/:id 的專用編號格式；待審 case_id 的 uuid 不適用（e2e 為 case-fixture-1）。
- *  字元集對齊契約共用 Id（A–Z、a–z、0–9、_ . : -），長度改為上限 64。 */
-export const JUDGMENT_CASE_ID_MAX = 64;
-const JUDGMENT_CASE_ID = /^[A-Za-z0-9_.:-]{1,64}$/;
-
-export function isJudgmentCaseId(value: string): boolean {
-  return JUDGMENT_CASE_ID.test(value);
-}
 
 const FACT_LABELS = ["來源", "目的端", "時間窗", "連線數", "間隔", "上傳／下載", "目的變化"] as const;
 

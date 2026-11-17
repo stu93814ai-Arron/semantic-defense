@@ -24,15 +24,24 @@ describe("probeExact / probeUrl", () => {
     expect(probeUrl("/unknown")).toBeNull();
   });
 
-  it("動態路徑的參數一律 encodeURIComponent", () => {
-    const judgmentId = "id?x=1";
+  it("動態路徑的合法參數一律 encodeURIComponent", () => {
+    const judgmentId = "id:1";
     expect(probeUrl(`/judgments/${judgmentId}`)).toBe(
       `/api/judgments/${encodeURIComponent(judgmentId)}`,
     );
-    const appId = "app id";
+    const appId = "app:alpha";
     expect(probeUrl(`/apps/${appId}/map`)).toBe(
       `/api/apps/${encodeURIComponent(appId)}/map`,
     );
+  });
+
+  it("不合規則的動態段（含「.」「..」「.x」）不探測", () => {
+    for (const id of [".", "..", ".x"]) {
+      expect(probeUrl(`/judgments/${id}`)).toBeNull();
+      expect(probeUrl(`/apps/${id}/map`)).toBeNull();
+    }
+    expect(probeUrl("/judgments/id?x=1")).toBeNull();
+    expect(probeUrl("/apps/app id/map")).toBeNull();
   });
 });
 

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { titleFor } from "../roles";
+import { isJudgmentCaseId } from "../routing/safeSegment";
 import { JudgmentDetailPage } from "./JudgmentDetailPage";
 
 vi.mock("../api", () => ({
@@ -55,6 +56,30 @@ describe("JudgmentDetailPage 案件編號驗證", () => {
   it("不合法或超長 caseId 不發請求、顯示空狀態，且不把原文寫入眉題", async () => {
     const cases = ["case/id?x=1", "a".repeat(65), "case id", "../etc", "id<script>"];
     for (const caseId of cases) {
+      cleanup();
+      vi.clearAllMocks();
+      stub(404, "查無案件");
+      renderPage(`/judgments/${encodeURIComponent(caseId)}`);
+      await waitFor(() => expect(screen.getByTestId("empty-state")).toBeTruthy());
+      expect(screen.getByTestId("empty-state").textContent).toMatch(/尚無此案件資料/);
+      expect(mockedGet).not.toHaveBeenCalled();
+      const page = (document.querySelector("main.case-detail") as HTMLElement | null)?.textContent ?? "";
+      expect(page).toMatch(/^\s*待判斷/);
+      expect(page).not.toContain(caseId);
+      expect(page).not.toMatch(/待判斷 \/ /);
+    }
+  });
+
+  it("isJudgmentCaseId 拒收「.」「..」「.x」，合法編號仍通過", () => {
+    expect(isJudgmentCaseId(".")).toBe(false);
+    expect(isJudgmentCaseId("..")).toBe(false);
+    expect(isJudgmentCaseId(".x")).toBe(false);
+    expect(isJudgmentCaseId("case-fixture-1")).toBe(true);
+    expect(isJudgmentCaseId("a")).toBe(true);
+  });
+
+  it("「.」「..」「.x」不發請求、顯示尚無此案件資料，且不把原文寫入頁面", async () => {
+    for (const caseId of [".", "..", ".x"]) {
       cleanup();
       vi.clearAllMocks();
       stub(404, "查無案件");
@@ -177,8 +202,34 @@ describe("JudgmentDetailPage 版面占位", () => {
   });
 });
 
+function settledMainHtml(): string {
+  const main = document.querySelector("main.case-detail") as HTMLElement | null;
+  if (!main) throw new Error("missing main.case-detail");
+  const clone = main.cloneNode(true) as HTMLElement;
+  clone.querySelectorAll('[data-testid="empty-state"]').forEach((el) => el.remove());
+  return (clone.textContent ?? "").replace(/\s+/g, " ").trim();
+}
+
+function mainChildFingerprint(): string[] {
+  const main = document.querySelector("main.case-detail") as HTMLElement | null;
+  if (!main) throw new Error("missing main.case-detail");
+  return Array.from(main.children)
+    .filter((el) => el.getAttribute("data-testid") !== "empty-state")
+    .map((el) => `${el.tagName}:${el.className}`);
+}
+
 describe("JudgmentDetailPage 2xx 不顯示判決或狀態", () => {
-  it("即使後端帶入 verdict／status 欄位，頁面也不顯示任何判決或狀態", async () => {
+  it("2xx 不渲染 StatusBanner，無 alert／status，頭卡與 404 除去空狀態後完全相同", async () => {
+    const path = "/judgments/abc";
+
+    stub(404, "查無案件");
+    renderPage(path);
+    await waitFor(() => expect(screen.getByTestId("empty-state")).toBeTruthy());
+    const emptyText = settledMainHtml();
+    const emptyFingerprint = mainChildFingerprint();
+
+    cleanup();
+    vi.clearAllMocks();
     mockedGet.mockResolvedValue({
       status: 200,
       data: {
@@ -187,16 +238,22 @@ describe("JudgmentDetailPage 2xx 不顯示判決或狀態", () => {
         decision: "核准",
         state: "待審",
         confidence: 0.87,
+        label: "已判定：惡意",
       },
     });
-    renderPage("/judgments/abc");
-    await waitFor(() => expect(mockedGet).toHaveBeenCalled());
-    expect(screen.queryByTestId("empty-state")).toBeNull();
+    renderPage(path);
+    await waitFor(() => {
+      expect(mockedGet).toHaveBeenCalled();
+      expect(screen.queryByText("載入中…")).toBeNull();
+    });
+
+    expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.queryByRole("status")).toBeNull();
-    expect(screen.queryByRole("button", { name: /核准|駁回/ })).toBeNull();
-    const page = (document.querySelector("main.case-detail") as HTMLElement | null)?.textContent ?? "";
-    expect(page).not.toMatch(/待審|核准|駁回|判決|建議封鎖|信心|成案|自動上榜/);
-    expect(page).not.toMatch(/verdict|pending|block/i);
-    expect(page).not.toContain("0.87");
+    expect(screen.queryByTestId("empty-state")).toBeNull();
+    expect(screen.queryByText("載入中…")).toBeNull();
+    // StatusBanner 對 2xx 必須不渲染任何節點：main 子節點只剩眉題、標題與內容列
+    expect(mainChildFingerprint()).toEqual(["P:eyebrow", "H1:", "DIV:case-detail__row"]);
+    expect(mainChildFingerprint()).toEqual(emptyFingerprint);
+    expect(settledMainHtml()).toBe(emptyText);
   });
 });

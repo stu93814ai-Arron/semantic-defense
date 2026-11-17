@@ -1,4 +1,5 @@
 import { isAppMapPath } from "../roles";
+import { isJudgmentCaseId, isSafePathSegment } from "./safeSegment";
 
 export function probeExact(path: string): string | null {
   if (path === "/judgments" || path === "/judgments/history") return "/api/judgments";
@@ -15,11 +16,14 @@ export function probeUrl(path: string): string | null {
   const exact = probeExact(path);
   if (exact) return exact;
   if (/^\/judgments\/[^/]+$/.test(path)) {
-    return `/api/judgments/${encodeURIComponent(path.slice("/judgments/".length))}`;
+    const caseId = path.slice("/judgments/".length);
+    if (!isJudgmentCaseId(caseId)) return null;
+    return `/api/judgments/${encodeURIComponent(caseId)}`;
   }
   const m = /^\/apps\/([^/]+)\/map$/.exec(path);
   const appId = m?.[1];
-  return appId ? `/api/apps/${encodeURIComponent(appId)}/map` : null;
+  if (!appId || !isSafePathSegment(appId)) return null;
+  return `/api/apps/${encodeURIComponent(appId)}/map`;
 }
 
 /**
