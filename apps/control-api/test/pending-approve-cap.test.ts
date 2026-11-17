@@ -5,7 +5,9 @@ import type { ControlApi } from "./helpers/app.js";
 import { buildApp } from "./helpers/app.js";
 import { requireDatabaseUrl } from "./helpers/pg.js";
 import { LOCK_TEST_TIMEOUT_MS, holdAllowlistInsert, lockGuardedUrl } from "./helpers/locks.js";
-import { PENDING_IP_RE, PENDING_NOW as NOW, bootPending, closeAfterEach, pendingOps } from "./helpers/pending.js";
+import {
+  PENDING_IP_RE, PENDING_NOW as NOW, bootPending, closeAfterEach, pendingOps, seedManualEntries, type SeedManualOver,
+} from "./helpers/pending.js";
 import { APPROVE_CAP_MESSAGE, resolveApprovePerHour } from "../src/approve-guard.js";
 
 /** 核准上限（A 組領航員裁示，未經使用者確認）：每個 operator 滑動 1 小時內成功核准數達上限後回 429。 */
@@ -14,19 +16,7 @@ const logs = closeAfterEach(() => app);
 const { op, seedCase, approve, reject, caseRow, expectNoIp } = pendingOps(() => app, logs);
 const HOUR = 60 * 60_000;
 
-let seq = 0;
-/** 直接寫入 n 筆 entry（計數來源），IP 用 64.1.x.y 依序遞增，與案件 IP 不衝突。 */
-async function seedManual(n: number, over: { actor?: string; at?: number; source?: string } = {}): Promise<void> {
-  const at = over.at ?? NOW - 10 * 60_000;
-  await app.db.query(
-    `INSERT INTO blocklist_entries (entry_id, ip, source, confidence, case_id, created_at, expires_at, approved_by, approved_at)
-     SELECT gen_random_uuid(), '64.1.' || ((g + $5::int) / 250) || '.' || ((g + $5::int) % 250 + 1) || '/32',
-            $4, 0.8, gen_random_uuid(), $2::bigint, $2::bigint + 86400000, $3, $2::bigint
-     FROM generate_series(1, $1::int) g`,
-    [n, at, over.actor ?? "operator1", over.source ?? "manual", seq],
-  );
-  seq += n;
-}
+const seedManual = (n: number, over?: SeedManualOver) => seedManualEntries(app, n, over);
 
 describe("SD_APPROVE_PER_HOUR 解析", () => {
   it("未設定或空字串 → 50；1–200 整數照用；其餘啟動時拋錯", () => {

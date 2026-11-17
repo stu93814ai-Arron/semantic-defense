@@ -100,6 +100,9 @@ const SCHEMA_STATEMENTS = [
   "CREATE INDEX IF NOT EXISTS blocklist_manual_approver ON blocklist_entries (approved_by, created_at) WHERE source = 'manual'",
   "CREATE TABLE IF NOT EXISTS auto_breaker (id BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (id), opened_at BIGINT NULL)",
   "INSERT INTO auto_breaker (id) VALUES (TRUE) ON CONFLICT (id) DO NOTHING",
+  // 核准防護：approve_volume 每段只告一次的旗標（單列；approve-guard.ts maybeEnqueueApproveVolume）。
+  "CREATE TABLE IF NOT EXISTS approve_guard (id BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (id), volume_held BOOLEAN NOT NULL DEFAULT FALSE)",
+  "INSERT INTO approve_guard (id) VALUES (TRUE) ON CONFLICT (id) DO NOTHING",
   "ALTER TABLE auto_breaker ADD COLUMN IF NOT EXISTS volume_held BOOLEAN NOT NULL DEFAULT FALSE",
   // 成案流程 commit 6（計畫 §5）：待審與命中明細。註：IF NOT EXISTS 不會改舊表；本階段不做 migration。
   `CREATE TABLE IF NOT EXISTS blacklist_cases (

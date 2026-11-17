@@ -99,3 +99,18 @@ export function pendingOps(getApp: () => ControlApi, logs: string[] = []) {
     },
   };
 }
+
+export type SeedManualOver = { actor?: string; at?: number; source?: string };
+let manualSeq = 0;
+/** 直接寫入 n 筆 entry（核准上限的計數來源），IP 用 64.1.x.y 依序遞增，與案件 IP 不衝突。 */
+export async function seedManualEntries(app: ControlApi, n: number, over: SeedManualOver = {}): Promise<void> {
+  const at = over.at ?? PENDING_NOW - 10 * 60_000;
+  await app.db.query(
+    `INSERT INTO blocklist_entries (entry_id, ip, source, confidence, case_id, created_at, expires_at, approved_by, approved_at)
+     SELECT gen_random_uuid(), '64.1.' || ((g + $5::int) / 250) || '.' || ((g + $5::int) % 250 + 1) || '/32',
+            $4, 0.8, gen_random_uuid(), $2::bigint, $2::bigint + 86400000, $3, $2::bigint
+     FROM generate_series(1, $1::int) g`,
+    [n, at, over.actor ?? "operator1", over.source ?? "manual", manualSeq],
+  );
+  manualSeq += n;
+}

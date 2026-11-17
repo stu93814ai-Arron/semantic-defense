@@ -1,5 +1,7 @@
 import type { Db, Queryable } from "./db.js";
 import { writeAudit } from "./audit.js";
+import { enqueueAlerts, type AlertChannel } from "./alert-outbox.js";
+import { volumeThreshold } from "./auto-breaker.js";
 import { parseBoundInt } from "./judge-alerts.js";
 
 /**
@@ -9,6 +11,8 @@ import { parseBoundInt } from "./judge-alerts.js";
  * - 並發：先 SHARE（白名單）再拿每個 actor 一把 xact advisory lock，才計數；不拿 AUTO_LOCK。
  * - 被擋：主交易回滾後另開短交易寫 blacklist.approve_blocked {case_id, reason}（不含 IP）；
  *   cap 同一 operator、其他 reason 同一案件，1 小時內最多一筆。其他 409 不寫。
+ * - 告警：approve_cap 跟 cap 稽核同一筆短交易、同一去重；approve_volume 在成功核准的交易內判，
+ *   單一 operator ≥ ceil(0.8×上限) 或全體 ≥ 100／小時即入列，approve_guard.volume_held 旗標每段只告一次。
  */
 export const APPROVE_LOCK = 872_364_215;
 export const APPROVE_WINDOW_MS = 60 * 60_000;
@@ -16,6 +20,7 @@ export const APPROVE_PER_HOUR_DEFAULT = 50;
 export const APPROVE_PER_HOUR_MIN = 1;
 export const APPROVE_PER_HOUR_MAX = 200;
 export const APPROVE_BLOCKED_EVERY_MS = 60 * 60_000;
+export const APPROVE_VOLUME_GLOBAL_PER_HOUR = 100;
 export const APPROVE_CAP_MESSAGE = "核准次數已達上限，請稍後再試";
 
 export type ApproveBlockReason = "cap";
@@ -28,7 +33,7 @@ export class ApproveBlocked extends Error {
   }
 }
 
-export type ApproveGuardConfig = { perHour: number };
+export type ApproveGuardConfig = { perHour: number; channels: readonly AlertChannel[] };
 
 /** buildApp 選項優先（測試注入）；否則讀環境變數。無效值啟動時拋錯。 */
 export function resolveApprovePerHour(env: NodeJS.ProcessEnv, opt?: number): number {
@@ -59,7 +64,9 @@ async function lockApprover(q: Queryable, actor: string): Promise<void> {
 export type BlockedCtx = { id: string; at: number; actor: string };
 
 /** 主交易已回滾後呼叫：另開短交易，去重後寫 blacklist.approve_blocked。 */
-export async function recordApproveBlocked(db: Db, c: BlockedCtx, reason: ApproveBlockReason): Promise<void> {
+export async function recordApproveBlocked(
+  db: Db, c: BlockedCtx, reason: ApproveBlockReason, channels: readonly AlertChannel[],
+): Promise<void> {
   await db.tx(async (q) => {
     await lockApprover(q, c.actor);
     const since = c.at - APPROVE_BLOCKED_EVERY_MS;
@@ -71,8 +78,25 @@ export async function recordApproveBlocked(db: Db, c: BlockedCtx, reason: Approv
         `SELECT 1 FROM audit_events WHERE action = 'blacklist.approve_blocked'
            AND detail->>'case_id' = $1 AND detail->>'reason' = $2 AND at > $3 LIMIT 1`, [c.id, reason, since]);
     if (dup.rows.length > 0) return;
-    await writeAudit(q, {
+    const auditId = await writeAudit(q, {
       action: "blacklist.approve_blocked", actor: c.actor, sensor_id: null, at: c.at, detail: { case_id: c.id, reason },
     });
+    if (reason === "cap") await enqueueAlerts(q, { channels, kind: "approve_cap", now: c.at, auditId });
   });
+}
+
+/**
+ * 成功核准的交易內、entry 寫入之後呼叫（已持有 SHARE 與 actor 鎖）。先以 FOR UPDATE 鎖旗標列，
+ * 讓不同 operator 的並發核准在判斷旗標時序列化；鎖順序仍是 SHARE → actor 鎖 → 旗標列。
+ */
+export async function maybeEnqueueApproveVolume(q: Queryable, actor: string, at: number, guard: ApproveGuardConfig): Promise<void> {
+  await q.query("INSERT INTO approve_guard (id) VALUES (TRUE) ON CONFLICT (id) DO NOTHING");
+  const held = (await q.query<{ volume_held: boolean }>("SELECT volume_held FROM approve_guard WHERE id FOR UPDATE")).rows[0]!.volume_held;
+  const r = await q.query<{ mine: string; total: string }>(
+    `SELECT count(*) FILTER (WHERE approved_by = $1) AS mine, count(*) AS total
+     FROM blocklist_entries WHERE source = 'manual' AND created_at > $2`, [actor, at - APPROVE_WINDOW_MS]);
+  const over = Number(r.rows[0]!.mine) >= volumeThreshold(guard.perHour) || Number(r.rows[0]!.total) >= APPROVE_VOLUME_GLOBAL_PER_HOUR;
+  if (over === held) return;
+  await q.query("UPDATE approve_guard SET volume_held = $1 WHERE id", [over]);
+  if (over) await enqueueAlerts(q, { channels: guard.channels, kind: "approve_volume", now: at });
 }

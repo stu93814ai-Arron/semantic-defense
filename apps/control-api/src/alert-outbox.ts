@@ -73,7 +73,7 @@ export function assertWebhookSecret(env: Record<string, string | undefined> = pr
   }
 }
 
-const KIND_RANK = "CASE kind WHEN 'breaker_open' THEN 0 WHEN 'tick_fail' THEN 1 WHEN 'cursor_lag' THEN 2 WHEN 'stale_pending' THEN 3 WHEN 'volume' THEN 4 ELSE 5 END";
+const KIND_RANK = "CASE kind WHEN 'breaker_open' THEN 0 WHEN 'approve_cap' THEN 0 WHEN 'approve_volume' THEN 0 WHEN 'tick_fail' THEN 1 WHEN 'cursor_lag' THEN 2 WHEN 'stale_pending' THEN 3 WHEN 'volume' THEN 4 ELSE 5 END";
 
 export type EnqueueAlertOpts = {
   channels: readonly AlertChannel[]; kind: AlertKind; now: number; auditId?: number;

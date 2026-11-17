@@ -270,7 +270,10 @@ function hookTimers(app: ControlApi, db: Db, now: Clock, opts: BuildAppOptions, 
 
 export async function buildApp(opts: BuildAppOptions = {}): Promise<ControlApi> {
   assertBreakerLimit(opts.autoBreakerPerHour);
-  const guard: ApproveGuardConfig = { perHour: resolveApprovePerHour(process.env, opts.approvePerHour) };
+  const guard: ApproveGuardConfig = {
+    perHour: resolveApprovePerHour(process.env, opts.approvePerHour),
+    channels: enabledAlertChannels(process.env, opts.alertChannels),
+  };
   const judgeAlerts = parseJudgeAlertConfig(process.env);
   parseWebhookConfig(process.env);
   parseSyslogConfig(process.env);
