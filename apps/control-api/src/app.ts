@@ -281,7 +281,10 @@ function defaultSenders(opts: BuildAppOptions): Partial<Record<AlertChannel, Ale
 
 function hookTimers(app: ControlApi, db: Db, now: Clock, opts: BuildAppOptions, judgeAlerts: JudgeAlertConfig): void {
   const alertChannels = enabledAlertChannels(process.env, opts.alertChannels);
-  const tickOpts = { autoBreakerPerHour: opts.autoBreakerPerHour, autoListEnabled: opts.autoListEnabled, alertChannels };
+  const tickOpts = {
+    autoBreakerPerHour: opts.autoBreakerPerHour, autoListEnabled: opts.autoListEnabled,
+    autoListHandshakeReady: opts.autoListHandshakeReady, alertChannels,
+  };
   const stopJudge = startJudgeTimer(app, db, now, opts.judgeIntervalMs ?? 5000, tickOpts, judgeAlerts);
   const stopAlert = startAlertTimer(app, db, now, opts.alertDeliverIntervalMs ?? 1000, defaultSenders(opts));
   app.addHook("onClose", async () => { await stopJudge(); await stopAlert(); await db.close(); });
