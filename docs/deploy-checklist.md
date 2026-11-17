@@ -133,3 +133,7 @@ A 組領航員裁示（未經使用者確認）：人工核准不受冷卻期限
 ## A 組領航員裁示（未經使用者確認）（告警推送測試清單 §2 與 §9）
 
 A 組領航員裁示（未經使用者確認）：測試清單 `/workspace/exec-a-logs/push-design-tests.md` 的 §9 優先於 §2。§2 僅保留以下對本機假伺服器的行為測試：伺服器未宣告 STARTTLS 則發送必須失敗（`requireTLS`）；自簽或主機名不符的憑證必須失敗；明文 opt-in 模式不送 AUTH；dot-stuffing；位址含 CRLF 或格式不正確則拒絕。不撰寫協定內部測試（重新送 EHLO、pipelining、行或總量上限）；那些是 nodemailer 的職責。測試清單本文未改。
+
+## 正式環境只安裝正式相依（依賴漏洞例外的前提）
+
+軟體大總召裁示（未經使用者確認）：正式環境只安裝正式相依，不得帶入 devDependencies。安裝用 `pnpm install --prod --frozen-lockfile`，或用 `pnpm deploy --prod` 產出部署目錄。picomatch GHSA-fc5q-39xc-vjpf 的有期限例外（至 2026-11-30，見 `docs/decisions/2026-11-18-audit-exception-picomatch.md`）只在 dev 相依成立；`scripts/audit.sh` 的 `pnpm audit --prod --audit-level high` 沒有任何例外。
