@@ -70,7 +70,7 @@ type HealthView =
   | { kind: "auth-error"; message: string }
   | { kind: "format-error" }
   | { kind: "empty-data" }
-  | { kind: "alerts"; alerts: AlertHealthView; status: string; judge?: JudgeHealthView };
+  | { kind: "alerts"; alerts: AlertHealthView; status: unknown; judge?: JudgeHealthView };
 
 function viewFromResult(status: number, data: HealthBody | null): HealthView {
   // 401／403 用語：A 組已修；保持「未登入」「權限不足」。
@@ -157,14 +157,24 @@ function JudgeCard({ judge }: { judge?: JudgeHealthView }) {
   );
 }
 
-function StatusGrid(props: { judge?: JudgeHealthView; apiStatus: string }) {
+const CONTROL_STATUS_MAX = 32;
+
+/** 僅短字串 status 會出現在括號內，避免物件進入 React 子節點。 */
+function controlApiText(status: unknown): string {
+  if (typeof status === "string" && status.length > 0 && status.length <= CONTROL_STATUS_MAX) {
+    return `健康端點可連線（${status}）`;
+  }
+  return "健康端點可連線";
+}
+
+function StatusGrid(props: { judge?: JudgeHealthView; apiStatus: unknown }) {
   return (
     <div className="health-status-grid" data-testid="health-status-grid">
       <StatusCard title="鏡像接收">尚未接線</StatusCard>
       <JudgeCard judge={props.judge} />
       <StatusCard title="模型連線">AI 尚未啟用</StatusCard>
       <StatusCard title="EDL 發布">尚未接線</StatusCard>
-      <StatusCard title="控制 API">可連線（{props.apiStatus}）</StatusCard>
+      <StatusCard title="控制 API">{controlApiText(props.apiStatus)}</StatusCard>
       <StatusCard title="資料庫">尚未接線</StatusCard>
       <StatusCard title="簽章金鑰">尚未接線</StatusCard>
       <StatusCard title="運作模式">尚未接線</StatusCard>
@@ -197,6 +207,7 @@ export function HealthPage() {
       <HealthStatus view={view} />
       {view.kind === "alerts" && (
         <>
+          {view.alerts.undelivered > 0 ? <p role="status">未送達</p> : null}
           <StatusGrid judge={view.judge} apiStatus={view.status} />
           <AlertCounts alerts={view.alerts} />
           <AlertFeedPlaceholder />

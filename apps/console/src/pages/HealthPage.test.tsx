@@ -181,3 +181,85 @@ describe("HealthPage 版面與判定計數", () => {
     expect(screen.getByTestId("empty-state").textContent).toMatch(/尚無未送達告警/);
   });
 });
+
+
+function rawOk(data: unknown) {
+  return { status: 200, data } as Awaited<ReturnType<typeof apiGet>>;
+}
+
+describe("HealthPage 控制 API 狀態、未送達橫幅與判定守衛", () => {
+  it("控制 API 僅在 status 為短字串時加上括號，物件不導致渲染崩潰", async () => {
+    mockedGet.mockResolvedValue(okHealth());
+    render(<HealthPage />);
+    await waitFor(() => expect(screen.getByTestId("health-status-grid")).toBeTruthy());
+    expect(screen.getByTestId("health-status-grid").textContent).toContain("健康端點可連線（ok）");
+
+    cleanup();
+    mockedGet.mockResolvedValue(rawOk({ status: { code: "ok" }, alerts: ZERO_ALERTS }));
+    render(<HealthPage />);
+    await waitFor(() => expect(screen.getByTestId("health-status-grid")).toBeTruthy());
+    let text = screen.getByTestId("health-status-grid").textContent ?? "";
+    expect(text).toContain("健康端點可連線");
+    expect(text).not.toMatch(/健康端點可連線（/);
+    expect(text).not.toContain("[object Object]");
+
+    cleanup();
+    mockedGet.mockResolvedValue(rawOk({ status: "x".repeat(33), alerts: ZERO_ALERTS }));
+    render(<HealthPage />);
+    await waitFor(() => expect(screen.getByTestId("health-status-grid")).toBeTruthy());
+    text = screen.getByTestId("health-status-grid").textContent ?? "";
+    expect(text).toContain("健康端點可連線");
+    expect(text).not.toMatch(/健康端點可連線（/);
+    expect(text).not.toContain("x".repeat(33));
+  });
+
+  it("未送達橫幅僅在 undelivered > 0 時顯示，且 role 為 status", async () => {
+    mockedGet.mockResolvedValue(rawOk({
+      status: "ok",
+      alerts: { pending: 0, failed: 0, delivered_1h: 0, undelivered: 2, last_failed_at: null },
+    }));
+    render(<HealthPage />);
+    await waitFor(() => expect(screen.getByRole("status")).toBeTruthy());
+    expect(screen.getByRole("status").textContent).toBe("未送達");
+
+    cleanup();
+    mockedGet.mockResolvedValue(okHealth());
+    render(<HealthPage />);
+    await waitFor(() => expect(screen.getByTestId("alert-health")).toBeTruthy());
+    expect(screen.queryByRole("status")).toBeNull();
+
+    cleanup();
+    mockedGet.mockResolvedValue(rawOk({
+      status: "ok",
+      alerts: { pending: 0, failed: 0, delivered_1h: 0, last_failed_at: null },
+    }));
+    render(<HealthPage />);
+    await waitFor(() => expect(screen.queryByText("載入中…")).toBeNull());
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("judge 任一欄位為字串、NaN 或缺漏時判定程序顯示尚未接線", async () => {
+    const judges: unknown[] = [
+      { tick_fail_streak: "2", cursor_lag_seconds: 15, stale_pending_total: 3 },
+      { tick_fail_streak: Number.NaN, cursor_lag_seconds: 15, stale_pending_total: 3 },
+      { cursor_lag_seconds: 15, stale_pending_total: 3 },
+      { tick_fail_streak: 2, cursor_lag_seconds: "15", stale_pending_total: 3 },
+      { tick_fail_streak: 2, cursor_lag_seconds: Number.NaN, stale_pending_total: 3 },
+      { tick_fail_streak: 2, stale_pending_total: 3 },
+      { tick_fail_streak: 2, cursor_lag_seconds: 15, stale_pending_total: "3" },
+      { tick_fail_streak: 2, cursor_lag_seconds: 15, stale_pending_total: Number.NaN },
+      { tick_fail_streak: 2, cursor_lag_seconds: 15 },
+    ];
+    for (const judge of judges) {
+      cleanup();
+      mockedGet.mockResolvedValue(okHealth({ judge }));
+      render(<HealthPage />);
+      await waitFor(() => expect(screen.getByTestId("health-status-grid")).toBeTruthy());
+      const grid = screen.getByTestId("health-status-grid").textContent ?? "";
+      expect(grid).toMatch(/判定程序/);
+      expect(grid).toMatch(/尚未接線/);
+      expect(grid).not.toMatch(/連續失敗|游標落後|過期待審/);
+      expect(grid).not.toContain("NaN");
+    }
+  });
+});
