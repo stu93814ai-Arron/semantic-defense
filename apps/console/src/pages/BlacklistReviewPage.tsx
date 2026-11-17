@@ -22,10 +22,11 @@ function formatCreatedAt(iso: string): string {
 function PendingRow(props: {
   item: PendingCandidate;
   now: string;
+  busy: boolean;
   onApprove: (caseId: string) => void;
   onReject: (caseId: string) => void;
 }) {
-  const { item, now, onApprove, onReject } = props;
+  const { item, now, busy, onApprove, onReject } = props;
   const expired = isPendingExpired(item, now);
   return (
     <tr>
@@ -50,7 +51,7 @@ function PendingRow(props: {
           className="btn btn-primary"
           data-testid={`approve-${item.case_id}`}
           onClick={() => onApprove(item.case_id)}
-          disabled={expired}
+          disabled={expired || busy}
         >
           核准
         </button>{" "}
@@ -59,7 +60,7 @@ function PendingRow(props: {
           className="btn"
           data-testid={`reject-${item.case_id}`}
           onClick={() => onReject(item.case_id)}
-          disabled={expired}
+          disabled={expired || busy}
         >
           駁回
         </button>
@@ -73,6 +74,7 @@ export function BlacklistReviewPage({ nowIso }: { nowIso?: string } = {}) {
   const [tick, setTick] = useState(0);
   const [message, setMessage] = useState<string | null>(null);
   const [items, setItems] = useState<PendingCandidate[]>([]);
+  const [busyId, setBusyId] = useState<string | null>(null);
   const unreachable = reviewSource.isUnreachable();
   const now = nowIso ?? new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
 
@@ -92,18 +94,28 @@ export function BlacklistReviewPage({ nowIso }: { nowIso?: string } = {}) {
     setTick((n) => n + 1);
   }
 
-  async function onApprove(caseId: string) {
+  async function runDecision(
+    caseId: string,
+    act: (id: string) => Promise<{ ok: true } | { ok: false; message: string }>,
+    okText: string,
+  ) {
     if (!user) return;
-    const r = await reviewSource.approve(caseId);
-    setMessage(r.ok ? "已核准" : r.message);
-    refresh();
+    setBusyId(caseId);
+    try {
+      const r = await act(caseId);
+      setMessage(r.ok ? okText : r.message);
+      refresh();
+    } finally {
+      setBusyId(null);
+    }
   }
 
-  async function onReject(caseId: string) {
-    if (!user) return;
-    const r = await reviewSource.reject(caseId);
-    setMessage(r.ok ? "已退回" : r.message);
-    refresh();
+  function onApprove(caseId: string) {
+    void runDecision(caseId, (id) => reviewSource.approve(id), "已核准");
+  }
+
+  function onReject(caseId: string) {
+    void runDecision(caseId, (id) => reviewSource.reject(id), "已退回");
   }
 
   return (
@@ -115,29 +127,43 @@ export function BlacklistReviewPage({ nowIso }: { nowIso?: string } = {}) {
         <span>信心範圍尚未接線。</span>
         <span data-testid="review-ai-status">AI 尚未啟用</span>
       </p>
-      {message ? (
-        <p role="status" data-testid="review-status">
-          {message}
-        </p>
-      ) : null}
-      {unreachable ? (
-        <div data-testid="backend-unreachable" className="card" role="alert">
-          <p>後端無法連線，請稍後再試</p>
-        </div>
-      ) : null}
-      {!unreachable && items.length === 0 ? (
-        <div data-testid="empty-state" className="card">
-          <p>尚無待審黑名單</p>
-        </div>
-      ) : null}
+      <ReviewAlerts message={message} unreachable={unreachable} empty={items.length === 0} />
       <PendingList
         items={items}
         hidden={unreachable}
         now={now}
-        onApprove={(id) => void onApprove(id)}
-        onReject={(id) => void onReject(id)}
+        busyId={busyId}
+        onApprove={onApprove}
+        onReject={onReject}
       />
     </main>
+  );
+}
+
+
+function ReviewAlerts(props: {
+  message: string | null;
+  unreachable: boolean;
+  empty: boolean;
+}) {
+  return (
+    <>
+      {props.message ? (
+        <p role="status" data-testid="review-status">
+          {props.message}
+        </p>
+      ) : null}
+      {props.unreachable ? (
+        <div data-testid="backend-unreachable" className="card" role="alert">
+          <p>後端無法連線，請稍後再試</p>
+        </div>
+      ) : null}
+      {!props.unreachable && props.empty ? (
+        <div data-testid="empty-state" className="card">
+          <p>尚無待審黑名單</p>
+        </div>
+      ) : null}
+    </>
   );
 }
 
@@ -145,6 +171,7 @@ function PendingList(props: {
   items: PendingCandidate[];
   hidden: boolean;
   now: string;
+  busyId: string | null;
   onApprove: (caseId: string) => void;
   onReject: (caseId: string) => void;
 }) {
@@ -172,6 +199,7 @@ function PendingList(props: {
                 key={row.case_id}
                 item={row}
                 now={props.now}
+                busy={props.busyId === row.case_id}
                 onApprove={props.onApprove}
                 onReject={props.onReject}
               />

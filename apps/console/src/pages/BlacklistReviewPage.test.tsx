@@ -134,6 +134,28 @@ describe("BlacklistReviewPage 核准與退回", () => {
     );
     expect(listPending).toHaveBeenCalledTimes(2);
   });
+  it("核准或駁回進行中時停用該列按鈕，其他列仍可操作", async () => {
+    const otherId = "22222222-2222-4222-8222-222222222222";
+    let release!: () => void;
+    approve.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve({ ok: true, value: undefined as never });
+        }),
+    );
+    listPending.mockResolvedValue({ ok: true, value: [item(), item({ case_id: otherId })] });
+    await renderReview();
+    const approveBtn = screen.getByTestId(`approve-${CASE}`);
+    const rejectBtn = screen.getByTestId(`reject-${CASE}`);
+    const otherApprove = screen.getByTestId(`approve-${otherId}`);
+    fireEvent.click(approveBtn);
+    await waitFor(() => expect((approveBtn as HTMLButtonElement).disabled).toBe(true));
+    expect((rejectBtn as HTMLButtonElement).disabled).toBe(true);
+    expect((otherApprove as HTMLButtonElement).disabled).toBe(false);
+    release();
+    await waitFor(() => expect((approveBtn as HTMLButtonElement).disabled).toBe(false));
+    expect((rejectBtn as HTMLButtonElement).disabled).toBe(false);
+  });
 });
 
 describe("BlacklistReviewPage 錯誤狀態", () => {

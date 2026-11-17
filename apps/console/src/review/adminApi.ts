@@ -58,13 +58,30 @@ function joinUrl(base: string, path: string): string {
   return `${base}${path}`;
 }
 
-async function readError(res: Response): Promise<string | undefined> {
+const CLIENT_ERROR_MAX = 200;
+const UNREACHABLE_MESSAGE = "後端無法連線，請稍後再試";
+
+async function readErrorBody(res: Response): Promise<unknown> {
   try {
-    const body = (await res.json()) as { error?: string; message?: string };
-    return body.error ?? body.message;
+    return await res.json();
   } catch {
     return undefined;
   }
+}
+
+function mappedErrorMessage(body: unknown): string | undefined {
+  if (!body || typeof body !== "object") return undefined;
+  const rec = body as { error?: unknown; message?: unknown };
+  if (typeof rec.error === "string") return rec.error;
+  if (typeof rec.message === "string") return rec.message;
+  return undefined;
+}
+
+function clientErrorMessage(body: unknown): string {
+  if (!body || typeof body !== "object") return "請求無法完成";
+  const error = (body as { error?: unknown }).error;
+  if (typeof error !== "string") return "請求無法完成";
+  return error.length > CLIENT_ERROR_MAX ? error.slice(0, CLIENT_ERROR_MAX) : error;
 }
 
 const STATUS_CODE = {
@@ -75,20 +92,25 @@ const STATUS_CODE = {
   409: { code: "conflict" as const, fallback: "狀態衝突" },
 } as const;
 
-function statusErr(status: number, message: string | undefined): AdminApiErr {
+function statusErr(status: number, body: unknown): AdminApiErr {
   const mapped = STATUS_CODE[status as keyof typeof STATUS_CODE];
   if (mapped) {
-    return { ok: false, status, code: mapped.code, message: message ?? mapped.fallback };
+    return {
+      ok: false,
+      status,
+      code: mapped.code,
+      message: mappedErrorMessage(body) ?? mapped.fallback,
+    };
   }
-  // 其餘 4xx（含日後新增的上限／私網等防護）原樣顯示後端訊息，不視為無法連線。
+  // 其餘 4xx 只採用字串 error（截斷至約 200 字），非字串用預設文案。
   if (status >= 400 && status < 500) {
-    return { ok: false, status, code: "client_error", message: message ?? "請求無法完成" };
+    return { ok: false, status, code: "client_error", message: clientErrorMessage(body) };
   }
   return {
     ok: false,
     status,
     code: "backend_unreachable",
-    message: message ?? "後端無法連線，請稍後再試",
+    message: UNREACHABLE_MESSAGE,
   };
 }
 
@@ -96,7 +118,7 @@ const UNREACHABLE: AdminApiErr = {
   ok: false,
   status: 0,
   code: "backend_unreachable",
-  message: "後端無法連線，請稍後再試",
+  message: UNREACHABLE_MESSAGE,
 };
 
 async function request(
@@ -111,7 +133,7 @@ async function request(
     return UNREACHABLE;
   }
   if (res.status === 204) return { ok: true, body: null };
-  if (!res.ok) return statusErr(res.status, await readError(res));
+  if (!res.ok) return statusErr(res.status, await readErrorBody(res));
   try {
     return { ok: true, body: await res.json() };
   } catch {

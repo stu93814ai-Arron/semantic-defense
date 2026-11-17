@@ -264,3 +264,71 @@ describe("adminApi 待審核准與退回", () => {
     }
   });
 });
+
+describe("adminApi 安全硬化", () => {
+    it("核准與退回路徑把含特殊字元的 caseId 以 encodeURIComponent 編碼", async () => {
+    const caseId = "id with/slash?and=query#hash";
+    const encoded = encodeURIComponent(caseId);
+    expect(encoded).not.toBe(caseId);
+    const seen: string[] = [];
+    const api = createAdminApi({
+      fetch: async (input) => {
+        seen.push(String(input));
+        return new Response(null, { status: 204 });
+      },
+    });
+    await api.approvePending(caseId);
+    await api.rejectPending(caseId);
+    expect(seen).toEqual([
+      `/api/blacklist/pending/${encoded}/approve`,
+      `/api/blacklist/pending/${encoded}/reject`,
+    ]);
+    expect(seen.some((u) => u.includes("slash?and"))).toBe(false);
+    expect(fillPath(ADMIN_API_PATHS.blacklistPendingApprove, { caseId })).toBe(
+      `/api/blacklist/pending/${encoded}/approve`,
+    );
+  });
+
+  it("client_error 只接受字串 error，超過約 200 字截斷，非字串用預設文案", async () => {
+    const call = (body: unknown) =>
+      createAdminApi({
+        fetch: async () => jsonResponse(429, body),
+      }).approvePending(PENDING.case_id);
+
+    const ok = await call({ error: "已達每小時上限" });
+    expect(ok.ok).toBe(false);
+    if (!ok.ok) {
+      expect(ok.code).toBe("client_error");
+      expect(ok.message).toBe("已達每小時上限");
+    }
+
+    const nonString = await call({ error: { code: "rate" } });
+    expect(nonString.ok).toBe(false);
+    if (!nonString.ok) expect(nonString.message).toBe("請求無法完成");
+
+    const fromMessage = await call({ message: "不應採用 message 欄" });
+    expect(fromMessage.ok).toBe(false);
+    if (!fromMessage.ok) expect(fromMessage.message).toBe("請求無法完成");
+
+    const long = "限".repeat(250);
+    const truncated = await call({ error: long });
+    expect(truncated.ok).toBe(false);
+    if (!truncated.ok) {
+      expect(truncated.message).toBe("限".repeat(200));
+      expect(truncated.message.length).toBe(200);
+    }
+  });
+
+  it("5xx 一律顯示前端固定訊息，不採用後端本文", async () => {
+    const r = await createAdminApi({
+      fetch: async () => jsonResponse(500, { error: "internal secret stack" }),
+    }).approvePending(PENDING.case_id);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.status).toBe(500);
+      expect(r.code).toBe("backend_unreachable");
+      expect(r.message).toBe("後端無法連線，請稍後再試");
+      expect(r.message).not.toMatch(/secret|internal/);
+    }
+  });
+});
