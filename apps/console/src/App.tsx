@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Navigate, Outlet, Route, Routes, useLocation } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { useAuth } from "./auth";
 import { accessFor, titleFor } from "./roles";
 import { BlacklistListedPage } from "./pages/BlacklistListedPage";
@@ -9,6 +9,7 @@ import { LoginPage } from "./pages/LoginPage";
 import { NoPermissionPage } from "./pages/NoPermissionPage";
 import { WhitelistPage } from "./pages/WhitelistPage";
 import { HealthPage } from "./pages/HealthPage";
+import { AppChrome } from "./routing/AppChrome";
 import { ThemeSwitch } from "./theme/ThemeSwitch";
 import { apiGet } from "./api";
 import {
@@ -69,22 +70,6 @@ function ProtectedRoute({
   if (view === "deny") return <NoPermissionPage />;
   if (children) return <>{children}</>;
   return <EmptyDataPage title={titleFor(location.pathname)} hint={hint ?? "尚無資料"} />;
-}
-
-function AppChrome() {
-  return (
-    <div className="app-chrome">
-      <aside className="app-sidebar" data-testid="theme-slot-sidebar">
-        <ThemeSwitch />
-      </aside>
-      <div className="app-chrome__main">
-        <header className="app-topbar" data-testid="theme-slot-topbar">
-          <ThemeSwitch />
-        </header>
-        <Outlet />
-      </div>
-    </div>
-  );
 }
 
 function LoginRoute() {
