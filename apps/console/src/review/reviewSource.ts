@@ -6,7 +6,7 @@ import {
 } from "./adminApi";
 import * as demo from "./demoStore";
 import { filterListed } from "./listed";
-import type { AllowlistItem, ListedEntry, PendingCandidate, RejectReason } from "./types";
+import type { AllowlistItem, ListedEntry, PendingCandidate } from "./types";
 import type { Thresholds } from "./thresholds";
 import type { AllowlistCreate, AllowlistUpdate } from "@semantic-defense/contracts/browser";
 
@@ -93,7 +93,7 @@ async function write<T>(
 /**
  * 管理面資料源：優先 A 組 API。
  * 僅當 VITE_DEMO_FALLBACK=1 且為 404 時回退 demoStore（dev／e2e）；其餘錯誤原樣回傳。
- * 待審核准／退回不走 API（批次 4 尚未合併）。
+ * 待審核准／退回一律打 API，不走 demo 回退（避免寫入 404「查無待審案件」被掩蓋）。
  */
 export const reviewSource = {
   isUnreachable: reviewSourceIsUnreachable,
@@ -173,13 +173,19 @@ export const reviewSource = {
     );
   },
 
-  /** 核准仍走本地 demoStore，不呼叫尚未合併的 API。 */
-  async approve(caseId: string, actorId: string) {
-    return demo.reviewApprove(caseId, actorId);
+  /** 核准打真實端點，不回退 demoStore。 */
+  async approve(caseId: string) {
+    const r = await api.approvePending(caseId);
+    if (r.ok) mode = "api";
+    else noteErr(r);
+    return r;
   },
 
-  /** 退回仍走本地 demoStore，不呼叫尚未合併的 API。 */
-  async reject(caseId: string, actorId: string, reason: RejectReason | string) {
-    return demo.reviewReject(caseId, actorId, reason);
+  /** 退回打真實端點，不送理由、不回退 demoStore。 */
+  async reject(caseId: string) {
+    const r = await api.rejectPending(caseId);
+    if (r.ok) mode = "api";
+    else noteErr(r);
+    return r;
   },
 };

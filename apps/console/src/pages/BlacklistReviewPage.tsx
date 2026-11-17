@@ -110,16 +110,15 @@ export function BlacklistReviewPage() {
 
   async function onApprove(caseId: string) {
     if (!user) return;
-    const r = await reviewSource.approve(caseId, user.username);
+    const r = await reviewSource.approve(caseId);
     setMessage(r.ok ? "已核准" : r.message);
     refresh();
   }
 
   async function onReject(caseId: string) {
     if (!user) return;
-    const reason = reasonFor(reasons, caseId);
-    const r = await reviewSource.reject(caseId, user.username, reason);
-    setMessage(r.ok ? `已退回（${reason}）` : r.message);
+    const r = await reviewSource.reject(caseId);
+    setMessage(r.ok ? "已退回" : r.message);
     refresh();
   }
 
