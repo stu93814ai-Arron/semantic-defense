@@ -11,6 +11,7 @@ import { createAuthPreHandler } from "./authz.js";
 import { registerSensorTokenRoutes } from "./sensor-tokens.js";
 import { registerAuditRoute } from "./audit.js";
 import { registerThresholdRoutes } from "./thresholds.js";
+import { registerAutoListSettingRoutes } from "./auto-list-settings.js";
 import { registerWhitelistRoutes } from "./whitelist.js";
 import { registerBlacklistRoutes } from "./blacklist.js";
 import { registerPendingRoutes } from "./pending.js";
@@ -309,6 +310,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<ControlApi> 
     registerSensorTokenRoutes(app, db, now);
     registerAuditRoute(app, db);
     registerThresholdRoutes(app, db, now);
+    registerAutoListSettingRoutes(app, db, now);
     registerWhitelistRoutes(app, db, now);
     registerBlacklistRoutes(app, db, now);
     registerPendingRoutes(app, db, now, guard);

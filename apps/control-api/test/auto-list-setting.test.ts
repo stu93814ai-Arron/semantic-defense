@@ -7,7 +7,7 @@ import { requireDatabaseUrl, truncatePhase2Tables } from "./helpers/pg.js";
 /**
  * 自動上榜總開關（/api/settings/auto-list）：僅 platform_admin 可讀寫；
  * 變更與 settings.auto_list.update 同一 tx；值未變不寫稽核。
- * 實作前的案例以 it.fails 包住，讓本 commit 為綠；實作 commit 再改回 it()。
+ * 實作後 it.fails 已改回 it()。
  */
 
 const PATH = ADMIN_API_PATHS.autoList;
@@ -49,13 +49,13 @@ async function updates() {
 }
 
 describe("自動上榜總開關 API：讀寫與稽核", () => {
-  it.fails("種子列預設關閉：platform_admin GET 得到 200 {enabled:false}", async () => {
+  it("種子列預設關閉：platform_admin GET 得到 200 {enabled:false}", async () => {
     await start();
     const res = await getSetting(await session("admin1", "pass-admin-1"));
     expect([res.statusCode, res.json()]).toEqual([200, { enabled: false }]);
   });
 
-  it.fails("開啟後 GET 讀回，並寫一筆物件形 before／after 稽核（actor 為正規化帳號）", async () => {
+  it("開啟後 GET 讀回，並寫一筆物件形 before／after 稽核（actor 為正規化帳號）", async () => {
     await start();
     const cookie = await session("admin1", "pass-admin-1");
     const res = await putSetting(cookie, { enabled: true });
@@ -66,7 +66,7 @@ describe("自動上榜總開關 API：讀寫與稽核", () => {
     ]);
   });
 
-  it.fails("值未變再 PUT：200 現值且不新增稽核；改回 false 才寫第二筆", async () => {
+  it("值未變再 PUT：200 現值且不新增稽核；改回 false 才寫第二筆", async () => {
     await start();
     const cookie = await session("admin1", "pass-admin-1");
     expect((await putSetting(cookie, { enabled: true })).statusCode).toBe(200);
@@ -81,7 +81,7 @@ describe("自動上榜總開關 API：讀寫與稽核", () => {
     ]);
   });
 
-  it.fails("預設 false 再 PUT false：200、完全不寫稽核", async () => {
+  it("預設 false 再 PUT false：200、完全不寫稽核", async () => {
     await start();
     const cookie = await session("admin1", "pass-admin-1");
     const res = await putSetting(cookie, { enabled: false });
@@ -92,7 +92,7 @@ describe("自動上榜總開關 API：讀寫與稽核", () => {
 });
 
 describe("自動上榜總開關 API：格式、角色與原子性", () => {
-  it.fails("strict 失敗（缺欄、非布林、多餘鍵）→ 400 請求格式錯誤，不改值、不寫稽核", async () => {
+  it("strict 失敗（缺欄、非布林、多餘鍵）→ 400 請求格式錯誤，不改值、不寫稽核", async () => {
     await start();
     const cookie = await session("admin1", "pass-admin-1");
     const invalid = [
@@ -107,7 +107,7 @@ describe("自動上榜總開關 API：格式、角色與原子性", () => {
     expect(await updates()).toEqual([]);
   });
 
-  it.fails("非 platform_admin：已登入 403 權限不足、匿名 401 未登入；值與稽核不變", async () => {
+  it("非 platform_admin：已登入 403 權限不足、匿名 401 未登入；值與稽核不變", async () => {
     await start();
     for (const [username, password] of [["operator1", "pass-operator-1"], ["owner1", "pass-owner-1"]] as const) {
       const cookie = await session(username, password);
@@ -124,7 +124,7 @@ describe("自動上榜總開關 API：格式、角色與原子性", () => {
     expect(await updates()).toEqual([]);
   });
 
-  it.fails("稽核寫入失敗時整筆 tx 回滾：500 固定本文，開關維持關閉", async () => {
+  it("稽核寫入失敗時整筆 tx 回滾：500 固定本文，開關維持關閉", async () => {
     await start();
     const cookie = await session("admin1", "pass-admin-1");
     await api!.db.exec(
@@ -141,7 +141,7 @@ describe("自動上榜總開關 API：格式、角色與原子性", () => {
     expect(await updates()).toEqual([]);
   });
 
-  it.fails("單列約束：migrate 種下唯一一列 {id:true,enabled:false}；id 必須為 TRUE，不能插入第二列", async () => {
+  it("單列約束：migrate 種下唯一一列 {id:true,enabled:false}；id 必須為 TRUE，不能插入第二列", async () => {
     await start();
     expect((await api!.db.query("SELECT id, enabled FROM auto_list_settings")).rows).toEqual([{ id: true, enabled: false }]);
     await expect(api!.db.query("INSERT INTO auto_list_settings (id, enabled) VALUES (FALSE, TRUE)")).rejects.toThrow();
@@ -150,7 +150,7 @@ describe("自動上榜總開關 API：格式、角色與原子性", () => {
 });
 
 describe("自動上榜總開關 API：與熔斷、測試清理的關係", () => {
-  it.fails("PUT 開關不重設、不清空熔斷：auto_breaker.opened_at 原樣保留", async () => {
+  it("PUT 開關不重設、不清空熔斷：auto_breaker.opened_at 原樣保留", async () => {
     await start();
     const cookie = await session("admin1", "pass-admin-1");
     await api!.db.query("UPDATE auto_breaker SET opened_at = $1 WHERE id", [CLOCK - 60_000]);
@@ -160,7 +160,7 @@ describe("自動上榜總開關 API：與熔斷、測試清理的關係", () => 
     await api!.db.query("UPDATE auto_breaker SET opened_at = NULL WHERE id");
   });
 
-  it.fails("seedPhase2Fixtures 與 truncatePhase2Tables 都把開關重設為 false（缺列時補回種子列）", async () => {
+  it("seedPhase2Fixtures 與 truncatePhase2Tables 都把開關重設為 false（缺列時補回種子列）", async () => {
     await start();
     await api!.db.query("UPDATE auto_list_settings SET enabled = TRUE");
     await seedPhase2Fixtures(api!);

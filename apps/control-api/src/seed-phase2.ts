@@ -24,6 +24,10 @@ export async function seedPhase2Fixtures(app: SeedApp): Promise<void> {
     );
     await app.db.query("UPDATE auto_breaker SET opened_at = NULL, volume_held = FALSE");
     await app.db.query("UPDATE approve_guard SET volume_held = FALSE");
+    // 自動上榜總開關回到預設關閉（缺列則補回），避免前一個測試的 enabled=true 外洩
+    await app.db.query(
+      "INSERT INTO auto_list_settings (id, enabled) VALUES (TRUE, FALSE) ON CONFLICT (id) DO UPDATE SET enabled = FALSE",
+    );
     const users: [string, string, Role, string?, string?][] = [
       ["operator1", "pass-operator-1", "operator"],
       ["owner1", "pass-owner-1", "app_owner", "app-alpha", "app-alpha-note"],
