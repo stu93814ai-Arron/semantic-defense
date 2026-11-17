@@ -11,10 +11,33 @@ import type { Role } from "./auth.js";
  */
 const ADMIN: Role[] = ["platform_admin"];
 
-/** 讀目前開關；缺列視為關閉。GET 與後續 tick 讀取共用（tick 的 fail-closed 另包 SAVEPOINT）。 */
+/**
+ * 缺列或讀失敗時的 fallback：關（fail-closed）。生產的唯一開關來源是 auto_list_settings 列（預設 false），
+ * 不再是「改這個常數為 on」；judge.ts 轉出同一常數。
+ */
+export const AUTO_LIST_ENABLED_DEFAULT = false;
+
+/** 讀目前開關；缺列視為 AUTO_LIST_ENABLED_DEFAULT（關）。GET 與 tick 讀取共用。 */
 export async function loadAutoListSetting(db: Queryable): Promise<AutoListSetting> {
-  const r = await db.query<{ enabled: boolean }>("SELECT enabled FROM auto_list_settings WHERE id");
-  return { enabled: r.rows[0]?.enabled === true };
+  const row = (await db.query<{ enabled: boolean }>("SELECT enabled FROM auto_list_settings WHERE id")).rows[0];
+  return { enabled: row ? row.enabled === true : AUTO_LIST_ENABLED_DEFAULT };
+}
+
+/**
+ * 判定 tick 用（每個 tick 一次，JUDGE_LOCK 之後）：在 tick tx 內以 SAVEPOINT 包住讀取，
+ * 失敗則 ROLLBACK TO SAVEPOINT（tick tx 不會因此中止）並視為關閉；log 只帶固定 error_class，不帶例外正文。
+ */
+export async function readAutoListEnabledInTx(q: Queryable, log?: { error(obj: object, msg: string): void }): Promise<boolean> {
+  await q.query("SAVEPOINT auto_list_setting");
+  try {
+    const { enabled } = await loadAutoListSetting(q);
+    await q.query("RELEASE SAVEPOINT auto_list_setting");
+    return enabled;
+  } catch {
+    await q.query("ROLLBACK TO SAVEPOINT auto_list_setting");
+    log?.error({ error_class: "auto_list_setting_read" }, "auto-list setting read failed");
+    return AUTO_LIST_ENABLED_DEFAULT;
+  }
 }
 
 async function putAutoListSetting(db: Db, actor: string, after: AutoListSetting, at: number): Promise<AutoListSetting> {

@@ -10,7 +10,7 @@ import type { Queryable } from "../src/db.js";
  * 判定 tick 每個 tick（JUDGE_LOCK 之後）讀 auto_list_settings；
  * 缺列或讀失敗視為關閉（fail-closed，SAVEPOINT）；
  * TickOpts／buildApp.autoListEnabled 僅測試覆寫（有傳入則跳過 DB）。
- * 實作前會紅的案例以 it.fails 包住，讓本 commit 為綠；實作 commit 再改回 it()。
+ * 實作後 it.fails 已改回 it()。
  */
 
 const IP = "64.0.221.8";
@@ -85,7 +85,7 @@ describe("判定 tick 讀取自動上榜開關", () => {
     expect(AUTO_LIST_ENABLED_DEFAULT).toBe(false);
   });
 
-  it.fails("未傳覆寫且 DB 為 true：E3.A 成立則自動上榜", async () => {
+  it("未傳覆寫且 DB 為 true：E3.A 成立則自動上榜", async () => {
     await start();
     await app!.db.query("UPDATE auto_list_settings SET enabled = TRUE");
     await qualify();
@@ -108,7 +108,7 @@ describe("判定 tick 讀取自動上榜開關", () => {
     expect([await autoListed(), await states()]).toEqual([0, ["open"]]);
   });
 
-  it.fails("DB 關閉時凍結熔斷；只改開關不動熔斷；改為 true 後下一個 tick 才補判恢復", async () => {
+  it("DB 關閉時凍結熔斷；只改開關不動熔斷；改為 true 後下一個 tick 才補判恢復", async () => {
     await start();
     const at = String(T0 - 70 * MIN);
     await app!.db.query("UPDATE auto_breaker SET opened_at = $1 WHERE id", [at]);
@@ -141,7 +141,7 @@ describe("測試覆寫跳過 DB、讀失敗 fail-closed", () => {
     expect([await autoListed(), await states()]).toEqual([0, ["open"]]);
   });
 
-  it.fails("本地 fake Queryable 讀成功：回列值、RELEASE SAVEPOINT、不記 error", async () => {
+  it("本地 fake Queryable 讀成功：回列值、RELEASE SAVEPOINT、不記 error", async () => {
     const { q, sql } = fakeQ(() => [{ enabled: true }]);
     const log = memLog();
     await expect(readInTx()(q, log)).resolves.toBe(true);
@@ -149,7 +149,7 @@ describe("測試覆寫跳過 DB、讀失敗 fail-closed", () => {
     expect(sql.some((s) => /RELEASE SAVEPOINT\s+auto_list_setting/i.test(s))).toBe(true);
   });
 
-  it.fails("本地 fake Queryable 讀失敗：回 false，只記 error_class，並 ROLLBACK TO SAVEPOINT", async () => {
+  it("本地 fake Queryable 讀失敗：回 false，只記 error_class，並 ROLLBACK TO SAVEPOINT", async () => {
     const { q, sql } = fakeQ(() => {
       throw Object.assign(new Error("injected boom must not be logged"), { code: "XX000" });
     });
@@ -161,7 +161,7 @@ describe("測試覆寫跳過 DB、讀失敗 fail-closed", () => {
     expect(sql.some((s) => /ROLLBACK TO SAVEPOINT\s+auto_list_setting/i.test(s))).toBe(true);
   });
 
-  it.fails("tick 內讀失敗（檢視擲錯）不中止交易：仍開案、視為關閉、只記 error_class", async () => {
+  it("tick 內讀失敗（檢視擲錯）不中止交易：仍開案、視為關閉、只記 error_class", async () => {
     await start();
     await qualify();
     await app!.db.exec("ALTER TABLE auto_list_settings RENAME TO auto_list_settings_hid");
