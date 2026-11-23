@@ -15,19 +15,61 @@ const MIGRATE_LOCK_FAILED =
   "無法在時限內取得資料表的鎖以套用結構遷移，已拒絕啟動；請確認沒有長時間交易佔用資料表後再重試";
 
 const clients: pg.Client[] = [];
+const clientPids = new Map<pg.Client, number>();
 let app: ControlApi | undefined;
 afterEach(async () => {
   if (app) await app.close();
   app = undefined;
   vi.useRealTimers();
   for (const c of clients.splice(0)) await c.end().catch(() => {});
+  clientPids.clear();
 });
 
 async function client(): Promise<pg.Client> {
   const c = new pg.Client({ connectionString: requireDatabaseUrl() });
   await c.connect();
+  const pid = (await c.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0]!.pid;
   clients.push(c);
+  clientPids.set(c, pid);
   return c;
+}
+
+/** 結束本測試已知連線以外、打在目前測試庫上的後端（例如卡住的 openDb pool）。 */
+async function terminateForeignBackends(): Promise<void> {
+  const probe = await client();
+  const keep = [...clientPids.values()];
+  await probe.query(
+    `SELECT pg_cancel_backend(a.pid), pg_terminate_backend(a.pid)
+     FROM pg_stat_activity a
+     WHERE a.datname = current_database()
+       AND a.backend_type = 'client backend'
+       AND a.pid <> pg_backend_pid()
+       AND NOT (a.pid = ANY($1::int[]))`,
+    [keep],
+  );
+}
+
+type OpenDbRace =
+  | { kind: "opened"; db: Db }
+  | { kind: "failed"; err: unknown }
+  | { kind: "hung" };
+
+async function raceOpenDb(opening: Promise<Db>, ms = 9_000): Promise<OpenDbRace> {
+  return Promise.race([
+    opening.then((db) => ({ kind: "opened" as const, db }), (err: unknown) => ({ kind: "failed" as const, err })),
+    new Promise<Extract<OpenDbRace, { kind: "hung" }>>((r) => setTimeout(() => r({ kind: "hung" }), ms)),
+  ]);
+}
+
+/** hung 時不得 await opening（那會把 9 秒競賽拖成 20 秒逾時）；先中止後端，再忽略後續 settle。 */
+async function finishOpenDb(opening: Promise<Db>, outcome: OpenDbRace | undefined): Promise<void> {
+  if (outcome?.kind === "opened") {
+    await outcome.db.close().catch(() => {});
+    return;
+  }
+  if (outcome?.kind === "failed") return;
+  await terminateForeignBackends();
+  void opening.then((d) => d.close()).catch(() => {});
 }
 
 /** 有誰持有（granted）或在等（!granted）某把 session advisory 鎖。 */
@@ -100,18 +142,18 @@ describe("③ 啟動遷移的 CREATE INDEX 遇到被鎖的表：時限內拒絕�
     await holder.query("LOCK TABLE audit_events IN ACCESS EXCLUSIVE MODE");
     const started = Date.now();
     const opening = openDb(requireDatabaseUrl());
-    const outcome = await Promise.race([
-      opening.then((db) => ({ kind: "opened" as const, db }), (err: unknown) => ({ kind: "failed" as const, err })),
-      new Promise<{ kind: "hung" }>((r) => setTimeout(() => r({ kind: "hung" }), 9_000)),
-    ]);
-    const elapsed = Date.now() - started;
-    const schemaHolders = await advisory(SCHEMA_LOCK, true);
-    await holder.query("ROLLBACK");
-    if (outcome.kind === "hung") await (await opening).close();
-    if (outcome.kind === "opened") await outcome.db.close();
-    expect(outcome.kind).toBe("failed");
-    expect(outcome.kind === "failed" && (outcome.err as Error).message).toBe(MIGRATE_LOCK_FAILED);
-    expect(elapsed).toBeLessThan(9_000);
-    expect(schemaHolders).toEqual([]);
+    let outcome: OpenDbRace | undefined;
+    try {
+      outcome = await raceOpenDb(opening);
+      const elapsed = Date.now() - started;
+      const schemaHolders = await advisory(SCHEMA_LOCK, true);
+      expect(outcome.kind).toBe("failed");
+      expect(outcome.kind === "failed" && (outcome.err as Error).message).toBe(MIGRATE_LOCK_FAILED);
+      expect(elapsed).toBeLessThan(9_000);
+      expect(schemaHolders).toEqual([]);
+    } finally {
+      await holder.query("ROLLBACK").catch(() => {});
+      await finishOpenDb(opening, outcome);
+    }
   }, 20_000);
 });
