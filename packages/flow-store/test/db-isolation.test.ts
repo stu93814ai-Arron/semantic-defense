@@ -19,7 +19,7 @@ const within = <T>(p: Promise<T>, ms: number): Promise<T | "timeout"> => {
 };
 
 describe("flow-store 測試資料庫與 control-api 測試隔離", () => {
-  it.fails("DATABASE_URL 上有開著的交易（模擬 control-api 測試）時，ensureFlowSchema 仍於時限內完成", async () => {
+  it("DATABASE_URL 上有開著的交易（模擬 control-api 測試）時，ensureFlowSchema 仍於時限內完成", async () => {
     const other = new pg.Client({ connectionString: process.env.DATABASE_URL });
     await other.connect();
     let run: Promise<void> | undefined;
