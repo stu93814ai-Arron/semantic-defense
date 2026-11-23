@@ -368,7 +368,7 @@ const MIGRATE_TIMEOUT_RESTORE_FAILED =
 const SCHEMA_LOCK_TIMEOUT_MS = 5_000;
 
 /**
- * A 組領航員裁示（未經使用者確認）：pg_advisory_lock(SCHEMA_LOCK) 在交易外，不受
+ * 軟體大總召裁示（未經使用者確認）：pg_advisory_lock(SCHEMA_LOCK) 在交易外，不受
  * SET LOCAL lock_timeout 約束。只對取鎖那一句設 statement_timeout，取到或失敗後立刻還原。
  * 逾時 SQLSTATE 為 57014（不是 55P03）。訊息不含 IP、時間戳、憑證、URL、SQL 或例外字串。
  */
