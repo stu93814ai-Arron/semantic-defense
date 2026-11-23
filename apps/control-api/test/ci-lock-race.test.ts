@@ -13,6 +13,8 @@ const SEED_LOCK = 872_364_202;
 const SCHEMA_LOCK = 872_364_201;
 const MIGRATE_LOCK_FAILED =
   "無法在時限內取得資料表的鎖以套用結構遷移，已拒絕啟動；請確認沒有長時間交易佔用資料表後再重試";
+const MIGRATE_ADVISORY_LOCK_FAILED =
+  "無法在時限內取得資料庫遷移協調鎖，已拒絕啟動；請確認沒有其他實例或長時間作業佔用鎖後再重試";
 
 const clients: pg.Client[] = [];
 const clientPids = new Map<pg.Client, number>();
@@ -34,12 +36,13 @@ async function client(): Promise<pg.Client> {
   return c;
 }
 
-/** 結束本測試已知連線以外、打在目前測試庫上的後端（例如卡住的 openDb pool）。 */
-async function terminateForeignBackends(): Promise<void> {
+/** 取消本測試已知連線以外、打在目前測試庫上的後端查詢（例如卡住的 openDb）。
+ *  只用 pg_cancel_backend：pg_terminate_backend 會把 node-pg socket 打成未捕捉的 ECONNRESET。 */
+async function cancelForeignBackends(): Promise<void> {
   const probe = await client();
   const keep = [...clientPids.values()];
   await probe.query(
-    `SELECT pg_cancel_backend(a.pid), pg_terminate_backend(a.pid)
+    `SELECT pg_cancel_backend(a.pid)
      FROM pg_stat_activity a
      WHERE a.datname = current_database()
        AND a.backend_type = 'client backend'
@@ -55,6 +58,7 @@ type OpenDbRace =
   | { kind: "hung" };
 
 async function raceOpenDb(opening: Promise<Db>, ms = 9_000): Promise<OpenDbRace> {
+  opening.catch(() => {});
   return Promise.race([
     opening.then((db) => ({ kind: "opened" as const, db }), (err: unknown) => ({ kind: "failed" as const, err })),
     new Promise<Extract<OpenDbRace, { kind: "hung" }>>((r) => setTimeout(() => r({ kind: "hung" }), ms)),
@@ -68,8 +72,8 @@ async function finishOpenDb(opening: Promise<Db>, outcome: OpenDbRace | undefine
     return;
   }
   if (outcome?.kind === "failed") return;
-  await terminateForeignBackends();
   void opening.then((d) => d.close()).catch(() => {});
+  await cancelForeignBackends();
 }
 
 /** 有誰持有（granted）或在等（!granted）某把 session advisory 鎖。 */
@@ -153,6 +157,32 @@ describe("③ 啟動遷移的 CREATE INDEX 遇到被鎖的表：時限內拒絕�
       expect(schemaHolders).toEqual([]);
     } finally {
       await holder.query("ROLLBACK").catch(() => {});
+      await finishOpenDb(opening, outcome);
+    }
+  }, 20_000);
+});
+
+describe("④ 啟動遷移取 SCHEMA_LOCK（advisory）被他人持有：時限內拒絕啟動", () => {
+  it.fails("另一連線持有 SCHEMA_LOCK → openDb 於 statement_timeout（5s）內以專屬中文訊息失敗", async () => {
+    // 先確保表已存在（遷移冪等），再讓他人持有遷移協調鎖
+    await (await openDb(requireDatabaseUrl())).close();
+    const holder = await client();
+    await holder.query("SELECT pg_advisory_lock($1)", [SCHEMA_LOCK]);
+    const holderPid = (await holder.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0]!.pid;
+    const started = Date.now();
+    const opening = openDb(requireDatabaseUrl());
+    let outcome: OpenDbRace | undefined;
+    try {
+      outcome = await raceOpenDb(opening);
+      const elapsed = Date.now() - started;
+      const schemaHolders = await advisory(SCHEMA_LOCK, true);
+      expect(outcome.kind).toBe("failed");
+      expect(outcome.kind === "failed" && (outcome.err as Error).message).toBe(MIGRATE_ADVISORY_LOCK_FAILED);
+      expect(MIGRATE_ADVISORY_LOCK_FAILED).not.toBe(MIGRATE_LOCK_FAILED);
+      expect(elapsed).toBeLessThan(9_000);
+      expect(schemaHolders).toEqual([holderPid]);
+    } finally {
+      await holder.query("SELECT pg_advisory_unlock($1)", [SCHEMA_LOCK]).catch(() => {});
       await finishOpenDb(opening, outcome);
     }
   }, 20_000);
