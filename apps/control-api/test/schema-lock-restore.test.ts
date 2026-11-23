@@ -83,7 +83,7 @@ async function settleOpenDb(): Promise<{ ok: true; db: Db } | { ok: false; err: 
 }
 
 describe("acquireSchemaLock 還原 statement_timeout", () => {
-  it.fails("取鎖成功但還原失敗 → 拒絕啟動並給出專屬中文訊息", async () => {
+  it("取鎖成功但還原失敗 → 拒絕啟動並給出專屬中文訊息", async () => {
     installClientHook({
       onQuery: async ({ sql, params, run }) => {
         if (isSetTimeoutConfig(sql) && params?.[0] !== LOCK_TIMEOUT_SETTING) {
@@ -149,7 +149,7 @@ describe("acquireSchemaLock 還原 statement_timeout", () => {
     }
   }, 20_000);
 
-  it.fails("遷移連線以 release(true) 丟棄，不還回 pool", async () => {
+  it("遷移連線以 release(true) 丟棄，不還回 pool", async () => {
     const releases: unknown[] = [];
     installClientHook({ onRelease: (arg) => { releases.push(arg); } });
     const outcome = await settleOpenDb();

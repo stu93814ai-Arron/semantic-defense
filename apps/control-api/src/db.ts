@@ -363,6 +363,8 @@ const MIGRATE_LOCK_FAILED =
   "無法在時限內取得資料表的鎖以套用結構遷移，已拒絕啟動；請確認沒有長時間交易佔用資料表後再重試";
 const MIGRATE_ADVISORY_LOCK_FAILED =
   "無法在時限內取得資料庫遷移協調鎖，已拒絕啟動；請確認沒有其他實例或長時間作業佔用鎖後再重試";
+const MIGRATE_TIMEOUT_RESTORE_FAILED =
+  "無法還原資料庫語句時限設定，已拒絕啟動；請確認資料庫連線正常後再重試";
 const SCHEMA_LOCK_TIMEOUT_MS = 5_000;
 
 /**
@@ -373,16 +375,27 @@ const SCHEMA_LOCK_TIMEOUT_MS = 5_000;
 async function acquireSchemaLock(q: pg.PoolClient): Promise<void> {
   const prev = (await q.query<{ statement_timeout: string }>("SHOW statement_timeout")).rows[0]!.statement_timeout;
   await q.query("SELECT set_config('statement_timeout', $1, false)", [`${SCHEMA_LOCK_TIMEOUT_MS}ms`]);
+  let held = false;
+  let lockErr: unknown;
   try {
     await q.query("SELECT pg_advisory_lock($1)", [SCHEMA_LOCK]);
+    held = true;
   } catch (err) {
-    if ((err as { code?: string }).code === "57014") throw new Error(MIGRATE_ADVISORY_LOCK_FAILED);
-    throw err;
-  } finally {
-    try {
-      await q.query("SELECT set_config('statement_timeout', $1, false)", [prev]);
-    } catch { /* 還原失敗仍拋取鎖的原錯；連線由 openDb 釋放 */ }
+    lockErr = (err as { code?: string }).code === "57014" ? new Error(MIGRATE_ADVISORY_LOCK_FAILED) : err;
   }
+  try {
+    await q.query("SELECT set_config('statement_timeout', $1, false)", [prev]);
+  } catch {
+    if (!lockErr) {
+      // 取鎖成功、還原失敗：盡力 unlock；失敗則依賴 openDb 的 release(true) 結束 session。
+      if (held) {
+        try { await q.query("SELECT pg_advisory_unlock($1)", [SCHEMA_LOCK]); } catch { /* 連線可能已不可用 */ }
+      }
+      throw new Error(MIGRATE_TIMEOUT_RESTORE_FAILED);
+    }
+    // 取鎖已失敗：還原錯不得蓋掉原錯（含 57014 映成的拒啟訊息）
+  }
+  if (lockErr) throw lockErr;
 }
 
 
@@ -427,10 +440,10 @@ export async function openDb(databaseUrl: string, opts?: { now?: () => number; l
   try {
     await migrate(client, opts?.now ?? Date.now, opts?.log);
   } catch (err) {
-    client.release();
+    client.release(true);
     await pool.end();
     throw err;
   }
-  client.release();
+  client.release(true);
   return asDb(pool);
 }
