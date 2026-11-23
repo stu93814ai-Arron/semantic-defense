@@ -190,7 +190,7 @@ describe("④ 啟動遷移取 SCHEMA_LOCK（advisory）被他人持有：時限�
 });
 
 describe("⑤ seed 計算密碼雜湊時不持有 SEED_LOCK，且中途失敗後鎖立即釋放", () => {
-  it.fails("argon2.hash 當下 pg_locks 沒有 SEED_LOCK；INSERT 失敗後亦無持有者", async () => {
+  it("argon2.hash 當下 pg_locks 沒有 SEED_LOCK；INSERT 失敗後亦無持有者", async () => {
     app = await buildApp({ databaseUrl: requireDatabaseUrl() });
     const orig = argon2.hash.bind(argon2);
     const heldDuringHash: number[][] = [];
