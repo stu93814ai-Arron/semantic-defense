@@ -361,6 +361,30 @@ function quoteIdent(name: string): string {
 
 const MIGRATE_LOCK_FAILED =
   "無法在時限內取得資料表的鎖以套用結構遷移，已拒絕啟動；請確認沒有長時間交易佔用資料表後再重試";
+const MIGRATE_ADVISORY_LOCK_FAILED =
+  "無法在時限內取得資料庫遷移協調鎖，已拒絕啟動；請確認沒有其他實例或長時間作業佔用鎖後再重試";
+const SCHEMA_LOCK_TIMEOUT_MS = 5_000;
+
+/**
+ * A 組領航員裁示（未經使用者確認）：pg_advisory_lock(SCHEMA_LOCK) 在交易外，不受
+ * SET LOCAL lock_timeout 約束。只對取鎖那一句設 statement_timeout，取到或失敗後立刻還原。
+ * 逾時 SQLSTATE 為 57014（不是 55P03）。訊息不含 IP、時間戳、憑證、URL、SQL 或例外字串。
+ */
+async function acquireSchemaLock(q: pg.PoolClient): Promise<void> {
+  const prev = (await q.query<{ statement_timeout: string }>("SHOW statement_timeout")).rows[0]!.statement_timeout;
+  await q.query("SELECT set_config('statement_timeout', $1, false)", [`${SCHEMA_LOCK_TIMEOUT_MS}ms`]);
+  try {
+    await q.query("SELECT pg_advisory_lock($1)", [SCHEMA_LOCK]);
+  } catch (err) {
+    if ((err as { code?: string }).code === "57014") throw new Error(MIGRATE_ADVISORY_LOCK_FAILED);
+    throw err;
+  } finally {
+    try {
+      await q.query("SELECT set_config('statement_timeout', $1, false)", [prev]);
+    } catch { /* 還原失敗仍拋取鎖的原錯；連線由 openDb 釋放 */ }
+  }
+}
+
 
 /**
  * A 組領航員裁示（未經使用者確認）：遷移語句（CREATE INDEX IF NOT EXISTS 即使索引已存在也要先取表鎖）
@@ -382,16 +406,17 @@ async function runSchemaStatement(q: Queryable, sql: string): Promise<void> {
 }
 
 async function migrate(client: pg.PoolClient, now: () => number, log?: SeedLog): Promise<void> {
-
-  await client.query("SELECT pg_advisory_lock($1)", [SCHEMA_LOCK]);
+  let locked = false;
   try {
+    await acquireSchemaLock(client);
+    locked = true;
     for (const sql of SCHEMA_STATEMENTS) {
       await runSchemaStatement(client, sql);
     }
     await ensureAlertKindCheck(client);
     await seedCriticalAllowlist(client, now, log);
   } finally {
-    await client.query("SELECT pg_advisory_unlock($1)", [SCHEMA_LOCK]);
+    if (locked) await client.query("SELECT pg_advisory_unlock($1)", [SCHEMA_LOCK]);
   }
 }
 

@@ -163,7 +163,7 @@ describe("③ 啟動遷移的 CREATE INDEX 遇到被鎖的表：時限內拒絕�
 });
 
 describe("④ 啟動遷移取 SCHEMA_LOCK（advisory）被他人持有：時限內拒絕啟動", () => {
-  it.fails("另一連線持有 SCHEMA_LOCK → openDb 於 statement_timeout（5s）內以專屬中文訊息失敗", async () => {
+  it("另一連線持有 SCHEMA_LOCK → openDb 於 statement_timeout（5s）內以專屬中文訊息失敗", async () => {
     // 先確保表已存在（遷移冪等），再讓他人持有遷移協調鎖
     await (await openDb(requireDatabaseUrl())).close();
     const holder = await client();
