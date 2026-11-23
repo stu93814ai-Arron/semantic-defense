@@ -1,3 +1,4 @@
+import argon2 from "argon2";
 import pg from "pg";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openDb, type Db, type Queryable } from "../src/db.js";
@@ -186,4 +187,39 @@ describe("④ 啟動遷移取 SCHEMA_LOCK（advisory）被他人持有：時限�
       await finishOpenDb(opening, outcome);
     }
   }, 20_000);
+});
+
+describe("⑤ seed 計算密碼雜湊時不持有 SEED_LOCK，且中途失敗後鎖立即釋放", () => {
+  it.fails("argon2.hash 當下 pg_locks 沒有 SEED_LOCK；INSERT 失敗後亦無持有者", async () => {
+    app = await buildApp({ databaseUrl: requireDatabaseUrl() });
+    const orig = argon2.hash.bind(argon2);
+    const heldDuringHash: number[][] = [];
+    const spy = vi.spyOn(argon2, "hash").mockImplementation(((plain: string, opts?: Parameters<typeof argon2.hash>[1]) => {
+      return (async () => {
+        heldDuringHash.push(await advisory(SEED_LOCK, true));
+        return orig(plain, opts);
+      })();
+    }) as typeof argon2.hash);
+    try {
+      await seedPhase2Fixtures(app);
+      expect(spy.mock.calls.length).toBeGreaterThan(0);
+      for (const holders of heldDuringHash) expect(holders).toEqual([]);
+
+      const wrap = (q: Queryable): Queryable => ({
+        query: async <T>(sql: string, params?: unknown[]) => {
+          if (String(sql).startsWith("INSERT INTO users")) throw new Error("injected");
+          return q.query<T>(sql, params);
+        },
+      });
+      const db = app.db;
+      const origTx = db.tx.bind(db);
+      const origSession = db.withSession.bind(db);
+      db.tx = <T>(fn: (q: Queryable) => Promise<T>) => origTx((q) => fn(wrap(q)));
+      db.withSession = <T>(fn: (q: Queryable) => Promise<T>) => origSession((q) => fn(wrap(q)));
+      await expect(seedPhase2Fixtures(app)).rejects.toThrow(/injected/);
+      expect(await advisory(SEED_LOCK, true)).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });
