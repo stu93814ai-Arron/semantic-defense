@@ -59,3 +59,29 @@ A 組領航員裁示（未經使用者確認）：以下第 4 項不在本切片
 ## 合入路線（尚未執行）
 
 A 組領航員裁示（未經使用者確認）：本切片先交 A 審；之後排成 1b22e95 → ci-lock → acct-norm 4 顆 → audit-exc 1 顆（新分支 team-a-lock-acct-audit），整疊 strict rebase -x、range-diff、jscpd，再跑一次正式 ci 10/10（保留 30 秒 sidecar），證據前綴 cl-drv-*。資安在 ci-lock 審查時介入。
+
+## 第三段與送資安前加固（A 組領航員裁示，未經使用者確認）
+
+本段疊在 ci-lock 第三段 tip b646999 之後，屬加固與測試衛生，**不是**對 ci 步驟 1 持續卡住的解釋或修復證明。無法證明能解決 diag4 所見的 20 秒 Vitest 逾時與約 53 秒 SEED_LOCK 外洩。重點整疊與正式 ci＋sidecar 仍等總召，不在本切片自行開跑。
+
+### SCHEMA_LOCK 取鎖用 statement_timeout（57014）
+
+`pg_advisory_lock(SCHEMA_LOCK)` 在 `migrate` 裡於交易外執行。`SET LOCAL lock_timeout` 只在交易內有效，因此不能包住這句取鎖。改為只對取鎖那一句設定 `statement_timeout = 5s`（取到或失敗後立刻還原）；逾時 SQLSTATE 為 57014，映成固定中文 `MIGRATE_ADVISORY_LOCK_FAILED`，與遷移語句的 `lock_timeout`／55P03／`MIGRATE_LOCK_FAILED` 區分。
+
+邊角：取鎖當下若已授予卻同時收到 57014，session 仍可能握著 SCHEMA_LOCK，而 `locked` 不會被設為 true，`migrate` 的 `finally` 不會 unlock。openDb 失敗路徑會 `client.release(true)` 並 `pool.end()`。依 node-pg，`release(true)` 丟棄該 client（結束後端 session），PostgreSQL 會在 session 結束時釋放 session advisory lock；這是依賴的清理路徑，不是對所有驅動版本與錯誤形況的保證。
+
+還原 `statement_timeout`：取鎖成功但還原失敗則拒啟（固定中文 `MIGRATE_TIMEOUT_RESTORE_FAILED`，不繼續帶 5 秒限制跑遷移）；取鎖本身失敗時仍拋原錯（含 57014 映成的訊息），還原錯不得蓋掉原錯。遷移連線在成功與失敗路徑一律 `release(true)`，不還回 app pool。因此每次啟動都會丟棄一條遷移連線。非 57014 的取鎖／啟動錯誤仍拋原錯（既有行為）。
+
+### SEED_LOCK 改為交易級鎖
+
+`seedPhase2Fixtures` 改在 `db.tx` 內 `pg_advisory_xact_lock(SEED_LOCK)`，與 TRUNCATE／INSERT 同一筆交易；COMMIT／ROLLBACK 自動釋放，不必（也不可在他連線）手動 unlock。密碼 `argon2.hash` 在取鎖前算完，避免持鎖期間做 CPU 密集運算。這是**正向的行為變更**：整段 seed 現在是單一交易。`app.ts` 仍 re-export，`docs/demo/start-server.ts` 的 `doSeed` 呼叫點不變。
+
+### 測試 hung 清理用 cancel、不用 terminate
+
+`ci-lock-race` 在 openDb 競賽回 `hung` 時不得 `await opening`（會把 9 秒斷言拖成 20 秒逾時）。清理只用 `pg_cancel_backend`。曾試 `pg_terminate_backend`，node-pg 會對已中斷的 socket 拋出未接住的 `ECONNRESET`，Vitest 記為 unhandled error。
+
+可寫進檢討的限制：`cancelForeignBackends` 會取消「目前測試庫上、非本測試已登錄連線」的後端，若與 sensor-ingest 等共用同一 DATABASE_URL，可能誤傷並行檔（control-api 專案 `fileParallelism: false`，正式 ci 仍可能與其他專案共用實例）。`advisory()` 查 `pg_locks` 時未再依 `datname` 過濾。
+
+### 測試接縫
+
+還原成敗與 `release(true)` 的測試（`apps/control-api/test/schema-lock-restore.test.ts`）不新導出生產函式，只攔截 `openDb` 所用 migrate client 的 `query`／`release`，並在同一條 client 上於還原後、release 前 `SHOW statement_timeout`。
