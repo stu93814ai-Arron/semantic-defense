@@ -4,9 +4,9 @@
  */
 import argon2 from "argon2";
 import type { FastifyInstance } from "fastify";
-import type { Db, Queryable } from "./db.js";
-import type { Role } from "./auth.js";
-import { insertUser } from "./users.js";
+import type { Db, Queryable } from "../src/db.js";
+import type { Role } from "../src/auth.js";
+import { insertUser } from "../src/users.js";
 
 type SeedApp = FastifyInstance & { db: Db };
 

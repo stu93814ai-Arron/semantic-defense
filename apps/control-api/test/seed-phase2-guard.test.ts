@@ -5,7 +5,7 @@
 import argon2 from "argon2";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "../src/db.js";
-import { seedPhase2Fixtures } from "../src/seed-phase2.js";
+import { seedPhase2Fixtures } from "../test-support/seed-phase2.js";
 import type { ControlApi } from "./helpers/app.js";
 
 const REFUSED =

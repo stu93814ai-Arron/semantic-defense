@@ -8,7 +8,7 @@ import {
   type BuildAppOptions as ImplBuildAppOptions,
   type ControlApi,
 } from "../../src/app.js";
-import { seedPhase2Fixtures } from "../../src/seed-phase2.js";
+import { seedPhase2Fixtures } from "../../test-support/seed-phase2.js";
 
 export type { ControlApi };
 export { seedPhase2Fixtures };

@@ -42,8 +42,8 @@ function emitProductionSrc(outDir: string): void {
 
 describe("正式 build 產物", () => {
   // 軟體大總召裁示（未經使用者確認）：seed-phase2.ts 移出 src，正式 build 不含它。
-  // 移出前 src 編譯產物含種子檔，用 it.fails 標成紅燈。
-  it.fails("不含 seed-phase2 與測試種子密碼", () => {
+  // 實作後 it.fails 已改回 it()。
+  it("不含 seed-phase2 與測試種子密碼", () => {
     const outDir = mkdtempSync(join(tmpdir(), "sd-prod-"));
     try {
       emitProductionSrc(outDir);

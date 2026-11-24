@@ -6,7 +6,7 @@
  */
 import { it } from "vitest";
 import { buildApp } from "../../apps/control-api/src/app.ts";
-import { seedPhase2Fixtures } from "../../apps/control-api/src/seed-phase2.ts";
+import { seedPhase2Fixtures } from "../../apps/control-api/test-support/seed-phase2.ts";
 
 it("demo: start control-api on management port", async () => {
   const host = process.env.DEMO_HOST ?? "127.0.0.1";
