@@ -471,7 +471,9 @@ async function acquireSchemaLock(q: pg.PoolClient): Promise<void> {
     }
     // 取鎖已失敗：還原錯不得蓋掉原錯（含 57014 映成的拒啟訊息）
   }
-  if (lockErr) throw lockErr;
+  // 以是否持鎖為準（A 組領航員裁示，未經使用者確認）：非 57014 留在 lockErr；
+  // 未持鎖且沒有記下的錯誤，仍拒絕啟動，避免沒鎖繼續遷移。
+  if (!held) throw lockErr ?? new Error(MIGRATE_ADVISORY_LOCK_FAILED);
 }
 
 
