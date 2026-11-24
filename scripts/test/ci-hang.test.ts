@@ -217,6 +217,23 @@ it("SIGTERM 等快照連線成功後才關 postgres，並刪掉 sd-pg 目錄", a
   expect(left).toEqual([]);
 });
 
+it("子行程被信號殺掉時不以 0 收場", async () => {
+  const code = await runChild(process.execPath, ["-e", "process.kill(process.pid, 'SIGKILL')"], process.env);
+  expect(code).not.toBe(0);
+});
+
+it("spawn 失敗時不以 0 收場", async () => {
+  const code = await runChild("/tmp/sd-no-such-bin-m5", [], process.env);
+  expect(code).not.toBe(0);
+});
+
+it("退出碼是 null 時不以 0 收場", () => {
+  const src = readFileSync(resolve(__dirname, "../run-child.mjs"), "utf8");
+  const matched = src.match(/signal \? (\d+) : code \?\? (\d+)/);
+  expect(matched?.[1]).toBe("1");
+  expect(matched?.[2]).toBe("1");
+});
+
 it("json reporter 與 live reporter 可同時跑", async () => {
   mkdirSync(join(ROOT, "reports"), { recursive: true });
   const dir = mkdtempSync(join(ROOT, "reports", "live-"));
