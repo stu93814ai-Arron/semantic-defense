@@ -104,6 +104,77 @@ describe("evaluateAudit：severity 正規化、metadata 核對與台北日期", 
   });
 });
 
+// 以下與現行實作相反，用 it.fails 讓這顆測試提交保持綠色。假例外只注入在測試裡。
+type Exc = { id: string; module: string; vulnerable: string; maxVersion: number[]; expires?: string; reason?: string };
+type AuditOut = { ok: boolean; allowed: string[]; errors: string[]; warnings?: string[] };
+const auditWith = evaluateAudit as (scan: unknown, today: string, exceptions?: readonly Exc[]) => AuditOut;
+const FAKE: Exc = { id: "GHSA-test-test-test", module: "example-pkg", vulnerable: "<1.0.0", maxVersion: [0, 9, 9], expires: "2026-12-01", reason: "測試注入，不在正式清單" };
+const emptyScan = { advisories: {}, metadata: meta(0) };
+const fakeScan = () => scan({ severity: "high", module_name: FAKE.module, github_advisory_id: FAKE.id, vulnerable_versions: FAKE.vulnerable,
+  patched_versions: "<0.0.0", findings: [{ version: "0.9.0", paths: ["tools>example-pkg"] }] });
+const warned = (r: AuditOut, seen: string[]) => `${(r.warnings ?? []).join("\n")}\n${seen.join("\n")}`;
+function spyWarn(run: (seen: string[]) => void) {
+  const seen: string[] = [];
+  const orig = console.warn;
+  console.warn = ((...args: unknown[]) => { seen.push(args.map(String).join(" ")); }) as typeof console.warn;
+  try { run(seen); } finally { console.warn = orig; }
+}
+
+describe("evaluateAudit：空清單、缺欄與已不在掃描的公告（目前實作尚未符合，it.fails）", () => {
+  const days = ["2026-01-01", "2026-11-30", "2026-12-01", "2027-01-01"];
+  it.fails("today ≥ 2026-12-01 且沒有任何 finding → ok", () => {
+    for (const today of ["2026-12-01", "2026-12-02", "2027-01-01"]) {
+      const r = auditWith(emptyScan, today);
+      expect(r.ok).toBe(true);
+      expect(r.errors).toEqual([]);
+    }
+  });
+  it.fails("任何 high／critical（含舊 picomatch GHSA-fc5q-39xc-vjpf）在任何日期一律擋下", () => {
+    for (const today of days) {
+      for (const adv of [{}, { severity: "critical" }, { severity: "HIGH", github_advisory_id: "GHSA-aaaa-bbbb-cccc", module_name: "left-pad" },
+        { severity: "critical", github_advisory_id: "GHSA-zzzz-yyyy-xxxx", module_name: "other" }]) {
+        const r = auditWith(scan(adv), today);
+        expect(r.ok).toBe(false);
+        expect(r.allowed).toHaveLength(0);
+      }
+    }
+  });
+  it.fails("注入的例外 id 已不在掃描 → 警告含 id 與應移除此例外，且不失敗", () => {
+    spyWarn(seen => {
+      const r = auditWith(emptyScan, OK_DAY, [FAKE]);
+      expect(r.ok).toBe(true);
+      expect(r.errors).toEqual([]);
+      expect(warned(r, seen)).toContain(FAKE.id);
+      expect(warned(r, seen)).toContain("應移除此例外");
+      const other = auditWith(scan({ github_advisory_id: "GHSA-aaaa-bbbb-cccc" }), OK_DAY, [FAKE]);
+      expect(other.ok).toBe(false);
+      expect(other.errors.join("\n")).not.toContain("應移除此例外");
+      expect(warned(other, seen)).toContain("應移除此例外");
+    });
+  });
+  it.fails("注入的例外缺少理由、缺少到期日，或已到期 → 失敗", () => {
+    for (const reason of [undefined, "", "   "]) {
+      const r = auditWith(emptyScan, OK_DAY, [{ ...FAKE, reason }]);
+      expect(r.ok).toBe(false);
+      expect(r.errors.join("\n")).toContain("缺少理由");
+    }
+    const noDate = auditWith(emptyScan, OK_DAY, [{ ...FAKE, expires: "" }]);
+    expect(noDate.ok).toBe(false);
+    expect(noDate.errors.join("\n")).toContain("缺少到期日");
+    const expired = auditWith(emptyScan, OK_DAY, [{ ...FAKE, expires: OK_DAY }]);
+    expect(expired.ok).toBe(false);
+    expect(expired.errors.join("\n")).toContain(`例外已於 ${OK_DAY} 到期`);
+  });
+  it.fails("注入的例外 id 仍在掃描且條件相符 → 放行，且不提示應移除", () => {
+    spyWarn(seen => {
+      const r = auditWith(fakeScan(), OK_DAY, [FAKE]);
+      expect(r.ok).toBe(true);
+      expect(r.allowed[0]).toContain(FAKE.id);
+      expect(warned(r, seen)).not.toContain("應移除此例外");
+    });
+  });
+});
+
 // audit.sh：第一關 --prod 沒有任何例外；用假的 pnpm（PATH 最前面）跑腳本副本
 const ROOT = resolve(__dirname, "../..");
 const dirs: string[] = [];
