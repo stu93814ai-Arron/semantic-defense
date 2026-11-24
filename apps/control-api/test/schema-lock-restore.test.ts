@@ -208,8 +208,8 @@ describe("K6／K8 取 SCHEMA_LOCK 失敗", () => {
     expect(releases).toContain(true);
   }, 15_000);
 
-  // 讀 .code 會先拋 TypeError，到不了 if (!held)。plain it 收到 Cannot read properties of undefined (reading 'code')。故用 it.fails。尚未改 catch。
-  it.fails("取鎖以 undefined reject 時仍拒絕啟動，且不繼續遷移", async () => {
+  // 實作後 it.fails 已改回 it()。undefined 留在 lockErr，if (!held) 拋遷移協調鎖訊息。
+  it("取鎖以 undefined reject 時仍拒絕啟動，且不繼續遷移", async () => {
     // K6：if (lockErr) throw lockErr 會放行 undefined；if (!held) 仍拒絕（A 組領航員裁示，未經使用者確認）。
     const seen: string[] = [];
     installClientHook({

@@ -448,6 +448,11 @@ async function ensureUsernameNormalized(q: Queryable): Promise<void> {
  * SET LOCAL lock_timeout 約束。只對取鎖那一句設 statement_timeout，取到或失敗後立刻還原。
  * 逾時 SQLSTATE 為 57014（不是 55P03）。訊息不含 IP、時間戳、憑證、URL、SQL 或例外字串。
  */
+/** undefined／null 沒有 code；直接讀 .code 會拋 TypeError。 */
+function errorCode(err: unknown): string | undefined {
+  return err !== null && typeof err === "object" ? (err as { code?: string }).code : undefined;
+}
+
 async function acquireSchemaLock(q: pg.PoolClient): Promise<void> {
   const prev = (await q.query<{ statement_timeout: string }>("SHOW statement_timeout")).rows[0]!.statement_timeout;
   await q.query("SELECT set_config('statement_timeout', $1, false)", [`${SCHEMA_LOCK_TIMEOUT_MS}ms`]);
@@ -457,7 +462,8 @@ async function acquireSchemaLock(q: pg.PoolClient): Promise<void> {
     await q.query("SELECT pg_advisory_lock($1)", [SCHEMA_LOCK]);
     held = true;
   } catch (err) {
-    lockErr = (err as { code?: string }).code === "57014" ? new Error(MIGRATE_ADVISORY_LOCK_FAILED) : err;
+    // 非物件（含 undefined）的 code 不讀，lockErr 留原值，讓 if (!held) 拒絕啟動。
+    lockErr = errorCode(err) === "57014" ? new Error(MIGRATE_ADVISORY_LOCK_FAILED) : err;
   }
   try {
     await q.query("SELECT set_config('statement_timeout', $1, false)", [prev]);
