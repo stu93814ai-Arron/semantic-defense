@@ -13,7 +13,7 @@
 
 | 使用者名稱 | 角色 | 密碼定義位置（請打開檔案查看，勿把正式密鑰貼到聊天） |
 | --- | --- | --- |
-| `operator1` | 值班 | `apps/control-api/src/seed-phase2.ts` |
+| `operator1` | 值班 | `apps/control-api/test-support/seed-phase2.ts` |
 | `owner1` | 應用負責人（應用 `app-alpha`） | 同上 |
 | `owner2` | 應用負責人（應用 `app-beta`） | 同上 |
 | `admin1` | 平台管理員 | 同上 |

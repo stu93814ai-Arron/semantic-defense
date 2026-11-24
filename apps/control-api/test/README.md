@@ -39,7 +39,7 @@ node scripts/with-pg.mjs pnpm exec vitest run apps/control-api
 
 ```ts
 import { buildApp } from "../src/app.js";
-import { seedPhase2Fixtures } from "../src/seed-phase2.js";
+import { seedPhase2Fixtures } from "../test-support/seed-phase2.js";
 
 const databaseUrl = process.env.DATABASE_URL!; // with-pg.mjs 提供
 
