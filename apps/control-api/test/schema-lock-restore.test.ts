@@ -233,8 +233,8 @@ describe("K6／K8 取 SCHEMA_LOCK 失敗", () => {
  * SHOW statement_timeout 在 acquireSchemaLock 的 try 之外，reject(undefined) 直接進 migrate 的 catch。
  */
 describe("throw undefined 也必須拒絕啟動", () => {
-  // 目前 failure !== undefined 放行，openDb 成功，故用 it.fails。plain it 是 expected false、received true。尚未改 migrate。
-  it.fails("第一句 SHOW statement_timeout 以 undefined reject 時 openDb 失敗，錯誤是 undefined", async () => {
+  // 實作後 it.fails 已改回 it()。布林旗標在 catch 到 undefined 時仍為 true（A 組領航員裁示，未經使用者確認）。
+  it("第一句 SHOW statement_timeout 以 undefined reject 時 openDb 失敗，錯誤是 undefined", async () => {
     installClientHook({
       onQuery: async ({ sql, run }) => {
         if (isShowTimeout(sql)) return Promise.reject(undefined);

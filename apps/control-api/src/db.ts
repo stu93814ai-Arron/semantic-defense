@@ -522,6 +522,7 @@ async function releaseSchemaLock(client: pg.PoolClient, failure: unknown): Promi
 
 async function migrate(client: pg.PoolClient, now: () => number, log?: SeedLog): Promise<void> {
   let locked = false;
+  let failed = false;
   let failure: unknown;
   try {
     await acquireSchemaLock(client);
@@ -533,10 +534,14 @@ async function migrate(client: pg.PoolClient, now: () => number, log?: SeedLog):
     await ensureAlertKindCheck(client);
     await seedCriticalAllowlist(client, now, log);
   } catch (err) {
+    failed = true;
     failure = err;
   }
-  if (locked) failure = await releaseSchemaLock(client, failure);
-  if (failure !== undefined) throw failure;
+  if (locked) {
+    failure = await releaseSchemaLock(client, failure);
+    if (failure !== undefined) failed = true;
+  }
+  if (failed) throw failure;
 }
 
 /** 以連線字串開 Postgres、套用 schema。連線字串僅來自參數／環境，不寫死密鑰。 */
