@@ -308,3 +308,122 @@ describe("啟動時 users 鎖：已具約束即略過，缺約束時 lock_timeou
     expect(msg).not.toMatch(/LOCK|SELECT|lock_timeout|canceling|users/i);
   }, 20_000);
 });
+
+type QueryRun = (sql?: string, params?: unknown[]) => Promise<{ rows: Array<Record<string, unknown>> }>;
+
+function queryText(q: unknown): string {
+  if (typeof q === "string") return q;
+  if (q !== null && typeof q === "object" && "text" in q) return String((q as { text: unknown }).text);
+  return "";
+}
+
+/** 只包 openDb 的 migrate client。回傳解除安裝。 */
+function installMigrateHook(
+  onQuery: (info: { sql: string; run: QueryRun }) => Promise<{ rows: Array<Record<string, unknown>> }>,
+): () => void {
+  const origConnect = pg.Pool.prototype.connect;
+  const connect = origConnect as unknown as (this: pg.Pool) => Promise<pg.PoolClient>;
+  pg.Pool.prototype.connect = function (this: pg.Pool, ...args: unknown[]) {
+    if (typeof args[0] === "function") {
+      return (origConnect as unknown as (this: pg.Pool, cb: unknown) => unknown).call(this, args[0]);
+    }
+    return connect.call(this).then((client) => {
+      const origQuery = client.query.bind(client) as QueryRun;
+      client.query = ((...qargs: unknown[]) => {
+        const sql = queryText(qargs[0]);
+        const run: QueryRun = (s, p) => {
+          if (s === undefined) return origQuery(...(qargs as [string, unknown[]?]));
+          return origQuery(s, p);
+        };
+        return onQuery({ sql, run });
+      }) as typeof client.query;
+      return client;
+    });
+  } as typeof pg.Pool.prototype.connect;
+  return () => { pg.Pool.prototype.connect = origConnect; };
+}
+
+async function readXact(run: QueryRun): Promise<string> {
+  const r = await run("SELECT pg_current_xact_id()::text AS id");
+  return String(r.rows[0]!.id);
+}
+
+async function readPid(run: QueryRun): Promise<number> {
+  const r = await run("SELECT pg_backend_pid() AS pid");
+  return Number(r.rows[0]!.pid);
+}
+
+async function holdsUsersLock(url: string, pid: number): Promise<boolean> {
+  const c = new pg.Client({ connectionString: url });
+  await c.connect();
+  try {
+    const r = await c.query(
+      "SELECT 1 FROM pg_locks WHERE pid = $1 AND relation = 'users'::regclass AND mode = 'ShareRowExclusiveLock' AND granted",
+      [pid],
+    );
+    return r.rows.length > 0;
+  } finally {
+    await c.end();
+  }
+}
+
+/** 另一條連線試著插入未正規化帳號。鎖還在應於 300ms 得到 55P03，不得卡住。 */
+async function blockedInsertCode(url: string): Promise<string> {
+  const c = new pg.Client({ connectionString: url });
+  await c.connect();
+  let code = "timeout";
+  try {
+    await c.query("SET statement_timeout = '1s'");
+    await c.query("BEGIN");
+    await c.query("SET LOCAL lock_timeout = '300ms'");
+    try {
+      await c.query("INSERT INTO users (username, password_hash, role) VALUES ('Bad Name', 'x', 'operator')");
+      code = "ok";
+    } catch (err) {
+      code = err !== null && typeof err === "object" && "code" in err ? String((err as { code: unknown }).code) : "error";
+    }
+    await c.query("ROLLBACK");
+    return code;
+  } finally {
+    await Promise.race([c.end(), new Promise((resolve) => setTimeout(resolve, 2_000))]);
+  }
+}
+
+describe("U2 掃描與加約束在同一交易並持有 users 鎖", () => {
+  const uninstalls: Array<() => void> = [];
+  afterEach(async () => {
+    while (uninstalls.length > 0) uninstalls.pop()?.();
+    await restoreSchema();
+  });
+
+  it("掃描當下擋住非法插入，且加約束仍是同一筆交易", async () => {
+    const url = requireDatabaseUrl();
+    const prep = await openDb(url);
+    await prep.exec(`ALTER TABLE users DROP CONSTRAINT IF EXISTS ${USERS_CHECK}`);
+    await prep.exec(`DROP INDEX IF EXISTS ${USERS_LOWER_IDX}`);
+    await truncatePhase2Tables(prep);
+    await prep.close();
+    let scanXact = "";
+    let alterXact = "";
+    let insertCode = "";
+    let lockHeld = false;
+    uninstalls.push(installMigrateHook(async ({ sql, run }) => {
+      if (sql.trim() === "SELECT username FROM users") {
+        const rows = await run();
+        scanXact = await readXact(run);
+        lockHeld = await holdsUsersLock(url, await readPid(run));
+        insertCode = await blockedInsertCode(url);
+        return rows;
+      }
+      if (sql.includes(`ADD CONSTRAINT ${USERS_CHECK}`)) alterXact = await readXact(run);
+      return run();
+    }));
+    const db = await openDb(url);
+    await db.close();
+    expect(lockHeld).toBe(true);
+    expect(insertCode).toBe("55P03");
+    expect(scanXact.length).toBeGreaterThan(0);
+    expect(alterXact).toBe(scanXact);
+    expect(await catalogHas(url)).toEqual({ index: true, check: true });
+  }, 20_000);
+});
