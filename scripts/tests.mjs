@@ -1,15 +1,23 @@
 // 必跑測試：跑兩次比對每個測試結果；時過時不過者標為 FLAKY，寫入 .ci/flaky.json 並移出必跑清單
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { formatPartial } from "./live-report.mjs";
 mkdirSync("reports", { recursive: true }); mkdirSync(".ci", { recursive: true });
 function run(i, cov) {
   const out = `reports/vitest-run${i}.json`;
-  const args = ["scripts/with-pg.mjs", "npx", "vitest", "run", "--reporter=json", `--outputFile=${out}`];
+  const args = ["scripts/with-pg.mjs", "npx", "vitest", "run", "--reporter=json", "--reporter=./scripts/vitest-live-reporter.mjs", `--outputFile=${out}`];
   if (cov) args.push("--coverage");
   let covFail = false;
   try { execFileSync("node", args, { stdio: "inherit" }); } catch { covFail = true; }
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- out 由本檔固定樣板產生，非外部輸入
-  const r = JSON.parse(readFileSync(out, "utf8"));
+  let raw;
+  try {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- out 由本檔固定樣板產生，非外部輸入
+    raw = readFileSync(out, "utf8");
+  } catch (err) {
+    console.error(formatPartial("reports"));
+    throw err;
+  }
+  const r = JSON.parse(raw);
   const m = new Map();
   for (const f of r.testResults) for (const t of f.assertionResults) m.set(`${f.name.replace(process.cwd() + "/", "")} > ${t.fullName}`, t.status);
   return { m, exitFail: covFail, ok: r.success };

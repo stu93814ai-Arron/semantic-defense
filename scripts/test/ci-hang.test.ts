@@ -2,7 +2,7 @@
 /**
  * spawnSync 停住 with-pg 的事件迴圈時，Postgres stderr 寫滿後後端卡在 write()，鎖不放。
  * 必跑被 timeout 殺掉時要留下仍在跑的測試名稱與 pg_stat_activity。
- * 實作前 plain it 是紅的（stderr 收到 0 而非 131072、報告檔是空的），故用 it.fails。
+ * 實作後 it.fails 已改回 it()。
  */
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
@@ -33,27 +33,31 @@ async function waitUntil(fn: () => boolean, ms: number) {
   return false;
 }
 
+const DRAIN_BYTES = 128 * 1024;
 const LOGGER = `const chunk = Buffer.alloc(1024, 97); let left = 128;
-function write(){ while (left > 0) { if (!process.stderr.write(chunk)) { process.stderr.once("drain", write); return; } left -= 1; } process.exit(0); }
+function write(){ while (left > 0) { left -= 1; if (!process.stderr.write(Buffer.from(chunk))) { process.stderr.once("drain", write); return; } } process.stderr.end(); }
+process.stderr.on("finish", () => process.exit(0));
 write();`;
+const sleeperUntil = (flag: string) => `const fs=require("fs"); const f=${JSON.stringify(flag)}; const end=Date.now()+3000; const t=setInterval(()=>{ if (fs.existsSync(f)||Date.now()>end){ clearInterval(t); process.exit(0);} }, 10);`;
 
-it.fails("子行程執行期間仍排空其他 stderr，寫滿管道也不會堵住", async () => {
+it("子行程執行期間仍排空其他 stderr，寫滿管道也不會堵住", async () => {
+  const flag = join(scratch(), "drained");
   const logger = spawn(process.execPath, ["-e", LOGGER], { stdio: ["ignore", "ignore", "pipe"] });
   kids.push(logger);
   if (!logger.stderr) throw new Error("logger stderr missing");
   let bytes = 0;
-  logger.stderr.on("data", (c: Buffer) => { bytes += c.length; });
-  await runChild(process.execPath, ["-e", "setTimeout(() => process.exit(0), 800)"], process.env);
-  expect(bytes).toBe(128 * 1024);
+  logger.stderr.on("data", (c: Buffer) => { bytes += c.length; if (bytes >= DRAIN_BYTES) writeFileSync(flag, "1"); });
+  await runChild(process.execPath, ["-e", sleeperUntil(flag)], process.env);
+  expect(bytes).toBe(DRAIN_BYTES);
 });
 
-it.fails("with-pg 用 runChild，不再呼叫 spawnSync", () => {
+it("with-pg 用 runChild，不再呼叫 spawnSync", () => {
   const src = readFileSync(resolve(__dirname, "../with-pg.mjs"), "utf8");
   expect(src.includes("runChild(")).toBe(true);
   expect(/spawnSync\s*\(/.test(src)).toBe(false);
 });
 
-it.fails("快照查詢會讀 pg_stat_activity 與 pg_locks", async () => {
+it("快照查詢會讀 pg_stat_activity 與 pg_locks", async () => {
   const seen: string[] = [];
   const snap = await readServerSnapshot(async (sql) => { seen.push(sql); return { rows: [{ pid: 1 }] }; });
   expect(seen.join("\n")).toContain("pg_stat_activity");
@@ -62,7 +66,7 @@ it.fails("快照查詢會讀 pg_stat_activity 與 pg_locks", async () => {
   expect(snap.locks).toEqual([{ pid: 1 }]);
 });
 
-it.fails("測試一開始就寫入仍在跑的名稱，結束後從清單拿掉", async () => {
+it("測試一開始就寫入仍在跑的名稱，結束後從清單拿掉", async () => {
   const dir = scratch();
   setReportDir(dir);
   const reporter = new LiveReporter();
@@ -74,7 +78,7 @@ it.fails("測試一開始就寫入仍在跑的名稱，結束後從清單拿掉"
   expect(text(file)).toContain("\"running\":[]");
 });
 
-it.fails("SIGTERM 時留下測試名稱與 pg 快照", async () => {
+it("SIGTERM 時留下測試名稱與 pg 快照", async () => {
   const dir = scratch();
   const mod = JSON.stringify(resolve(__dirname, "../live-report.mjs"));
   const childPath = join(dir, "child.mjs");
@@ -97,7 +101,7 @@ setInterval(() => {}, 1000);
   expect(text(join(dir, "pg-live.json"))).toContain("872364203");
 });
 
-it.fails("週期快照寫入 pg-live.json", async () => {
+it("週期快照寫入 pg-live.json", async () => {
   const dir = scratch();
   const stop = startActivityLoop(dir, async () => ({
     activity: [{ query: "SELECT pg_advisory_lock($1)", state: "active", wait_event: null }],
@@ -110,7 +114,7 @@ it.fails("週期快照寫入 pg-live.json", async () => {
   } finally { stop(); }
 });
 
-it.fails("部分報告含仍在跑的測試與 activity", () => {
+it("部分報告含仍在跑的測試與 activity", () => {
   const dir = scratch();
   writeRunning(dir, ["file > stuck"]);
   writeSnapshot(dir, { activity: [{ query: "INSERT", wait_event: null, application_name: "" }], locks: [] });
@@ -119,7 +123,7 @@ it.fails("部分報告含仍在跑的測試與 activity", () => {
   expect(partial).toContain("INSERT");
 });
 
-it.fails("dump-partial 印出仍在跑的測試與 pg 快照", () => {
+it("dump-partial 印出仍在跑的測試與 pg 快照", () => {
   const dir = scratch();
   writeRunning(dir, ["file > stuck"]);
   writeSnapshot(dir, { activity: [{ query: "INSERT", wait_event: null }], locks: [] });
@@ -129,7 +133,7 @@ it.fails("dump-partial 印出仍在跑的測試與 pg 快照", () => {
   expect(dumped.stdout).toContain("INSERT");
 });
 
-it.fails("必跑腳本接上 live reporter，被殺時會印部分報告", () => {
+it("必跑腳本接上 live reporter，被殺時會印部分報告", () => {
   const tests = readFileSync(resolve(__dirname, "../tests.mjs"), "utf8");
   const required = readFileSync(resolve(__dirname, "../required.sh"), "utf8");
   expect(tests).toContain("--reporter=./scripts/vitest-live-reporter.mjs");
@@ -138,7 +142,7 @@ it.fails("必跑腳本接上 live reporter，被殺時會印部分報告", () =>
   expect(required).toContain("TERM");
 });
 
-it.fails("json reporter 與 live reporter 可同時跑", async () => {
+it("json reporter 與 live reporter 可同時跑", async () => {
   mkdirSync(join(ROOT, "reports"), { recursive: true });
   const dir = mkdtempSync(join(ROOT, "reports", "live-"));
   dirs.push(dir);
