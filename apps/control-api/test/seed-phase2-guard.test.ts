@@ -195,3 +195,33 @@ describe("seedPhase2Fixtures 反向守門", () => {
     }
   });
 });
+
+/** 專案前綴：`sd_` + 既有庫名。`ci` → `sd_ci`，`flow_store_*` → `sd_flow_store_*`。 */
+const PREFIXED_TEST_DATABASES = KNOWN_TEST_DATABASES.map((name) => `sd_${name}`);
+
+const PREFIX_NEAR_MISS = [
+  "sd_ci_extra",
+  "SD_CI",
+  "sd_CI",
+  "sd_flow_store_",
+  "sd_flow_store",
+  "sd_flow_store_1",
+  "sd_flow_store_Test",
+] as const;
+
+async function runNamed(names: readonly string[], mode: Mode): Promise<void> {
+  for (const db of names) await runCase({ title: db, nodeEnv: "test", db, mode });
+}
+
+describe("專案前綴測試庫名", () => {
+  // 軟體大總召裁示（未經使用者確認）；正則細節為 A 組領航員裁示（未經使用者確認）。
+  // 實作前這些預期與現行放行相反，用 it.fails 標成紅燈，本檔本身維持綠燈。
+  it.fails("NODE_ENV=test 時舊庫名 ci 與 flow_store_* 全部拒絕", () => runNamed(KNOWN_TEST_DATABASES, "refuse"));
+
+  it.fails("NODE_ENV=test 時 sd_ci 與 sd_flow_store_* 全部放行", () => runNamed(
+    [...PREFIXED_TEST_DATABASES, "sd_flow_store_a"],
+    "allow",
+  ));
+
+  it("NODE_ENV=test 時前綴近似名仍拒絕", () => runNamed(PREFIX_NEAR_MISS, "refuse"));
+});
