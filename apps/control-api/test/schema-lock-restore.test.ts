@@ -207,6 +207,25 @@ describe("K6／K8 取 SCHEMA_LOCK 失敗", () => {
     expect(seen.some((sql) => sql.includes("pg_advisory_unlock("))).toBe(false);
     expect(releases).toContain(true);
   }, 15_000);
+
+  // 讀 .code 會先拋 TypeError，到不了 if (!held)。plain it 收到 Cannot read properties of undefined (reading 'code')。故用 it.fails。尚未改 catch。
+  it.fails("取鎖以 undefined reject 時仍拒絕啟動，且不繼續遷移", async () => {
+    // K6：if (lockErr) throw lockErr 會放行 undefined；if (!held) 仍拒絕（A 組領航員裁示，未經使用者確認）。
+    const seen: string[] = [];
+    installClientHook({
+      onQuery: async ({ sql, run }) => {
+        seen.push(sql);
+        if (sql.includes("pg_advisory_lock(") && !sql.includes("unlock")) return Promise.reject(undefined);
+        return run();
+      },
+    });
+    const outcome = await settleOpenDb();
+    if (outcome.ok) await outcome.db.close().catch(() => {});
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect((outcome.err as Error).message).toBe(MIGRATE_ADVISORY_LOCK_FAILED);
+    expect(seen.some((sql) => sql.includes("CREATE TABLE"))).toBe(false);
+  }, 15_000);
 });
 
 /**
