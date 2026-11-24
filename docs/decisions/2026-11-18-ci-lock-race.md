@@ -82,8 +82,44 @@ A 組領航員裁示（未經使用者確認）：`seedPhase2Fixtures` 改在 `d
 
 A 組領航員裁示（未經使用者確認）：`ci-lock-race` 在 openDb 競賽回 `hung` 時不得 `await opening`（會把 9 秒斷言拖成 20 秒逾時）。清理只用 `pg_cancel_backend`。曾試 `pg_terminate_backend`，node-pg 會對已中斷的 socket 拋出未接住的 `ECONNRESET`，Vitest 記為 unhandled error。
 
-可寫進檢討的限制：`cancelForeignBackends` 會取消「目前測試庫上、非本測試已登錄連線」的後端，若與 sensor-ingest 等共用同一 DATABASE_URL，可能誤傷並行檔（control-api 專案 `fileParallelism: false`，正式 ci 仍可能與其他專案共用實例）。`advisory()` 查 `pg_locks` 時未再依 `datname` 過濾。
+可寫進檢討的限制（H2a 已收緊，見文末）：舊版 `cancelForeignBackends` 會取消「目前測試庫上、非本測試已登錄連線」的全部後端。`advisory()` 當時查 `pg_locks` 未再依資料庫過濾。
 
 ### 測試接縫
 
 還原成敗與 `release(true)` 的測試（`apps/control-api/test/schema-lock-restore.test.ts`）不新導出生產函式，只攔截 `openDb` 所用 migrate client 的 `query`／`release`，並在同一條 client 上於還原後、release 前 `SHOW statement_timeout`。
+
+## 強化切片 H2a
+
+分支 `team-a-harden-h2a`，rebase 到 `main` 的 `92936d2`（`74799fe` 加上閘門紀錄檔 `.ci/e2e-seconds`、`.ci/required-seconds`、`.ci/gate-history.csv`，沒有程式或測試）。不改契約、不加依賴、不加功能。五項都是軟體大總召裁示（未經使用者確認）。下面的寫法是 A 組領航員裁示（未經使用者確認）。
+
+### 取鎖以 held 判斷（K6、K8）
+
+`acquireSchemaLock` 結尾是 `if (!held) throw lockErr ?? new Error(MIGRATE_ADVISORY_LOCK_FAILED)`。取鎖那句若拋錯，57014 仍映成固定中文；其他錯誤留在 `lockErr`，原樣再拋，不繼續遷移。沒有記下的錯誤但鎖也沒拿到，同樣拒絕啟動。`migrate` 只在 `acquireSchemaLock` 成功返回後把 `locked` 設為 true，只有這時才釋放 `SCHEMA_LOCK`，沒取到鎖不會呼叫 `pg_advisory_unlock`。失敗路徑仍由 `openDb` 的 `release(true)` 丟掉遷移連線。
+
+測試在 `schema-lock-restore.test.ts`。注入 `08006`／`57P01`：啟動失敗、訊息是原錯、沒有後續 `CREATE TABLE`、沒有 `pg_advisory_unlock`。臨時突變（不提交）：catch 只留下 57014 時，K6 看到 `openDb` 成功；拿掉 `if (locked)` 時，K8 看到 unlock 被呼叫。
+
+### 只處理本庫、且是本專案的連線
+
+`advisory()` 增加 `pg_locks.database = (SELECT oid FROM pg_database WHERE datname = current_database())`。同一把數字鍵在別的資料庫不會出現在結果裡。本庫的持有者仍會出現。
+
+`cancelForeignBackends` 只取消同時符合下列條件的後端：
+
+1. `pg_stat_activity.datname = current_database()`。其他資料庫不列、不 cancel。
+2. `backend_type = 'client backend'`，不是這條探測連線，也不在本測試已用 `client()` 登錄的 pid。
+3. `pg_locks` 有一筆屬於該 pid 的 advisory 鎖：`objid` 為本檔的 `SCHEMA_LOCK`（872364201）、`objsubid = 1`，且 `database` 等於 `current_database()` 的 oid。持有或等待都算。
+
+第 3 點是「本專案連線」的辨識。這把鎖只用在 control-api 的 `migrate`。sensor-ingest 與單純的 `pg_sleep` 沒有這把鎖，即使連在同一個 `sd_ci` 也不會被取消。其他資料庫上的同號 advisory 鎖，`datname` 與 `pg_locks.database` 都對不上。
+
+測試建立 `sd_h2a_foreign`，在那邊取同一把 `SCHEMA_LOCK`，確認 `advisory()` 只含本庫持有者。另測：取消不會打到該庫，也不會取消本庫上沒有這把鎖的 `pg_sleep`；未登錄、正在等本庫這把鎖的後端仍會被 `pg_cancel_backend`。
+
+### 帳號掃描與約束同一交易（U2）
+
+`ensureUsernameNormalized` 在缺索引或 CHECK 時，於同一筆交易裡 `LOCK TABLE users IN SHARE ROW EXCLUSIVE MODE`、掃描、建立唯一索引與 CHECK，然後才 `COMMIT`。測試在掃描那句返回之後，用另一條連線插入 `Bad Name`（`lock_timeout` 300ms，另有 `statement_timeout` 1s，測試本身 20s）。鎖還在時應得到 `55P03`。掃描與 `ADD CONSTRAINT` 的 `pg_current_xact_id()` 必須相同。掃描後先 `COMMIT` 再重開交易的突變會讓兩個交易 id 不同，測試轉紅。
+
+### 非 55P03 的遷移錯誤（U6）
+
+`runSchemaStatement` 把 `55P03` 映成固定中文；其他錯誤執行 `throw err`，啟動失敗。測試在 `CREATE TABLE IF NOT EXISTS users` 注入 `42601`／`schema-non-55P03`，`openDb` 必須以該錯誤失敗。拿掉這個 `throw err` 的突變（不提交）在空庫上會改以 `relation "users" does not exist` 失敗，訊息不再是注入的 `schema-non-55P03`，測試轉紅。
+
+### unlock 不得蓋掉原錯
+
+`migrate` 先記下遷移錯誤，再釋放 `SCHEMA_LOCK`。unlock 失敗時，若原錯是 `Error` 且還沒有 `cause`，把 unlock 錯誤放在 `cause`，然後仍拋原來的那個物件。啟動訊息不把驅動例外拼進去。沒有原錯時，unlock 錯誤本身讓啟動失敗。`openDb` 的失敗路徑仍呼叫 `release(true)`。測試同時注入結構語句錯誤與 unlock 錯誤：訊息維持結構語句的原文，`cause` 是 unlock 錯誤，且 `release` 收到 `true`。
