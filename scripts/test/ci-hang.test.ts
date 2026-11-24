@@ -234,7 +234,7 @@ it("退出碼是 null 時不以 0 收場", () => {
   expect(matched?.[2]).toBe("1");
 });
 
-it.fails("query 截到約 200 字並遮罩字面值", async () => {
+it("query 截到約 200 字並遮罩字面值", async () => {
   const secret = "secret-token";
   const snap = await readServerSnapshot(async () => ({ rows: [{ query: `SELECT '${secret}', ${"Q".repeat(180)}` }] }));
   const query = String(snap.activity[0].query);
@@ -243,7 +243,7 @@ it.fails("query 截到約 200 字並遮罩字面值", async () => {
   expect(query.length).toBeLessThanOrEqual(200);
 });
 
-it.fails("快照 SQL 只取 query 前 200 字", async () => {
+it("快照 SQL 只取 query 前 200 字", async () => {
   const seen: string[] = [];
   await readServerSnapshot(async (sql) => { seen.push(sql); return { rows: [] }; });
   expect(seen[0]).toContain("left(query, 200)");
@@ -264,7 +264,7 @@ it("快照連線有 statement、query、connection 逾時", () => {
   expect(src).toContain("query_timeout: 1000");
 });
 
-it.fails("connect 失敗仍 end，且 Client 聽 error", async () => {
+it("connect 失敗仍 end，且 Client 聽 error", async () => {
   const events: string[] = [];
   let ended = false;
   const client = {
@@ -278,7 +278,7 @@ it.fails("connect 失敗仍 end，且 Client 聽 error", async () => {
   expect(events).toContain("error");
 });
 
-it.fails("快照用完會關掉連線", async () => {
+it("快照用完會關掉連線", async () => {
   let ended = false;
   const client = {
     on() {},

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import pg from "pg";
 
 const ACTIVITY_SQL = `SELECT pid, application_name, state, wait_event_type, wait_event,
-  EXTRACT(EPOCH FROM (clock_timestamp() - query_start)) AS query_s, left(query, 2000) AS query
+  EXTRACT(EPOCH FROM (clock_timestamp() - query_start)) AS query_s, left(query, 200) AS query
   FROM pg_stat_activity
   WHERE datname = current_database() AND pid <> pg_backend_pid()`;
 const LOCK_SQL = `SELECT l.pid, l.locktype, l.mode, l.granted, l.objid, l.relation::text AS rel
@@ -64,14 +64,28 @@ export function formatPartial(reportDirName) {
   return parts.join("\n");
 }
 
+const QUERY_CAP = 200;
+const QUOTED = /'(?:[^']|'')*'/g;
+
+export function redactQuery(query) {
+  const masked = String(query ?? "").replace(QUOTED, "'?'");
+  return masked.length > QUERY_CAP ? masked.slice(0, QUERY_CAP) : masked;
+}
+
+function redactActivity(rows) {
+  return rows.map((row) => {
+    if (!row || typeof row.query !== "string") return row;
+    return { ...row, query: redactQuery(row.query) };
+  });
+}
+
 export async function readServerSnapshot(query) {
-  const activity = (await query(ACTIVITY_SQL)).rows;
+  const activity = redactActivity((await query(ACTIVITY_SQL)).rows);
   const locks = (await query(LOCK_SQL)).rows;
   return { activity, locks };
 }
 
-export async function captureActivity(url) {
-  if (!url) return { error: "DATABASE_URL unset", activity: [], locks: [] };
+export function snapshotClient(url) {
   const client = new pg.Client({
     connectionString: url,
     connectionTimeoutMillis: 1000,
@@ -79,8 +93,16 @@ export async function captureActivity(url) {
     query_timeout: 1000,
     application_name: "sd-live-report",
   });
-  await client.connect();
+  client.on("error", () => {});
+  return client;
+}
+
+export async function captureActivity(url, open = snapshotClient) {
+  if (!url) return { error: "DATABASE_URL unset", activity: [], locks: [] };
+  const client = open(url);
+  client.on("error", () => {});
   try {
+    await client.connect();
     return await readServerSnapshot((sql) => client.query(sql));
   } finally {
     await client.end().catch(() => {});
