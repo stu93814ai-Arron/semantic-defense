@@ -8,7 +8,11 @@ import * as demo from "./demoStore";
 import { filterListed } from "./listed";
 import type { AllowlistItem, ListedEntry, PendingCandidate } from "./types";
 import type { Thresholds } from "./thresholds";
-import type { AllowlistCreate, AllowlistUpdate } from "@semantic-defense/contracts/browser";
+import type {
+  AllowlistCreate,
+  AllowlistUpdate,
+  AutoListSetting,
+} from "@semantic-defense/contracts/browser";
 
 type Mode = "unknown" | "api" | "demo";
 
@@ -141,6 +145,19 @@ export const reviewSource = {
       mode = "demo";
       return { ok: true, value: demo.getThresholds() };
     }
+    return r;
+  },
+
+  /** 自動上榜開關：只走 API，不回退 demo（含 VITE_DEMO_FALLBACK=1 的 404）。 */
+  async getAutoList(): Promise<AdminApiResult<AutoListSetting>> {
+    const r = await api.getAutoList();
+    if (!r.ok) noteErr(r);
+    return r;
+  },
+
+  async putAutoList(input: AutoListSetting): Promise<AdminApiResult<AutoListSetting>> {
+    const r = await api.putAutoList(input);
+    if (!r.ok) noteErr(r);
     return r;
   },
 

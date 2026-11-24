@@ -4,12 +4,14 @@ import {
   AllowlistEntrySchema,
   AllowlistListSchema,
   AllowlistUpdateSchema,
+  AutoListSettingSchema,
   BlocklistEntrySchema,
   BlocklistListSchema,
   PendingCandidateListSchema,
   ThresholdsSchema,
   type AllowlistCreate,
   type AllowlistUpdate,
+  type AutoListSetting,
   type Thresholds,
 } from "@semantic-defense/contracts/browser";
 
@@ -208,6 +210,16 @@ export function createAdminApi(opts: { fetch?: FetchLike; baseUrl?: string } = {
       const r = await request(fetchImpl, url(ADMIN_API_PATHS.thresholds), jsonInit("PUT", input));
       if (!r.ok) return r;
       return parse(ThresholdsSchema, r.body);
+    },
+    async getAutoList(): Promise<AdminApiResult<AutoListSetting>> {
+      const r = await request(fetchImpl, url(ADMIN_API_PATHS.autoList), { method: "GET" });
+      if (!r.ok) return r;
+      return parse(AutoListSettingSchema, r.body);
+    },
+    async putAutoList(input: AutoListSetting): Promise<AdminApiResult<AutoListSetting>> {
+      const r = await request(fetchImpl, url(ADMIN_API_PATHS.autoList), jsonInit("PUT", input));
+      if (!r.ok) return r;
+      return parse(AutoListSettingSchema, r.body);
     },
     listPending: () =>
       getItems(fetchImpl, url(ADMIN_API_PATHS.blacklistPending), PendingCandidateListSchema),
