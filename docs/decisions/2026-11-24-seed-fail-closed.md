@@ -4,18 +4,20 @@
 
 軟體大總召裁示（未經使用者確認）：反向守門。以下正則、短路順序、拒絕訊息用詞、示範行程不自設許可旗標、再匯出去留，是駕駛員的技術選擇。
 
+軟體大總召裁示（未經使用者確認）：production 一律拒絕，DEMO_SEED_ALLOW 只在非 production 生效。資安指出 `NODE_ENV=production` 與 `DEMO_SEED_ALLOW=1` 兩項誤設同時發生時，會清空 13 張表，並建立密碼公開的 `admin1`。因此 `NODE_ENV === "production"` 時直接拋下面那句固定訊息，連 `current_database()` 都不查；`DEMO_SEED_ALLOW=1` 不能把 production 改成放行。
+
 ## 守門
 
-`seedPhase2Fixtures` 在 `argon2.hash`、`pg_advisory_xact_lock(SEED_LOCK)`、TRUNCATE 之前就決定放行或拒絕。兩個條件都成立才放行：
+`seedPhase2Fixtures` 在 `argon2.hash`、`pg_advisory_xact_lock(SEED_LOCK)`、TRUNCATE 之前就決定放行或拒絕。`NODE_ENV` 正好是 `production` 時一律拒絕。其餘情況要兩個條件都成立才放行：
 
-1. 環境：`NODE_ENV` 的值正好是 `test`，或 `DEMO_SEED_ALLOW` 的值正好是 `1`。
+1. 環境：`NODE_ENV` 的值正好是 `test`，或（且不是 `production` 時）`DEMO_SEED_ALLOW` 的值正好是 `1`。
 2. 這條連線的 `current_database()` 符合下方測試命名。
 
 否則拋出固定的一句中文，不附 SQL、例外本文、資料庫名、URL、憑證：
 
 `拒絕執行測試種子：未同時符合測試環境與測試資料庫命名，已中止且未改動任何資料`
 
-環境不符時不送任何查詢。環境符合才讀庫名；讀取拋錯、結果不是字串、或空列，都改拋上面那句。`production` 不再是唯一會被擋下的寫法：未設、空字串、`prod`、`Production`、`Test`、帶空白的 `test` 都拒絕。`NODE_ENV=production` 仍拒絕，除非同時 `DEMO_SEED_ALLOW=1` 且庫名符合。這是裁示裡的「或」，不是對任意庫放行。
+環境不符時不送任何查詢。環境符合才讀庫名；讀取拋錯、結果不是字串、或空列，都改拋上面那句。`production` 不再是唯一會被擋下的寫法：未設、空字串、`prod`、`Production`、`Test`、帶空白的 `test` 都拒絕。
 
 四個帳號、密碼、app 列與 TRUNCATE 清單維持原樣。雜湊仍在取鎖前算完。
 
