@@ -37,7 +37,9 @@ async function client(): Promise<pg.Client> {
   return c;
 }
 
-/** 取消本測試已知連線以外、打在目前測試庫上的後端查詢（例如卡住的 openDb）。
+/** 只取消本測試庫上、持有或等待本專案 SCHEMA_LOCK 的後端（卡住的 openDb）。
+ *  本專案連線：datname 等於 current_database()，且 pg_locks.database 是該庫 oid、objid 為 SCHEMA_LOCK。
+ *  其他資料庫，以及同庫但沒有這把鎖的連線（pg_sleep、sensor-ingest）不碰。
  *  只用 pg_cancel_backend：pg_terminate_backend 會把 node-pg socket 打成未捕捉的 ECONNRESET。 */
 async function cancelForeignBackends(): Promise<void> {
   const probe = await client();
@@ -48,8 +50,16 @@ async function cancelForeignBackends(): Promise<void> {
      WHERE a.datname = current_database()
        AND a.backend_type = 'client backend'
        AND a.pid <> pg_backend_pid()
-       AND NOT (a.pid = ANY($1::int[]))`,
-    [keep],
+       AND NOT (a.pid = ANY($1::int[]))
+       AND EXISTS (
+         SELECT 1 FROM pg_locks l
+         WHERE l.pid = a.pid
+           AND l.locktype = 'advisory'
+           AND l.objid = $2
+           AND l.objsubid = 1
+           AND l.database = (SELECT d.oid FROM pg_database d WHERE d.datname = current_database())
+       )`,
+    [keep, SCHEMA_LOCK],
   );
 }
 
@@ -95,11 +105,22 @@ async function resetForeignDatabase(admin: pg.Client): Promise<void> {
   await admin.query(`DROP DATABASE IF EXISTS ${FOREIGN_DB}`);
 }
 
+async function waitBackendActive(pid: number, timeoutMs = 3_000): Promise<boolean> {
+  const probe = await client();
+  for (const end = Date.now() + timeoutMs; Date.now() < end; await new Promise((r) => setTimeout(r, 20))) {
+    const r = await probe.query<{ state: string }>("SELECT state FROM pg_stat_activity WHERE pid = $1", [pid]);
+    if (r.rows[0]?.state === "active") return true;
+  }
+  return false;
+}
+
 /** 有誰持有（granted）或在等（!granted）某把 session advisory 鎖。 */
 async function advisory(key: number, granted: boolean): Promise<number[]> {
   const probe = await client();
   const r = await probe.query<{ pid: number }>(
-    "SELECT pid FROM pg_locks WHERE locktype = 'advisory' AND objid = $1 AND objsubid = 1 AND granted = $2",
+    `SELECT l.pid FROM pg_locks l
+     WHERE l.locktype = 'advisory' AND l.objid = $1 AND l.objsubid = 1 AND l.granted = $2
+       AND l.database = (SELECT d.oid FROM pg_database d WHERE d.datname = current_database())`,
     [key, granted]);
   return r.rows.map((x) => x.pid);
 }
@@ -244,9 +265,9 @@ describe("⑤ seed 計算密碼雜湊時不持有 SEED_LOCK，且中途失敗後
 
 describe("advisory() 只回報本次測試庫的鎖", () => {
   // 軟體大總召裁示（未經使用者確認）：只處理本庫的鎖。
-  // 目前 advisory() 未以 pg_locks.database 過濾，其他資料庫的同號鎖也會出現。
-  // plain it() 會失敗；過濾補上後改回 it()。本測試不呼叫 cancelForeignBackends。
-  it.fails("其他資料庫持有同一把 SCHEMA_LOCK 時不列入，本庫持有者仍在", async () => {
+  // A 組領航員裁示（未經使用者確認）：pg_locks.database 對上 current_database() 的 oid。
+  // 實作後 it.fails 已改回 it()。
+  it("其他資料庫持有同一把 SCHEMA_LOCK 時不列入，本庫持有者仍在", async () => {
     const holder = await client();
     await holder.query("SELECT pg_advisory_lock($1)", [SCHEMA_LOCK]);
     const holderPid = clientPids.get(holder);
@@ -271,6 +292,63 @@ describe("advisory() 只回報本次測試庫的鎖", () => {
       }
       await holder.query("SELECT pg_advisory_unlock($1)", [SCHEMA_LOCK]).catch(() => {});
       await resetForeignDatabase(admin);
+    }
+  }, 20_000);
+});
+
+describe("cancelForeignBackends 只取消本專案在本庫的遷移鎖", () => {
+  it("不取消其他資料庫，也不取消本庫沒有 SCHEMA_LOCK 的 pg_sleep", async () => {
+    const admin = await client();
+    const sleeper = new pg.Client({ connectionString: requireDatabaseUrl() });
+    await sleeper.connect();
+    const sleepPid = (await sleeper.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0]!.pid;
+    const sleeping = sleeper.query("SELECT pg_sleep(20)");
+    sleeping.catch(() => {});
+    let foreign: pg.Client | undefined;
+    try {
+      expect(await waitBackendActive(sleepPid)).toBe(true);
+      await resetForeignDatabase(admin);
+      await admin.query(`CREATE DATABASE ${FOREIGN_DB}`);
+      foreign = new pg.Client({ connectionString: foreignDatabaseUrl() });
+      await foreign.connect();
+      await foreign.query("SET statement_timeout = '5s'");
+      await foreign.query("SELECT pg_advisory_lock($1)", [SCHEMA_LOCK]);
+      await cancelForeignBackends();
+      await foreign.query("SELECT 1");
+      const probe = await client();
+      const state = await probe.query<{ state: string }>("SELECT state FROM pg_stat_activity WHERE pid = $1", [sleepPid]);
+      expect(state.rows[0]?.state).toBe("active");
+    } finally {
+      const probe = await client();
+      await probe.query("SELECT pg_cancel_backend($1)", [sleepPid]).catch(() => {});
+      await Promise.race([sleeper.end(), new Promise((r) => setTimeout(r, 2_000))]);
+      if (foreign) {
+        await foreign.query("SELECT pg_advisory_unlock($1)", [SCHEMA_LOCK]).catch(() => {});
+        await foreign.end().catch(() => {});
+      }
+      await resetForeignDatabase(admin);
+    }
+  }, 20_000);
+
+  it("未登錄且正在等本庫 SCHEMA_LOCK 的後端會被 cancel", async () => {
+    const holder = await client();
+    await holder.query("SELECT pg_advisory_lock($1)", [SCHEMA_LOCK]);
+    const outsider = new pg.Client({ connectionString: requireDatabaseUrl() });
+    await outsider.connect();
+    const waiting = outsider.query("SELECT pg_advisory_lock($1)", [SCHEMA_LOCK]);
+    const finished = waiting.then(() => "ok" as const, (err: unknown) => err);
+    try {
+      expect(await waitAdvisoryWaiter(SCHEMA_LOCK, 3_000)).toBe(true);
+      await cancelForeignBackends();
+      const result = await Promise.race([
+        finished,
+        new Promise((resolve) => setTimeout(() => resolve("timeout"), 3_000)),
+      ]);
+      expect(result).not.toBe("timeout");
+      expect(result).toMatchObject({ code: "57014" });
+    } finally {
+      await holder.query("SELECT pg_advisory_unlock($1)", [SCHEMA_LOCK]).catch(() => {});
+      await Promise.race([outsider.end(), new Promise((r) => setTimeout(r, 2_000))]);
     }
   }, 20_000);
 });
