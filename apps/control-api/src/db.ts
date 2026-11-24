@@ -496,8 +496,27 @@ async function runSchemaStatement(q: Queryable, sql: string): Promise<void> {
   }
 }
 
+/** unlock 失敗只附在原錯之後（A 組領航員裁示，未經使用者確認）。啟動訊息不拼驅動字串。 */
+function attachUnlockError(failure: unknown, unlockErr: unknown): unknown {
+  if (failure instanceof Error && failure.cause === undefined) {
+    failure.cause = unlockErr;
+    return failure;
+  }
+  return failure === undefined ? unlockErr : failure;
+}
+
+async function releaseSchemaLock(client: pg.PoolClient, failure: unknown): Promise<unknown> {
+  try {
+    await client.query("SELECT pg_advisory_unlock($1)", [SCHEMA_LOCK]);
+    return failure;
+  } catch (unlockErr) {
+    return attachUnlockError(failure, unlockErr);
+  }
+}
+
 async function migrate(client: pg.PoolClient, now: () => number, log?: SeedLog): Promise<void> {
   let locked = false;
+  let failure: unknown;
   try {
     await acquireSchemaLock(client);
     locked = true;
@@ -507,9 +526,11 @@ async function migrate(client: pg.PoolClient, now: () => number, log?: SeedLog):
     await ensureUsernameNormalized(client);
     await ensureAlertKindCheck(client);
     await seedCriticalAllowlist(client, now, log);
-  } finally {
-    if (locked) await client.query("SELECT pg_advisory_unlock($1)", [SCHEMA_LOCK]);
+  } catch (err) {
+    failure = err;
   }
+  if (locked) failure = await releaseSchemaLock(client, failure);
+  if (failure !== undefined) throw failure;
 }
 
 /** 以連線字串開 Postgres、套用 schema。連線字串僅來自參數／環境，不寫死密鑰。 */

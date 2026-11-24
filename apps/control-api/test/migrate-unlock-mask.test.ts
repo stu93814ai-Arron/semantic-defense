@@ -6,7 +6,7 @@ import { requireDatabaseUrl } from "./helpers/pg.js";
 /**
  * 軟體大總召裁示（未經使用者確認）：連線壞掉時 unlock 拋錯不得蓋掉遷移原錯。
  * A 組領航員裁示（未經使用者確認）：先記下原錯，unlock 錯誤只放在 cause；仍拒絕啟動，且 release(true)。
- * 目前 finally 裡的 unlock 拋錯會取代原錯，plain it() 會失敗。修完改回 it()。
+ * 實作後 it.fails 已改回 it()。原錯留在 message，unlock 錯誤在 cause。
  */
 type QueryRun = (sql?: string, params?: unknown[]) => Promise<{ rows: Array<Record<string, unknown>> }>;
 
@@ -65,7 +65,7 @@ async function settleOpenDb(): Promise<{ ok: true; db: Db } | { ok: false; err: 
 }
 
 describe("unlock 失敗不得蓋掉遷移原錯", () => {
-  it.fails("結構語句失敗且 unlock 也拋錯時，仍拋原錯、cause 為 unlock，並 release(true)", async () => {
+  it("結構語句失敗且 unlock 也拋錯時，仍拋原錯、cause 為 unlock，並 release(true)", async () => {
     const releases: unknown[] = [];
     installClientHook({
       onQuery: async ({ sql, run }) => {
