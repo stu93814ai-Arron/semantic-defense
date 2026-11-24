@@ -1,6 +1,5 @@
 /**
  * seedPhase2Fixtures 反向守門（軟體大總召裁示：未同時符合環境與測試庫名就拒絕）。
- * 守門落地前用 it.fails 鎖定紅燈；落地後改為 it。
  * 被拒絕時查詢軌跡不得出現 hash／lock／truncate（沒有 argon2.hash、沒有 SEED_LOCK、沒有清空表）。
  */
 import argon2 from "argon2";
@@ -165,10 +164,10 @@ async function runCase(c: Case): Promise<void> {
 
 describe("seedPhase2Fixtures 反向守門", () => {
   for (const c of CASES) {
-    it.fails(c.title, () => runCase(c));
+    it(c.title, () => runCase(c));
   }
 
-  it.fails("NODE_ENV=test 時已知測試庫名全部放行", async () => {
+  it("NODE_ENV=test 時已知測試庫名全部放行", async () => {
     for (const db of KNOWN_TEST_DATABASES) {
       await runCase({ title: db, nodeEnv: "test", db, mode: "allow" });
     }

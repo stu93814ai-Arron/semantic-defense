@@ -1,13 +1,14 @@
 /**
- * 測試只經由此面匯入實作。第 2 階段實作須匯出 buildApp / seedPhase2Fixtures。
+ * 測試只經由此面匯入實作。buildApp 來自 app.ts；
+ * seedPhase2Fixtures 直接來自 seed-phase2.ts（生產 app 不轉出）。
  * 本檔不含業務邏輯；組態契約見 test/README.md。
  */
 import {
   buildApp as buildAppImpl,
-  seedPhase2Fixtures,
   type BuildAppOptions as ImplBuildAppOptions,
   type ControlApi,
 } from "../../src/app.js";
+import { seedPhase2Fixtures } from "../../src/seed-phase2.js";
 
 export type { ControlApi };
 export { seedPhase2Fixtures };

@@ -5,10 +5,8 @@
  * DEMO_SEED=0 → 不重播種子（用於「重啟後 session 仍在」演示；勿在空庫上使用）。
  */
 import { it } from "vitest";
-import {
-  buildApp,
-  seedPhase2Fixtures,
-} from "../../apps/control-api/src/app.ts";
+import { buildApp } from "../../apps/control-api/src/app.ts";
+import { seedPhase2Fixtures } from "../../apps/control-api/src/seed-phase2.ts";
 
 it("demo: start control-api on management port", async () => {
   const host = process.env.DEMO_HOST ?? "127.0.0.1";

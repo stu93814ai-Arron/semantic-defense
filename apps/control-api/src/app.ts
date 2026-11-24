@@ -316,6 +316,3 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<ControlApi> 
     throw err;
   }
 }
-
-/** 再匯出測試用 seed；實作與明碼密碼在 seed-phase2.ts（生產勿呼叫）。 */
-export { seedPhase2Fixtures } from "./seed-phase2.js";
