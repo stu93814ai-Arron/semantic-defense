@@ -138,7 +138,7 @@ A 組領航員裁示（未經使用者確認）：測試清單 `/workspace/exec-
 
 ## 正式環境只安裝正式相依（依賴漏洞例外的前提）
 
-軟體大總召裁示（未經使用者確認）：正式環境只安裝正式相依，不得帶入 devDependencies。安裝用 `pnpm install --prod --frozen-lockfile`，或用 `pnpm deploy --prod` 產出部署目錄。picomatch GHSA-fc5q-39xc-vjpf 的有期限例外（至 2026-11-30，見 `docs/decisions/2026-11-18-audit-exception-picomatch.md`）只在 dev 相依成立；`scripts/audit.sh` 的 `pnpm audit --prod --audit-level high` 沒有任何例外。
+軟體大總召裁示（未經使用者確認）：正式環境只安裝正式相依，不得帶入 devDependencies。安裝用 `pnpm install --prod --frozen-lockfile`，或用 `pnpm deploy --prod` 產出部署目錄。`scripts/audit.sh` 的 `pnpm audit --prod --audit-level high` 沒有任何例外。picomatch GHSA-fc5q-39xc-vjpf 的有期限例外已於 2026-11-24 移除（公告已撤回，`first_patched_version` 是 null，見 `docs/decisions/2026-11-18-audit-exception-picomatch.md`），不再以 2026-11-30 為有效日。
 
 ## 自動上榜總開關（`/api/settings/auto-list`）：開啟前條件
 

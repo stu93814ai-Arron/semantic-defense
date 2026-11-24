@@ -2,7 +2,15 @@
 
 **軟體大總召裁示（未經使用者確認）**（例外規格由資安審查員提出、總召轉達）：只記一筆有期限的例外，條件寫死在程式裡，不改 `package.json`、`pnpm-lock.yaml`，不用 `pnpm.auditConfig.ignoreGhsas`。
 
-2026-11-24 再評估見 [2026-11-24-dep-eval-minimatch-picomatch.md](./2026-11-24-dep-eval-minimatch-picomatch.md)。公告已於 2026-11-18 撤回，npm 仍無修補版（latest 仍是 4.0.7）。該切片不升級、不續期、不改 `scripts/audit-allow.mjs`。最後有效日 2026-11-30、從 2026-12-01 起失敗，兩個日期是同一政策。要不要在失敗日前刪掉這段例外是待決。
+**2026-11-24 已移除（H3b）。** 軟體大總召裁示（未經使用者確認）：同意移除，不續期、也不放著讓它在 2026-12-01 變紅。
+
+移除理由（`curl -s https://api.github.com/advisories/GHSA-fc5q-39xc-vjpf`）：
+
+- summary：`Withdrawn Advisory: picomatch vulnerable to ReDoS through single-branch repeated extglobs`
+- withdrawn_at：`2026-11-18T15:38:56Z`
+- first_patched_version：`null`（npm latest 仍是 4.0.7，沒有修補版可升）
+
+`scripts/audit-allow.mjs` 的正式例外清單現在是空的。清單是空的就不會因為到期而失敗。high／critical 一律擋下。以後若再新增例外，每一筆必須同時有到期日和理由；缺少任一項，或已到期，就失敗。例外的公告 id 若已不在這次掃描，印出含該 id 的警告「應移除此例外」，不讓 ci 失敗。下面是當初設立這筆例外的紀錄，那些放行條件已經不再生效。再評估見 [2026-11-24-dep-eval-minimatch-picomatch.md](./2026-11-24-dep-eval-minimatch-picomatch.md)。
 
 ## 漏洞
 
@@ -40,6 +48,8 @@
 5. 日期與編號寫死，不讀任何環境變數。今天的日期以 Asia/Taipei 計算。測試直接呼叫 `evaluateAudit(scan, today)`，並使用合成 JSON；測試檔是 `scripts/test/audit-allow.test.ts`，由 vitest 的 node project 執行。
 
 ## 到期
+
+這段是移除前的行為。例外刪掉之後，空掃描不會再因為 2026-12-01 失敗。
 
 - 到期日：**2026-12-01**（Asia/Taipei）。從當天起（含 12-01），不論漏洞是否還在，`scripts/audit.sh` 一律以固定訊息失敗：「audit: picomatch GHSA-fc5q-39xc-vjpf 例外已於 2026-12-01 到期，請移除例外並升版」。最後有效日是 2026-11-30。
 - 到期或上游出修補版就移除例外並升版。
