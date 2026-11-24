@@ -1,0 +1,109 @@
+# 2026-11-24 依賴評估 H3：minimatch GHSA-g3hv-75wg-m249、picomatch 例外
+
+分支 `team-a-harden-h3`，基底 `team-a-harden-h2b`（`73bff8a`）。本評估疊在 #49 上，勿合入。
+
+**軟體大總召裁示（未經使用者確認）**：評估 minimatch `GHSA-g3hv-75wg-m249`（moderate），並在 picomatch 例外到期前做出結論。有不破壞相容的修正版才升級；修正版要破壞性升級或沒有修正版就不升級。例外續期不由本切片決定。
+
+調查時鐘：2026-11-24 17:36 UTC（Asia/Taipei 2026-11-25 01:36）。例外仍在有效期內。
+
+## 調查（升級前，工作樹 `73bff8a`）
+
+`pnpm audit` 原文只列一筆：
+
+```
+moderate  minimatch has potential denial of service via globparts amplification
+Package   minimatch
+Vulnerable versions  >=7.0.0 <11.0.1
+Patched versions     >=11.0.1
+Paths     .>typescript-eslint>@typescript-eslint/typescript-estree>minimatch
+More info https://github.com/advisories/GHSA-g3hv-75wg-m249
+1 vulnerabilities found
+Severity: 1 moderate
+```
+
+`pnpm audit --json` 的 `metadata.vulnerabilities` 是 info 0、low 0、moderate 1、high 0、critical 0。唯一 advisory：`github_advisory_id` `GHSA-g3hv-75wg-m249`，`cves` `CVE-2026-118764`，`module_name` `minimatch`，`vulnerable_versions` `>=7.0.0 <11.0.1`，`patched_versions` `>=11.0.1`，finding 版本 `10.2.6`，路徑同上。沒有 picomatch。
+
+`pnpm audit --prod`：`No known vulnerabilities found`。`--json` 的 high／critical／moderate 都是 0（正式相依 89）。
+
+`pnpm why minimatch --prod -r` 與 `pnpm why picomatch --prod -r` 都沒有輸出。
+
+## minimatch
+
+### 公告與修正版
+
+- GitHub Advisory `GHSA-g3hv-75wg-m249`（CVE-2026-118764），severity medium／npm audit moderate，未撤回。受影響 `>= 7.0.0, < 11.0.1`，first patched `11.0.1`。
+- 公告描述的條件：呼叫端能提供 glob pattern，且 `optimizationLevel >= 2` 時，`firstPhasePreProcess` 對 `**/..` 放大 `globParts`，接著二次處理做兩兩比較，造成 CPU／記憶體消耗。
+- npm 上 10 線最後一版是 `10.2.6`，沒有 `10.2.7`。修補從 `11.0.1` 起；調查時 latest 是 `11.0.9`。`11.0.0` 移除 `makeRe`、`Minimatch#regexp`、`AST`、`debug` 等，屬 major。
+- `11.0.9` 的 engines 是 `node: 20 || >=22`。本 repo CI 固定 Node `22.23.4`。
+
+### 依賴路徑（升級前）
+
+兩條，都是 dev：
+
+1. `minimatch@10.2.6`：`semantic-defense` devDependencies `typescript-eslint@8.72.1` → `@typescript-eslint/typescript-estree@8.72.1`（宣告 `minimatch@^10.2.2`）→ `minimatch@10.2.6`。這是 audit 唯一的 finding。
+2. `minimatch@3.1.5`：`eslint@9.39.5`（宣告 `^3.1.5`）、`@eslint/config-array@0.21.2`、`@eslint/eslintrc@3.3.7`。`3.1.5 < 7.0.0`，不在公告範圍，audit 沒有列它。
+
+正式相依（fastify、pg、argon2、nodemailer、zod、react）不拉 minimatch。
+
+### 可觸及性
+
+生產路徑不可觸及。依據：
+
+- `pnpm why minimatch --prod -r` 無輸出；`pnpm audit --prod` 無已知漏洞。部署檢查表要求正式環境 `pnpm install --prod --frozen-lockfile`。
+- `apps/`、`packages/` 原始碼沒有 import minimatch、picomatch、tinyglobby、fast-glob。
+- 唯一呼叫在 dev 工具 `@typescript-eslint/typescript-estree` 的 `useProgramFromProjectService.js`：`minimatch(filePath, pattern, { dot: true })`。`pattern` 來自 parser 選項 `allowDefaultProject`，不是請求本文。選項只有 `{ dot: true }`，沒有 `optimizationLevel`。已安裝的 `10.2.6` 預設 `optimizationLevel = 1`，`>= 2` 才進入公告描述的放大路徑。
+- 本 repo `eslint.config.js` 沒有設定 `allowDefaultProject`。
+
+### 結論
+
+有不破壞相容的修正版，已升級，沒有使用 pnpm overrides。
+
+`typescript-eslint@8.73.0` 起，`@typescript-eslint/typescript-estree` 宣告 `minimatch@^11.0.1`。`8.74.0` 仍是 major 8，peer 仍是 `eslint@^8.57.0 || ^9.0.0 || ^10.0.0` 與 `typescript@>=4.8.4 <6.1.0`，涵蓋本 repo 的 eslint 9.39.5 與 typescript 5.9.3。根目錄原本就是 `typescript-eslint@^8.72.1`，把下限改成 `^8.74.0` 不換 major。
+
+不把全部 `minimatch` override 到 11：那會把 eslint 9 的 `3.1.5` 一併換掉，而且 `8.72.1` 宣告的是 `^10.2.2`，不在它自己的相容範圍裡。
+
+升級後 lock 解析 `minimatch@11.0.9`（另有 dev 傳遞 `@isaacs/nonrecursive-glob-match@1.1.0`），`minimatch@3.1.5` 仍留給 eslint。`pnpm audit` 與 `pnpm audit --json` 都是 0 筆（metadata 全 0，advisories `{}`）。`pnpm why minimatch --prod -r` 仍無輸出。
+
+沒有既有的 minimatch 例外可刪。
+
+## picomatch 例外
+
+### 原始理由
+
+`docs/decisions/2026-11-18-audit-exception-picomatch.md` 與 `scripts/audit-allow.mjs`（不用 `pnpm.auditConfig.ignoreGhsas`）：
+
+- `GHSA-fc5q-39xc-vjpf`（CVE-2026-112366），當時為 high，single-branch repeated extglobs 的 ReDoS。受影響 `picomatch <=4.0.7`。當時 `patched_versions` 為 `<0.0.0`，沒有修補版。
+- 只在 dev：typescript-eslint → tinyglobby／fdir、console 的 vite、vitest／vite。正式環境不安裝。輸入是 repo 內 glob 設定。
+- 不設例外則 ci 第 6 步會因 high 失敗。
+
+### 2026-11-30 與 12/01 是同一個政策
+
+- `scripts/audit-allow.mjs` 的 `EXC.expires` 是 `2026-12-01`。`expired = !(today < "2026-12-01")`，Asia/Taipei。`2026-11-30` 仍放行，`2026-12-01` 起（含當天）失敗，訊息寫死。
+- 放行紀錄寫「有效至 2026-11-30」。決策文件寫到期日 `2026-12-01`、最後有效日 `2026-11-30`。部署檢查表寫「至 2026-11-30」。
+- 分支註記的 2026-11-30 是最後有效日；PM 說的 12/01 是開始失敗的那天。不是兩個不同的到期日。
+
+### 現況
+
+- GitHub Advisory 於 `2026-11-18T15:38:56Z` 撤回。summary：`Withdrawn Advisory: picomatch vulnerable to ReDoS through single-branch repeated extglobs`。說明是 not a security issue。`first_patched_version` 是 null。受影響範圍仍標 `<= 4.0.7`。
+- npm latest 仍是 `4.0.7`（2026-08-24 發布）。沒有 `4.0.8` 或任何更新的修補版。
+- 升級前的 `pnpm audit` 已不再列出這筆。升級後仍是 0 筆。
+- `pnpm why picomatch -r` 仍只有 `picomatch@4.0.7`，經 `fdir@6.5.0`／`tinyglobby@0.2.17`：typescript-eslint、`@semantic-defense/console` 的 `vite@7.3.7`、vitest 的 `vite@8.3.6`。全部 devDependencies。`--prod` 無輸出。
+- 專案程式沒有把不可信輸入傳進 picomatch。生產路徑不可觸及，依據與當初相同：只存在 lint、測試、Vite 建置，正式安裝不含 devDependencies。
+
+### 結論
+
+沒有修補版，不升級，不加 override，不改 `scripts/audit-allow.mjs`。
+
+殘餘：dev 工具鏈仍帶 `picomatch@4.0.7`。公告已撤回；上游不把它當漏洞，也沒有修補發布。本 repo 沒有把外部輸入當成 glob。正式環境載入不到這個套件。
+
+### 待決
+
+本切片不續期。
+
+例外程式仍在。即使 audit 已不再回報這筆，`2026-12-01`（Asia/Taipei，含當天）起 `scripts/audit.sh` 仍會以固定訊息失敗。要不要在那之前刪掉這段已無對應公告的例外，留給總召；刪除不是續期，續期也不是本切片的決定。
+
+## 依賴提交
+
+`311f2df` 只改 `package.json`、`pnpm-lock.yaml`（85 行新增、70 行刪除）。沒有 pnpm overrides，沒有改程式。
+
+該提交上 `LC_ALL=C bash scripts/ci.sh` exit 0，十步都過：必跑 339 秒（statements 93.04%、branches 88.7%、functions 94.47%、lines 96.88%）；型別 12 秒；Vite 2 秒；eslint 3 秒；jscpd 總重複行 2.84%（793/27885），低於 3%；audit 印出 `No known vulnerabilities found`；gitleaks、邊界、SBOM（410 個元件）都過；E2E 已在必跑裡執行。

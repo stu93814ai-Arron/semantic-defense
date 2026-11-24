@@ -2,6 +2,8 @@
 
 **軟體大總召裁示（未經使用者確認）**（例外規格由資安審查員提出、總召轉達）：只記一筆有期限的例外，條件寫死在程式裡，不改 `package.json`、`pnpm-lock.yaml`，不用 `pnpm.auditConfig.ignoreGhsas`。
 
+2026-11-24 再評估見 [2026-11-24-dep-eval-minimatch-picomatch.md](./2026-11-24-dep-eval-minimatch-picomatch.md)。公告已於 2026-11-18 撤回，npm 仍無修補版（latest 仍是 4.0.7）。該切片不升級、不續期、不改 `scripts/audit-allow.mjs`。最後有效日 2026-11-30、從 2026-12-01 起失敗，兩個日期是同一政策。要不要在失敗日前刪掉這段例外是待決。
+
 ## 漏洞
 
 - `GHSA-fc5q-39xc-vjpf`（CVE-2026-112366，high，ReDoS：single-branch repeated extglobs）。
