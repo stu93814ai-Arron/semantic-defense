@@ -290,6 +290,15 @@ it("快照用完會關掉連線", async () => {
   expect(ended).toBe(true);
 });
 
+it.fails("第 2 輪跑前刪掉舊報告，退出碼非 0 且報告成功時不當通過", () => {
+  const src = readFileSync(resolve(__dirname, "../tests.mjs"), "utf8");
+  const body = src.slice(src.indexOf("function run"), src.indexOf("const a = run"));
+  const dropAt = body.indexOf("discardReport(");
+  expect(dropAt).toBeGreaterThanOrEqual(0);
+  expect(dropAt).toBeLessThan(body.indexOf("execFileSync"));
+  expect(src).toContain("round2ExitContradicts(");
+});
+
 it("json reporter 與 live reporter 可同時跑", async () => {
   mkdirSync(join(ROOT, "reports"), { recursive: true });
   const dir = mkdtempSync(join(ROOT, "reports", "live-"));
