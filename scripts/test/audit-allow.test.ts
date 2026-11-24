@@ -1,11 +1,12 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- 測試夾具：路徑來自測試內常數與 mkdtemp 暫存目錄 */
-// audit-allow.mjs：picomatch GHSA-fc5q-39xc-vjpf 有期限例外。只用合成的 audit JSON 夾具，不連 registry。
+// audit-allow.mjs：正式例外清單是空的。只用合成的 audit JSON 夾具，不連 registry。
+// 過期、缺欄與「公告已不在掃描」都用測試內注入的假例外證明，不寫進 EXCEPTIONS。
 import { spawnSync } from "node:child_process";
 import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { EXPIRED_MSG, evaluateAudit, taipeiToday } from "../audit-allow.mjs";
+import { EXCEPTIONS, evaluateAudit, taipeiToday } from "../audit-allow.mjs";
 
 type Adv = { severity: string; module_name: string; github_advisory_id: string; vulnerable_versions: string; patched_versions: string; findings: { version: string; paths: string[] }[] };
 const PICO: Adv = { severity: "high", module_name: "picomatch", github_advisory_id: "GHSA-fc5q-39xc-vjpf", vulnerable_versions: "<=4.0.7",
@@ -19,22 +20,22 @@ const scan = (...advs: Partial<Adv>[]) => {
 };
 const OK_DAY = "2026-11-30";
 
-describe("evaluateAudit：允許條件（五項全中才放行）", () => {
-  it("picomatch 例外在 2026-11-30 放行並留下紀錄", () => {
+describe("evaluateAudit：正式清單為空，舊的 picomatch 放行條件不再成立", () => {
+  it("舊 picomatch GHSA 在 2026-11-30 也擋下，且不在正式清單", () => {
     const r = evaluateAudit(scan({}), OK_DAY);
-    expect(r.ok).toBe(true);
-    expect(r.allowed).toHaveLength(1);
-    expect(r.allowed[0]).toContain("GHSA-fc5q-39xc-vjpf");
+    expect(r.ok).toBe(false);
+    expect(r.allowed).toHaveLength(0);
+    expect(EXCEPTIONS).toEqual([]);
   });
-  it("2026-12-01 起（含）以固定訊息失敗", () => {
+  it("2026-12-01 起 picomatch 仍擋下，整份掃描不因已移除的例外到期", () => {
     for (const d of ["2026-12-01", "2026-12-02", "2027-01-01"]) {
       const r = evaluateAudit(scan({}), d);
       expect(r.ok).toBe(false);
-      expect(r.errors).toContain(EXPIRED_MSG);
+      expect(r.errors.join("\n")).not.toContain("例外已於");
     }
   });
-  it("到期後即使沒有任何漏洞也失敗（例外程式碼要移除）", () => {
-    expect(evaluateAudit({ advisories: {}, metadata: meta(0) }, "2026-12-01").ok).toBe(false);
+  it("沒有 finding 時，2026-11-30 與 2026-12-01 都通過", () => {
+    expect(evaluateAudit({ advisories: {}, metadata: meta(0) }, "2026-12-01").ok).toBe(true);
     expect(evaluateAudit({ advisories: {}, metadata: meta(0) }, OK_DAY).ok).toBe(true);
   });
   it.each([
@@ -57,11 +58,11 @@ describe("evaluateAudit：允許條件（五項全中才放行）", () => {
     expect(r.ok).toBe(false);
     expect(r.allowed).toHaveLength(0);
   });
-  it("修補版為空字串仍視為尚無修補版", () => {
-    expect(evaluateAudit(scan({ patched_versions: "" }), OK_DAY).ok).toBe(true);
+  it("修補版為空字串的 picomatch 也不再放行", () => {
+    expect(evaluateAudit(scan({ patched_versions: "" }), OK_DAY).ok).toBe(false);
   });
-  it("較舊的 picomatch 版本（≤4.0.7）放行", () => {
-    expect(evaluateAudit(scan({ findings: [{ version: "2.3.1", paths: [] }, { version: "4.0.7", paths: [] }] }), OK_DAY).ok).toBe(true);
+  it("較舊的 picomatch 版本也不再放行", () => {
+    expect(evaluateAudit(scan({ findings: [{ version: "2.3.1", paths: [] }, { version: "4.0.7", paths: [] }] }), OK_DAY).ok).toBe(false);
   });
   it("例外與另一筆 high 並存 → 擋", () => {
     expect(evaluateAudit(scan({}, { github_advisory_id: "GHSA-aaaa-bbbb-cccc" }), OK_DAY).ok).toBe(false);
@@ -76,9 +77,11 @@ describe("evaluateAudit：severity 正規化、metadata 核對與台北日期", 
     const r = evaluateAudit(scan({ severity: sev as string, github_advisory_id: "GHSA-aaaa-bbbb-cccc" }), OK_DAY);
     expect(r.ok).toBe(false);
   });
-  it("severity 大小寫正規化：MODERATE、Low、INFO 可略過；HIGH 的 picomatch 例外仍放行", () => {
+  it("severity 大小寫正規化：MODERATE、Low、INFO 可略過；HIGH 一律擋下", () => {
     for (const sev of ["MODERATE", "Low", "INFO"]) expect(evaluateAudit(scan({ severity: sev, github_advisory_id: "GHSA-aaaa-bbbb-cccc" }), OK_DAY).ok).toBe(true);
-    expect(evaluateAudit(scan({ severity: "HIGH" }), OK_DAY).allowed).toHaveLength(1);
+    const high = evaluateAudit(scan({ severity: "HIGH" }), OK_DAY);
+    expect(high.ok).toBe(false);
+    expect(high.allowed).toHaveLength(0);
   });
   it("metadata 交叉核對：缺少或與 advisories 的 high/critical 數不符 → 擋", () => {
     expect(evaluateAudit({ advisories: {}, metadata: meta(1) }, OK_DAY).ok).toBe(false);
@@ -87,7 +90,7 @@ describe("evaluateAudit：severity 正規化、metadata 核對與台北日期", 
     expect(evaluateAudit({ ...scan({}), metadata: meta(0) }, OK_DAY).ok).toBe(false);
     expect(evaluateAudit({ advisories: scan({}).advisories }, OK_DAY).ok).toBe(false);
     expect(evaluateAudit({ advisories: {}, metadata: {} }, OK_DAY).ok).toBe(false);
-    expect(evaluateAudit({ ...scan({ severity: "HIGH" }), metadata: meta(1) }, OK_DAY).ok).toBe(true);
+    expect(evaluateAudit({ ...scan({ severity: "HIGH" }), metadata: meta(1) }, OK_DAY).ok).toBe(false);
     expect(evaluateAudit({ advisories: {}, metadata: meta(0) }, OK_DAY).ok).toBe(true);
   });
   it("advisories 是陣列 → 擋", () => {
@@ -104,7 +107,7 @@ describe("evaluateAudit：severity 正規化、metadata 核對與台北日期", 
   });
 });
 
-// 以下與現行實作相反，用 it.fails 讓這顆測試提交保持綠色。假例外只注入在測試裡。
+// 假例外只注入在測試裡，不寫進正式清單。
 type Exc = { id: string; module: string; vulnerable: string; maxVersion: number[]; expires?: string; reason?: string };
 type AuditOut = { ok: boolean; allowed: string[]; errors: string[]; warnings?: string[] };
 const auditWith = evaluateAudit as (scan: unknown, today: string, exceptions?: readonly Exc[]) => AuditOut;
@@ -120,16 +123,16 @@ function spyWarn(run: (seen: string[]) => void) {
   try { run(seen); } finally { console.warn = orig; }
 }
 
-describe("evaluateAudit：空清單、缺欄與已不在掃描的公告（目前實作尚未符合，it.fails）", () => {
+describe("evaluateAudit：空清單、缺欄與已不在掃描的公告", () => {
   const days = ["2026-01-01", "2026-11-30", "2026-12-01", "2027-01-01"];
-  it.fails("today ≥ 2026-12-01 且沒有任何 finding → ok", () => {
+  it("today ≥ 2026-12-01 且沒有任何 finding → ok", () => {
     for (const today of ["2026-12-01", "2026-12-02", "2027-01-01"]) {
       const r = auditWith(emptyScan, today);
       expect(r.ok).toBe(true);
       expect(r.errors).toEqual([]);
     }
   });
-  it.fails("任何 high／critical（含舊 picomatch GHSA-fc5q-39xc-vjpf）在任何日期一律擋下", () => {
+  it("任何 high／critical（含舊 picomatch GHSA-fc5q-39xc-vjpf）在任何日期一律擋下", () => {
     for (const today of days) {
       for (const adv of [{}, { severity: "critical" }, { severity: "HIGH", github_advisory_id: "GHSA-aaaa-bbbb-cccc", module_name: "left-pad" },
         { severity: "critical", github_advisory_id: "GHSA-zzzz-yyyy-xxxx", module_name: "other" }]) {
@@ -139,7 +142,7 @@ describe("evaluateAudit：空清單、缺欄與已不在掃描的公告（目前
       }
     }
   });
-  it.fails("注入的例外 id 已不在掃描 → 警告含 id 與應移除此例外，且不失敗", () => {
+  it("注入的例外 id 已不在掃描 → 警告含 id 與應移除此例外，且不失敗", () => {
     spyWarn(seen => {
       const r = auditWith(emptyScan, OK_DAY, [FAKE]);
       expect(r.ok).toBe(true);
@@ -152,7 +155,7 @@ describe("evaluateAudit：空清單、缺欄與已不在掃描的公告（目前
       expect(warned(other, seen)).toContain("應移除此例外");
     });
   });
-  it.fails("注入的例外缺少理由、缺少到期日，或已到期 → 失敗", () => {
+  it("注入的例外缺少理由、缺少到期日，或已到期 → 失敗", () => {
     for (const reason of [undefined, "", "   "]) {
       const r = auditWith(emptyScan, OK_DAY, [{ ...FAKE, reason }]);
       expect(r.ok).toBe(false);
@@ -165,7 +168,7 @@ describe("evaluateAudit：空清單、缺欄與已不在掃描的公告（目前
     expect(expired.ok).toBe(false);
     expect(expired.errors.join("\n")).toContain(`例外已於 ${OK_DAY} 到期`);
   });
-  it.fails("注入的例外 id 仍在掃描且條件相符 → 放行，且不提示應移除", () => {
+  it("注入的例外 id 仍在掃描且條件相符 → 放行，且不提示應移除", () => {
     spyWarn(seen => {
       const r = auditWith(fakeScan(), OK_DAY, [FAKE]);
       expect(r.ok).toBe(true);
