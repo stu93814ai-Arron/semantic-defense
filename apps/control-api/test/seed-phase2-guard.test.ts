@@ -302,8 +302,8 @@ function expectNoMutatingSql(trace: string[]): void {
 
 describe("交易內再驗目前資料庫", () => {
   // 軟體大總召裁示（未經使用者確認）；再驗位置為 A 組領航員裁示（未經使用者確認）。
-  // 實作前交易內沒有第二次 current_database()，用 it.fails 標成紅燈。
-  it.fails("取鎖前用交易客戶端再驗，庫名不符則拒絕且不取鎖不 TRUNCATE", () => withSplit(
+  // 實作後 it.fails 已改回 it()。
+  it("取鎖前用交易客戶端再驗，庫名不符則拒絕且不取鎖不 TRUNCATE", () => withSplit(
     "sd_ci",
     "postgres",
     false,
@@ -318,7 +318,7 @@ describe("交易內再驗目前資料庫", () => {
     },
   ));
 
-  it.fails("庫名符合時，交易客戶端的 current_database 在雜湊之後、取鎖之前", () => withSplit(
+  it("庫名符合時，交易客戶端的 current_database 在雜湊之後、取鎖之前", () => withSplit(
     "sd_ci",
     "sd_ci",
     false,
@@ -335,7 +335,7 @@ describe("交易內再驗目前資料庫", () => {
     },
   ));
 
-  it.fails("交易內查庫名失敗時拒絕且不外洩、不取鎖", () => withSplit(
+  it("交易內查庫名失敗時拒絕且不外洩、不取鎖", () => withSplit(
     "sd_ci",
     "sd_ci",
     true,

@@ -60,6 +60,8 @@ export async function seedPhase2Fixtures(app: SeedApp): Promise<void> {
   // A 組領航員裁示（未經使用者確認）：交易級 advisory lock，TRUNCATE 與 INSERT
   // 在同一筆 db.tx 內；COMMIT／ROLLBACK 自動釋放，ROLLBACK 失敗則 release(err)。
   await app.db.tx(async (q) => {
+    // 取鎖前再用這個交易客戶端驗一次；不符則拋同一句拒絕，不取鎖、不 TRUNCATE。
+    await assertSeedAllowed(q);
     await q.query("SELECT pg_advisory_xact_lock($1)", [SEED_LOCK]);
     await q.query(
       "TRUNCATE TABLE alert_outbox, audit_events, thresholds, allowlist_entries, blocklist_entries, blacklist_cases, case_hits, judge_cursor, sensor_tokens, sessions, apps, users, login_failures RESTART IDENTITY CASCADE",
