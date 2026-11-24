@@ -100,7 +100,7 @@ export function registerAutoListSettingRoutes(app: FastifyInstance, db: Db, now:
     if (!parsed.success) return reply.code(400).send({ error: "請求格式錯誤" });
     if (parsed.data.enabled && !handshakeReady) {
       await writeBlocked(db, req.user!.username, now());
-      return reply.code(409).send({ error: "三向交握佐證尚未上線，暫不能開啟自動封鎖" });
+      return reply.code(409).send({ error: "三向交握佐證尚未上線，暫不能開啟自動上榜。" });
     }
     return putAutoListSetting(db, req.user!.username, parsed.data, now());
   });

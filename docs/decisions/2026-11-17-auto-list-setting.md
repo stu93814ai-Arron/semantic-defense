@@ -23,7 +23,7 @@
 - PUT 檢查順序：角色 → 來源 → 格式 → 三向交握 409 閘門 → 寫入。
 - PUT 來源檢查（**資安提出**；A 組領航員裁示（未經使用者確認））：`Sec-Fetch-Site` 有值時只接受 `same-origin`／`none`；`Origin` 有值時必須等於自身來源（scheme + `Host`）。不符 → 403 `{"error":"請求來源不符"}`，不改值、不寫稽核。兩個標頭都沒有（非瀏覽器的管理用戶端）放行。**本片只涵蓋這一條路由**；其他寫入方法的全域檢查留給強化切片。
 - PUT 以契約 schema 做 strict `safeParse`，失敗 400 `{"error":"請求格式錯誤"}`，不改值、不寫稽核。
-- 三向交握 409 閘門（**軟體大總召裁示（未經使用者確認）**，依 11/9 使用者決定（由軟體大總召轉達），經 A 組領航員轉達）：`HANDSHAKE_EVIDENCE_READY = false`（`auto-list-settings.ts`）期間，PUT `{"enabled":true}` 一律回 409 `{"error":"三向交握佐證尚未上線，暫不能開啟自動封鎖"}`，開關不變，並寫一筆稽核 `settings.auto_list.update_blocked`，`detail` 為 `{ requested: { enabled: true }, reason: "handshake_not_ready" }`。PUT `{"enabled":false}` 一律允許。來源不符與格式錯誤不寫 `update_blocked`。
+- 三向交握 409 閘門（**軟體大總召裁示（未經使用者確認）**，依 11/9 使用者決定（由軟體大總召轉達），經 A 組領航員轉達）：`HANDSHAKE_EVIDENCE_READY = false`（`auto-list-settings.ts`）期間，PUT `{"enabled":true}` 一律回 409 `{"error":"三向交握佐證尚未上線，暫不能開啟自動上榜。"}`，開關不變，並寫一筆稽核 `settings.auto_list.update_blocked`，`detail` 為 `{ requested: { enabled: true }, reason: "handshake_not_ready" }`。PUT `{"enabled":false}` 一律允許。來源不符與格式錯誤不寫 `update_blocked`。
 - 格式與閘門都通過後，在同一個交易裡 `SELECT … FOR UPDATE` 鎖列：
   - 值未變 → 200 回現值，**不寫稽核**。
   - 值變更 → `UPDATE` 並寫稽核 `settings.auto_list.update`，`actor` 是 session 裡已正規化的帳號名稱，`detail` 只有 `{ before: { enabled }, after: { enabled } }`。不含 IP、URL、請求內容或其他欄位（稽核列本身的 `at` 照舊）。
