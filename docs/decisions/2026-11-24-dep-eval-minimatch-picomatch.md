@@ -58,11 +58,11 @@ Severity: 1 moderate
 
 有不破壞相容的修正版，已升級，沒有使用 pnpm overrides。
 
-`typescript-eslint@8.73.0` 起，`@typescript-eslint/typescript-estree` 宣告 `minimatch@^11.0.1`。`8.74.0` 仍是 major 8，peer 仍是 `eslint@^8.57.0 || ^9.0.0 || ^10.0.0` 與 `typescript@>=4.8.4 <6.1.0`，涵蓋本 repo 的 eslint 9.39.5 與 typescript 5.9.3。根目錄原本就是 `typescript-eslint@^8.72.1`，把下限改成 `^8.74.0` 不換 major。
+`typescript-eslint@8.73.0` 起，`@typescript-eslint/typescript-estree` 宣告 `minimatch@^11.0.1`。`8.74.0` 仍是 major 8，peer 仍是 `eslint@^8.57.0 || ^9.0.0 || ^10.0.0` 與 `typescript@>=4.8.4 <6.1.0`，涵蓋本 repo 的 eslint 9.39.5 與 typescript 5.9.3。根目錄原本就是 `typescript-eslint@^8.72.1`，把下限改成 `^8.74.0` 不換 major。`@typescript-eslint/typescript-estree@8.74.0` 的 `@typescript/native`（`npm:typescript@>=7.1.0-dev.20261009.1 || >=7.1.0-beta <7.1.0-dev`）是 optional peer（自 8.73.0 起），沒有安裝，也沒有 install script。
 
 不把全部 `minimatch` override 到 11：那會把 eslint 9 的 `3.1.5` 一併換掉，而且 `8.72.1` 宣告的是 `^10.2.2`，不在它自己的相容範圍裡。
 
-升級後 lock 解析 `minimatch@11.0.9`（另有 dev 傳遞 `@isaacs/nonrecursive-glob-match@1.1.0`），`minimatch@3.1.5` 仍留給 eslint。`pnpm audit` 與 `pnpm audit --json` 都是 0 筆（metadata 全 0，advisories `{}`）。`pnpm why minimatch --prod -r` 仍無輸出。
+升級後 lock 解析 `minimatch@11.0.9`（另有 dev 傳遞 `@isaacs/nonrecursive-glob-match@1.1.0`），`minimatch@3.1.5` 仍留給 eslint；optional peer `@typescript/native` 沒有安裝，也沒有 install script。`pnpm audit` 與 `pnpm audit --json` 都是 0 筆（metadata 全 0，advisories `{}`）。`pnpm why minimatch --prod -r` 仍無輸出。
 
 沒有既有的 minimatch 例外可刪。
 
@@ -78,6 +78,8 @@ Severity: 1 moderate
 
 ### 2026-11-30 與 12/01 是同一個政策
 
+以下描述 H3b 移除例外之前的程式。
+
 - `scripts/audit-allow.mjs` 的 `EXC.expires` 是 `2026-12-01`。`expired = !(today < "2026-12-01")`，Asia/Taipei。`2026-11-30` 仍放行，`2026-12-01` 起（含當天）失敗，訊息寫死。
 - 放行紀錄寫「有效至 2026-11-30」。決策文件寫到期日 `2026-12-01`、最後有效日 `2026-11-30`。部署檢查表寫「至 2026-11-30」。
 - 分支註記的 2026-11-30 是最後有效日；PM 說的 12/01 是開始失敗的那天。不是兩個不同的到期日。
@@ -92,15 +94,21 @@ Severity: 1 moderate
 
 ### 結論
 
-沒有修補版，不升級，不加 override，不改 `scripts/audit-allow.mjs`。
+沒有修補版，不升級，不加 override。H3 當時不改 `scripts/audit-allow.mjs`；H3b 依後續裁示刪了例外程式，見下方。
 
 殘餘：dev 工具鏈仍帶 `picomatch@4.0.7`。公告已撤回；上游不把它當漏洞，也沒有修補發布。本 repo 沒有把外部輸入當成 glob。正式環境載入不到這個套件。
 
-### 待決
+### 待決（H3 當時）
 
-本切片不續期。
+H3 不續期，也沒有改例外程式。後續裁示見下方 H3b，這項待決已結束。
 
-例外程式仍在。即使 audit 已不再回報這筆，`2026-12-01`（Asia/Taipei，含當天）起 `scripts/audit.sh` 仍會以固定訊息失敗。要不要在那之前刪掉這段已無對應公告的例外，留給總召；刪除不是續期，續期也不是本切片的決定。
+## H3b：例外已移除
+
+軟體大總召裁示（未經使用者確認）：同意移除，不續期、也不放著讓它變紅。
+
+移除理由與 GitHub API 一致：summary 是 `Withdrawn Advisory: picomatch vulnerable to ReDoS through single-branch repeated extglobs`，`withdrawn_at` 是 `2026-11-18T15:38:56Z`，`first_patched_version` 是 `null`。
+
+`scripts/audit-allow.mjs` 的正式例外清單改為空陣列。清單是空的就不會因為到期而失敗。沒有 finding 的掃描在 2026-12-01（Asia/Taipei，含當天）之後可以通過。任何 high／critical，包括舊的 `GHSA-fc5q-39xc-vjpf`，在任何日期都擋下。新例外必須同時有到期日和理由；缺少任一項，或已到期，就失敗。例外的公告 id 若已不在這次掃描，印出含該 id 的警告並提示「應移除此例外」，不讓 ci 失敗。這些規則用測試注入的假例外證明，那筆不留在正式清單。沒有把 picomatch 升版，因為沒有修補版。
 
 ## 依賴提交
 
