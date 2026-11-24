@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { runChild } from "../run-child.mjs";
-import { formatPartial, readServerSnapshot, setReportDir, startActivityLoop, writeRunning, writeSnapshot } from "../live-report.mjs";
+import { captureActivity, formatPartial, readServerSnapshot, setReportDir, startActivityLoop, writeRunning, writeSnapshot } from "../live-report.mjs";
 import LiveReporter, { resetLiveReporter } from "../vitest-live-reporter.mjs";
 
 const ROOT = resolve(__dirname, "../..");
@@ -232,6 +232,62 @@ it("退出碼是 null 時不以 0 收場", () => {
   const matched = src.match(/signal \? (\d+) : code \?\? (\d+)/);
   expect(matched?.[1]).toBe("1");
   expect(matched?.[2]).toBe("1");
+});
+
+it.fails("query 截到約 200 字並遮罩字面值", async () => {
+  const secret = "secret-token";
+  const snap = await readServerSnapshot(async () => ({ rows: [{ query: `SELECT '${secret}', ${"Q".repeat(180)}` }] }));
+  const query = String(snap.activity[0].query);
+  expect(query).not.toContain(secret);
+  expect(query).toContain("'?'");
+  expect(query.length).toBeLessThanOrEqual(200);
+});
+
+it.fails("快照 SQL 只取 query 前 200 字", async () => {
+  const seen: string[] = [];
+  await readServerSnapshot(async (sql) => { seen.push(sql); return { rows: [] }; });
+  expect(seen[0]).toContain("left(query, 200)");
+  expect(seen[0]).not.toContain("left(query, 2000)");
+});
+
+it("快照先讀 activity，不先取 advisory lock", async () => {
+  const seen: string[] = [];
+  await readServerSnapshot(async (sql) => { seen.push(sql); return { rows: [] }; });
+  expect(seen[0]).toContain("pg_stat_activity");
+  expect(seen.join("\n")).not.toMatch(/pg_advisory_(xact_)?lock\s*\(/);
+});
+
+it("快照連線有 statement、query、connection 逾時", () => {
+  const src = readFileSync(resolve(__dirname, "../live-report.mjs"), "utf8");
+  expect(src).toContain("connectionTimeoutMillis: 1000");
+  expect(src).toContain("statement_timeout: 1000");
+  expect(src).toContain("query_timeout: 1000");
+});
+
+it.fails("connect 失敗仍 end，且 Client 聽 error", async () => {
+  const events: string[] = [];
+  let ended = false;
+  const client = {
+    on(event: string) { events.push(event); },
+    async connect() { throw new Error("down"); },
+    async query() { return { rows: [] }; },
+    async end() { ended = true; },
+  };
+  await expect(captureActivity("postgres://ci@127.0.0.1:1/sd", () => client)).rejects.toThrow("down");
+  expect(ended).toBe(true);
+  expect(events).toContain("error");
+});
+
+it.fails("快照用完會關掉連線", async () => {
+  let ended = false;
+  const client = {
+    on() {},
+    async connect() {},
+    async query() { return { rows: [] }; },
+    async end() { ended = true; },
+  };
+  await captureActivity("postgres://ci@127.0.0.1:1/sd", () => client);
+  expect(ended).toBe(true);
 });
 
 it("json reporter 與 live reporter 可同時跑", async () => {
