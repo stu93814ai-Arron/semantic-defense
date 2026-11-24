@@ -2,15 +2,17 @@
 
 分支 `cursor/seed-fail-closed-4a51`，基底 `team-a-ci-lock`（90d9391）。不改種子內容、不改 `db.ts` 的 SCHEMA_LOCK／statement_timeout、不加依賴。
 
-軟體大總召裁示（未經使用者確認）：反向守門。以下正則、短路順序、拒絕訊息用詞、示範行程不自設許可旗標、再匯出去留，是駕駛員的技術選擇。
+軟體大總召裁示（未經使用者確認）：反向守門。以下正則、短路順序、拒絕訊息用詞、示範靠 vitest 的 NODE_ENV=test、再匯出去留，是駕駛員的技術選擇。
 
-軟體大總召裁示（未經使用者確認）：production 一律拒絕，DEMO_SEED_ALLOW 只在非 production 生效。資安指出 `NODE_ENV=production` 與 `DEMO_SEED_ALLOW=1` 兩項誤設同時發生時，會清空 13 張表，並建立密碼公開的 `admin1`。因此 `NODE_ENV === "production"` 時直接拋下面那句固定訊息，連 `current_database()` 都不查；`DEMO_SEED_ALLOW=1` 不能把 production 改成放行。
+軟體大總召裁示（未經使用者確認）：production 一律拒絕。資安指出 `NODE_ENV=production` 與當時的許可變數同時誤設時，會清空 13 張表，並建立密碼公開的 `admin1`。
+
+軟體大總召裁示（未經使用者確認）：拿掉 DEMO_SEED_ALLOW，只留 NODE_ENV==='test' 加測試庫名。這個旗標沒有合法使用者，而且大小寫不同的 production 寫法（`Production`、`prod`、前後空白）可以靠它繞過「production 一律拒絕」。程式不再讀取該變數。放行只剩 `NODE_ENV` 正好是 `test`，且 `current_database()` 符合既有正則；其餘一律拒絕，環境不符時不查庫名。
 
 ## 守門
 
-`seedPhase2Fixtures` 在 `argon2.hash`、`pg_advisory_xact_lock(SEED_LOCK)`、TRUNCATE 之前就決定放行或拒絕。`NODE_ENV` 正好是 `production` 時一律拒絕。其餘情況要兩個條件都成立才放行：
+`seedPhase2Fixtures` 在 `argon2.hash`、`pg_advisory_xact_lock(SEED_LOCK)`、TRUNCATE 之前就決定放行或拒絕。兩個條件都成立才放行：
 
-1. 環境：`NODE_ENV` 的值正好是 `test`，或（且不是 `production` 時）`DEMO_SEED_ALLOW` 的值正好是 `1`。
+1. 環境：`NODE_ENV` 的值正好是 `test`。沒有其他環境變數可以放行。
 2. 這條連線的 `current_database()` 符合下方測試命名。
 
 否則拋出固定的一句中文，不附 SQL、例外本文、資料庫名、URL、憑證：
@@ -39,9 +41,7 @@
 
 ## 示範行程
 
-`docs/demo/start-server.ts` 不寫入 `DEMO_SEED_ALLOW`。程式若在 `DEMO_SEED` 預設開啟時自己設成 `1`，旗標就不再是操作者的明示；那一行唯一會改變結果的情況，是外層 shell 已經把 `NODE_ENV` 設成 `production` 之類，而那正是該拒絕的場景。
-
-`docs/demo/phase2-api.md` 的啟動指令都是 `with-pg.mjs` 包住 vitest，沒有自帶 `NODE_ENV`。vitest 在 `NODE_ENV` 未設時補上 `test`，庫名是 with-pg 的 `ci`，兩個條件都成立。因此沒有改 `phase2-api.md`，也沒有在那些指令前加上 `DEMO_SEED_ALLOW=1`。
+示範不靠許可變數。`docs/demo/start-server.ts` 不讀取、不設定種子許可。`docs/demo/phase2-api.md` 的啟動指令都是 `with-pg.mjs` 包住 vitest，沒有自帶 `NODE_ENV`。vitest 在 `NODE_ENV` 未設時補上 `test`，庫名是 with-pg 的 `ci`，兩個條件都成立，所以沒有改 `phase2-api.md`。
 
 ## 再匯出
 
