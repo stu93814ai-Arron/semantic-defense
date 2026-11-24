@@ -145,7 +145,7 @@ it("必跑腳本接上 live reporter，被殺時會印部分報告", () => {
   expect(required).toContain("TERM");
 });
 
-it.fails("錯誤快照不蓋掉上一份有效的 pg-live", () => {
+it("錯誤快照不蓋掉上一份有效的 pg-live", () => {
   const dir = scratch();
   writeSnapshot(dir, { activity: [{ query: "kept-row" }], locks: [] });
   writeSnapshot(dir, { error: "the database system is shutting down", activity: [], locks: [] });
@@ -154,7 +154,7 @@ it.fails("錯誤快照不蓋掉上一份有效的 pg-live", () => {
   expect(live).not.toContain("shutting down");
 });
 
-it.fails("TERM 時資料庫正在關機，印出的仍是上一份有效快照", async () => {
+it("TERM 時資料庫正在關機，印出的仍是上一份有效快照", async () => {
   const dir = scratch();
   writeSnapshot(dir, {
     activity: [{ pid: 7, query: "INSERT INTO case_hits SELECT 'kept-row'" }],
@@ -195,7 +195,7 @@ process.on("SIGTERM", () => {
 setInterval(() => {}, 1000);
 `;
 
-it.fails("SIGTERM 等快照連線成功後才關 postgres，並刪掉 sd-pg 目錄", async () => {
+it("SIGTERM 等快照連線成功後才關 postgres，並刪掉 sd-pg 目錄", async () => {
   const base = scratch();
   const snap = join(base, "snap");
   const ready = join(base, "ready");

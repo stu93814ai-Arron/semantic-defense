@@ -22,23 +22,41 @@ function atomicWrite(path, body) {
   renameSync(`${path}.tmp`, path);
 }
 
-export function writeRunning(reportDirName, names) {
-  mkdirSync(reportDirName, { recursive: true });
-  atomicWrite(join(reportDirName, "vitest-live.json"), JSON.stringify({
-    running: names, updatedAt: new Date().toISOString(),
-  }));
+function failedSnap(snap) {
+  return Boolean(snap && typeof snap.error === "string" && snap.error);
 }
 
-export function writeSnapshot(reportDirName, snap) {
+function previousIsGood(path) {
+  if (!existsSync(path)) return false;
+  try { return !JSON.parse(readFileSync(path, "utf8")).error; } catch { return false; }
+}
+
+function writeJson(reportDirName, name, snap) {
   mkdirSync(reportDirName, { recursive: true });
-  atomicWrite(join(reportDirName, "pg-live.json"), JSON.stringify({
+  atomicWrite(join(reportDirName, name), JSON.stringify({
     updatedAt: new Date().toISOString(), ...snap,
   }));
 }
 
+export function writeRunning(reportDirName, names) {
+  writeJson(reportDirName, "vitest-live.json", { running: names });
+}
+
+export function writeSnapshot(reportDirName, snap) {
+  const path = join(reportDirName, "pg-live.json");
+  if (failedSnap(snap) && previousIsGood(path)) return;
+  writeJson(reportDirName, "pg-live.json", snap);
+}
+
+/** TERM 快照另寫。失敗時留下上一份 pg-live.json，不把關機錯誤蓋上去。 */
+export function writeTermSnapshot(reportDirName, snap) {
+  writeJson(reportDirName, "pg-live-term.json", snap);
+  if (!failedSnap(snap)) writeSnapshot(reportDirName, snap);
+}
+
 export function formatPartial(reportDirName) {
   const parts = ["::: 必跑被中斷，部分報告"];
-  for (const name of ["vitest-live.json", "pg-live.json"]) {
+  for (const name of ["vitest-live.json", "pg-live.json", "pg-live-term.json"]) {
     const path = join(reportDirName, name);
     if (!existsSync(path)) continue;
     parts.push(`--- ${name} ---`, readFileSync(path, "utf8"));
@@ -69,6 +87,10 @@ export async function captureActivity(url) {
   }
 }
 
+function errorSnap(err) {
+  return { error: err instanceof Error ? err.message : String(err), activity: [], locks: [] };
+}
+
 export function installKillSnapshot(reportDirName, captureFn) {
   if (killInstalled) return;
   killInstalled = true;
@@ -77,8 +99,8 @@ export function installKillSnapshot(reportDirName, captureFn) {
     kill.unref();
     Promise.resolve()
       .then(captureFn)
-      .then((snap) => writeSnapshot(reportDirName, snap))
-      .catch((err) => writeSnapshot(reportDirName, { error: err instanceof Error ? err.message : String(err), activity: [], locks: [] }))
+      .then((snap) => writeTermSnapshot(reportDirName, snap))
+      .catch((err) => writeTermSnapshot(reportDirName, errorSnap(err)))
       .finally(() => process.exit(143));
   });
 }
@@ -91,7 +113,7 @@ export function startActivityLoop(reportDirName, captureFn) {
     Promise.resolve()
       .then(captureFn)
       .then((snap) => writeSnapshot(reportDirName, snap))
-      .catch((err) => writeSnapshot(reportDirName, { error: err instanceof Error ? err.message : String(err), activity: [], locks: [] }))
+      .catch((err) => writeSnapshot(reportDirName, errorSnap(err)))
       .finally(() => { busy = false; });
   };
   const timer = setInterval(tick, 2000);

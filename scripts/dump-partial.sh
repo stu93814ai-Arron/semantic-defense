@@ -10,3 +10,7 @@ if [ -f "$d/pg-live.json" ]; then
   echo "--- pg-live ---"
   cat "$d/pg-live.json"
 fi
+if [ -f "$d/pg-live-term.json" ]; then
+  echo "--- pg-live-term ---"
+  cat "$d/pg-live-term.json"
+fi
