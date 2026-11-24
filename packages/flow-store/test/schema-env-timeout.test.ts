@@ -6,7 +6,7 @@ import {
 import { useSchemaDb, type SchemaDb } from "./helpers.js";
 
 const RESET = ["DROP TABLE IF EXISTS flow_events", "DROP TABLE IF EXISTS flow_rejections", "DROP FUNCTION IF EXISTS flow_ts_ms(TEXT)"];
-const ref = useSchemaDb("flow_store_schema_env", RESET);
+const ref = useSchemaDb("sd_flow_store_schema_env", RESET);
 let h: SchemaDb;
 let db: FlowDb;
 let savedWait: string | undefined;

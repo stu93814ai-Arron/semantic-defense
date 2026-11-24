@@ -22,9 +22,9 @@ const password = randomBytes(18).toString("hex");
 const pg = new EmbeddedPostgres({ databaseDir: join(dir, "data"), user: "ci", password, port, persistent: false, onLog: () => {} });
 let code = 1;
 try {
-  await pg.initialise(); await pg.start(); await pg.createDatabase("ci");
+  await pg.initialise(); await pg.start(); await pg.createDatabase("sd_ci");
   console.log(`[with-pg] 拋棄式 Postgres 已啟動於 127.0.0.1:${port}`);
-  code = run({ ...process.env, DATABASE_URL: `postgres://ci:${password}@127.0.0.1:${port}/ci` });
+  code = run({ ...process.env, DATABASE_URL: `postgres://ci:${password}@127.0.0.1:${port}/sd_ci` });
 } finally {
   await pg.stop().catch(() => {}); rmSync(dir, { recursive: true, force: true });
 }

@@ -10,7 +10,7 @@ import { useSchemaDb } from "./helpers.js";
  */
 const BOUND_MS = 5_000;
 const RESET = ["DROP TABLE IF EXISTS flow_events", "DROP TABLE IF EXISTS flow_rejections", "DROP FUNCTION IF EXISTS flow_ts_ms(TEXT)"];
-const ref = useSchemaDb("flow_store_db_isolation", RESET);
+const ref = useSchemaDb("sd_flow_store_db_isolation", RESET);
 
 const within = <T>(p: Promise<T>, ms: number): Promise<T | "timeout"> => {
   let t: NodeJS.Timeout | undefined;

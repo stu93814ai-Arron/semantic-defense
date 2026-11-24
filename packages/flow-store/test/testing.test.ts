@@ -8,7 +8,7 @@ import { openSchemaDb } from "./helpers.js";
 /** 測試入口 ./testing（A 組領航員 11-09）：只有建表與塞資料的測試輔助，DDL 仍走 write.ts。 */
 let h: Awaited<ReturnType<typeof openSchemaDb>>;
 let db: FlowDb;
-beforeAll(async () => { h = await openSchemaDb("flow_store_testing_test"); db = h.db; });
+beforeAll(async () => { h = await openSchemaDb("sd_flow_store_testing_test"); db = h.db; });
 afterAll(async () => { await h?.close(); });
 
 const flow = (src_ip: string): FlowMetadataEvent => ({

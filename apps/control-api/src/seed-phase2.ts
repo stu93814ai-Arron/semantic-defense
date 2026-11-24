@@ -16,10 +16,11 @@ const SEED_REFUSED =
   "拒絕執行測試種子：未同時符合測試環境與測試資料庫命名，已中止且未改動任何資料";
 
 /**
- * `ci`：scripts/with-pg.mjs 的 createDatabase（CI 與 docs/demo）。
- * `flow_store_` + 小寫字母開頭：flow-store 測試 openSchemaDb 的庫名。
+ * `sd_ci`：scripts/with-pg.mjs 的 createDatabase（CI 與 docs/demo）。
+ * `sd_flow_store_` + 小寫字母開頭：flow-store 測試 openSchemaDb 的庫名。
+ * 舊名 `ci`、`flow_store_*` 不符合，必須拒絕。
  */
-const TEST_DATABASE_NAME = /^(?:ci|flow_store_[a-z][a-z0-9_]*)$/;
+const TEST_DATABASE_NAME = /^(?:sd_ci|sd_flow_store_[a-z][a-z0-9_]*)$/;
 
 function seedEnvAllowed(): boolean {
   return process.env.NODE_ENV === "test";

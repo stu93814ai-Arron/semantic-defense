@@ -13,8 +13,21 @@ const REFUSED =
 
 const LEAKED = "LEAKED_DRIVER_ERROR";
 
-/** with-pg 的 ci，以及 flow-store 測試實際開過的庫名。 */
+/** with-pg 的 sd_ci，以及 flow-store 測試實際開過的庫名。 */
 const KNOWN_TEST_DATABASES = [
+  "sd_ci",
+  "sd_flow_store_db_isolation",
+  "sd_flow_store_backfill",
+  "sd_flow_store_migration",
+  "sd_flow_store_read_test",
+  "sd_flow_store_schema_env",
+  "sd_flow_store_schema_idx",
+  "sd_flow_store_test",
+  "sd_flow_store_testing_test",
+] as const;
+
+/** 改前綴前的庫名。NODE_ENV=test 時也必須拒絕，包含舊名 ci。 */
+const LEGACY_TEST_DATABASES = [
   "ci",
   "flow_store_db_isolation",
   "flow_store_backfill",
@@ -60,10 +73,10 @@ const CASES: Case[] = [
   { title: "DEMO_SEED_ALLOW 帶空白且 NODE_ENV 未設時拒絕", demo: "1 ", db: "ci", mode: "refuse" },
   { title: "DEMO_SEED_ALLOW 空字串且 NODE_ENV 未設時拒絕", demo: "", db: "ci", mode: "refuse" },
   { title: "查詢目前資料庫名稱失敗時拒絕且不外洩例外", nodeEnv: "test", db: "ci", mode: "refuse", queryThrows: true },
-  { title: "NODE_ENV=test 且資料庫名 ci 時放行", nodeEnv: "test", db: "ci", mode: "allow" },
-  { title: "NODE_ENV=test 且 DEMO_SEED_ALLOW=0、庫名 ci 時放行", nodeEnv: "test", demo: "0", db: "ci", mode: "allow" },
-  { title: "NODE_ENV=test 且 DEMO_SEED_ALLOW=1、庫名 ci 時仍放行", nodeEnv: "test", demo: "1", db: "ci", mode: "allow" },
-  { title: "NODE_ENV=test 且資料庫名 flow_store_read_test 時放行", nodeEnv: "test", db: "flow_store_read_test", mode: "allow" },
+  { title: "NODE_ENV=test 且資料庫名 sd_ci 時放行", nodeEnv: "test", db: "sd_ci", mode: "allow" },
+  { title: "NODE_ENV=test 且 DEMO_SEED_ALLOW=0、庫名 sd_ci 時放行", nodeEnv: "test", demo: "0", db: "sd_ci", mode: "allow" },
+  { title: "NODE_ENV=test 且 DEMO_SEED_ALLOW=1、庫名 sd_ci 時仍放行", nodeEnv: "test", demo: "1", db: "sd_ci", mode: "allow" },
+  { title: "NODE_ENV=test 且資料庫名 sd_flow_store_read_test 時放行", nodeEnv: "test", db: "sd_flow_store_read_test", mode: "allow" },
 ];
 
 /** 程式不讀 DEMO_SEED_ALLOW。非 test 時設了它也拒絕，而且不查庫。 */
@@ -196,9 +209,6 @@ describe("seedPhase2Fixtures 反向守門", () => {
   });
 });
 
-/** 專案前綴：`sd_` + 既有庫名。`ci` → `sd_ci`，`flow_store_*` → `sd_flow_store_*`。 */
-const PREFIXED_TEST_DATABASES = KNOWN_TEST_DATABASES.map((name) => `sd_${name}`);
-
 const PREFIX_NEAR_MISS = [
   "sd_ci_extra",
   "SD_CI",
@@ -215,11 +225,11 @@ async function runNamed(names: readonly string[], mode: Mode): Promise<void> {
 
 describe("專案前綴測試庫名", () => {
   // 軟體大總召裁示（未經使用者確認）；正則細節為 A 組領航員裁示（未經使用者確認）。
-  // 實作前這些預期與現行放行相反，用 it.fails 標成紅燈，本檔本身維持綠燈。
-  it.fails("NODE_ENV=test 時舊庫名 ci 與 flow_store_* 全部拒絕", () => runNamed(KNOWN_TEST_DATABASES, "refuse"));
+  // 實作後 it.fails 已改回 it()。
+  it("NODE_ENV=test 時舊庫名 ci 與 flow_store_* 全部拒絕", () => runNamed(LEGACY_TEST_DATABASES, "refuse"));
 
-  it.fails("NODE_ENV=test 時 sd_ci 與 sd_flow_store_* 全部放行", () => runNamed(
-    [...PREFIXED_TEST_DATABASES, "sd_flow_store_a"],
+  it("NODE_ENV=test 時 sd_ci 與 sd_flow_store_* 全部放行", () => runNamed(
+    [...KNOWN_TEST_DATABASES, "sd_flow_store_a"],
     "allow",
   ));
 

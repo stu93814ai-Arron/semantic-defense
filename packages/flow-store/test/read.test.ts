@@ -6,7 +6,7 @@ import { openSchemaDb } from "./helpers.js";
 /** 唯讀入口最小骨架：判定 tick 開頭的 to_regclass 防呆。獨立 schema，不與其他測試互相清表。 */
 let h: Awaited<ReturnType<typeof openSchemaDb>>;
 let db: FlowDb;
-beforeAll(async () => { h = await openSchemaDb("flow_store_read_test"); db = h.db; });
+beforeAll(async () => { h = await openSchemaDb("sd_flow_store_read_test"); db = h.db; });
 afterAll(async () => { await h?.close(); });
 
 describe("flow-store/read", () => {

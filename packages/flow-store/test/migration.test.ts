@@ -8,7 +8,7 @@ import { useSchemaDb, type SchemaDb } from "./helpers.js";
  * 舊表＝現行 schema 去掉 ts_ms 欄、flow_ts_ms 函式、flow_events_group_ms 索引（測試不寫 DDL，boundary.test 鎖住）。
  */
 const RESET = ["DROP TABLE IF EXISTS flow_events", "DROP TABLE IF EXISTS flow_rejections", "DROP FUNCTION IF EXISTS flow_ts_ms(TEXT)"];
-const ref = useSchemaDb("flow_store_migration", RESET);
+const ref = useSchemaDb("sd_flow_store_migration", RESET);
 let h: SchemaDb;
 let db: FlowDb;
 beforeEach(() => { h = ref.h; db = h.db; });

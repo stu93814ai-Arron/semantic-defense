@@ -6,7 +6,7 @@ import { RETENTION_MS, REJECTION_COUNT_WINDOW_MS, REJECTION_RESERVED, REJECTION_
 import { useSchemaDb } from "./helpers.js";
 
 /** flow-store 直接呼叫（自 sensor-ingest store.test 搬來的護欄＋insertFlow 直測）。獨立 schema，不與其他測試互相清表。 */
-const ref = useSchemaDb("flow_store_test", ["DROP TABLE IF EXISTS flow_events", "DROP TABLE IF EXISTS flow_rejections"]);
+const ref = useSchemaDb("sd_flow_store_test", ["DROP TABLE IF EXISTS flow_events", "DROP TABLE IF EXISTS flow_rejections"]);
 let db: FlowDb;
 beforeEach(async () => { db = ref.h.db; await ensureFlowSchema(db); });
 
