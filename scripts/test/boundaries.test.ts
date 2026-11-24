@@ -87,6 +87,20 @@ describe("(c) deploy/sensor 視為流量平面部署目錄", () => {
   it("deploy/ 其他位置仍然紅燈", () => expect(run({ "deploy/other/a.yaml": "a: 1\n" }).code).toBe(1));
 });
 
+describe("apps/*/src 不得 import test-support", () => {
+  it("src 以相對路徑引用 test-support → 失敗", () => {
+    const r = run({ "apps/control-api/src/leak.ts": 'import { seedPhase2Fixtures } from "../test-support/seed-phase2.js";\n' });
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("不得 import test-support");
+  });
+  it("test/ 引用 test-support，以及 src 不引用 → 通過", () => {
+    expect(run({
+      "apps/control-api/test/helpers/app.ts": 'import { seedPhase2Fixtures } from "../../test-support/seed-phase2.js";\n',
+      "apps/control-api/src/ok.ts": "export const ok = 1;\n",
+    }).code).toBe(0);
+  });
+});
+
 describe("(d) sensor-ingest 不得提供 /api、/login 路由", () => {
   it("/ingest 路由 → 通過", () => {
     expect(run({ ...SENSOR_PKG, "apps/sensor-ingest/src/server.ts": 'app.post("/ingest", h);\napp.get("/healthz", h);\n' }).code).toBe(0);

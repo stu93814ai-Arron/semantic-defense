@@ -20,7 +20,7 @@ function productionConfig(outDir: string): ts.ParsedCommandLine {
   const parsed = ts.parseJsonConfigFileContent(
     {
       extends: "./tsconfig.json",
-      compilerOptions: { noEmit: false, outDir, rootDir: "src" },
+      compilerOptions: { noEmit: false, noEmitOnError: true, outDir, rootDir: "src" },
       include: ["src"],
     },
     ts.sys,

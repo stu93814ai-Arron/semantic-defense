@@ -133,6 +133,19 @@ for (const f of [...readdirSync(".").filter((n) => !statSync(n).isDirectory()), 
   if (SENSOR_RE.test(t) && MG_RE.test(t)) errors.push(`${f}: 單一部署檔同時指涉 sensor-ingest 與管理平面`);
 }
 
+// apps/*/src 不得 import test-support（種子與測試輔助留在測試樹；A 組領航員裁示，未經使用者確認）
+const TEST_SUPPORT = /(?:^|[/\\])test-support(?:[/\\]|$)/;
+for (const [app, info] of ws) {
+  if (info.kind !== "apps") continue;
+  for (const f of walk(join(info.dir, "src")).filter((p) => /\.(m|c)?[jt]sx?$/.test(p))) {
+    SPEC.lastIndex = 0;
+    for (const m of readFileSync(f, "utf8").matchAll(SPEC)) {
+      const spec = m[1] ?? m[2] ?? m[3];
+      if (TEST_SUPPORT.test(spec)) errors.push(`${relative(ROOT, f)}: ${app} 的 src 不得 import test-support（"${spec}"）`);
+    }
+  }
+}
+
 for (const e of errors) console.log(`❌ ${e}`);
 console.log(errors.length ? `boundaries: ${errors.length} 項違規` : "boundaries: OK（流量／管理平面依賴與部署設定分離）");
 process.exit(errors.length ? 1 : 0);
