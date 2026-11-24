@@ -208,3 +208,29 @@ describe("K6／K8 取 SCHEMA_LOCK 失敗", () => {
     expect(releases).toContain(true);
   }, 15_000);
 });
+
+/**
+ * U6（軟體大總召裁示，未經使用者確認）：非 55P03 的遷移錯誤必須拒絕啟動。
+ * runSchemaStatement 在 55P03 以外仍 throw。拿掉該 throw 時本測試轉紅。
+ */
+describe("U6 非 55P03 的遷移錯誤拒絕啟動", () => {
+  it("結構語句拋出 42601 時 openDb 失敗，錯誤原樣拋出", async () => {
+    installClientHook({
+      onQuery: async ({ sql, run }) => {
+        if (sql.startsWith("CREATE TABLE IF NOT EXISTS users")) {
+          const err = new Error("schema-non-55P03") as Error & { code?: string };
+          err.code = "42601";
+          throw err;
+        }
+        return run();
+      },
+    });
+    const outcome = await settleOpenDb();
+    if (outcome.ok) await outcome.db.close().catch(() => {});
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.err).toBeInstanceOf(Error);
+    expect((outcome.err as Error).message).toBe("schema-non-55P03");
+    expect((outcome.err as { code?: string }).code).toBe("42601");
+  }, 15_000);
+});
