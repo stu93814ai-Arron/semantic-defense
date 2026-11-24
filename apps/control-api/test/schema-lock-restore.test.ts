@@ -158,3 +158,53 @@ describe("acquireSchemaLock 還原 statement_timeout", () => {
     expect(releases).toContain(true);
   });
 });
+
+/**
+ * K6／K8（軟體大總召裁示，未經使用者確認；寫法為 A 組領航員裁示，未經使用者確認）。
+ * 非 57014 的取鎖錯誤必須原樣拒絕啟動，不得在沒鎖時繼續遷移；沒取到鎖不得 unlock。
+ */
+describe("K6／K8 取 SCHEMA_LOCK 失敗", () => {
+  it("取鎖發生非 57014 錯誤時拒絕啟動，且不繼續執行遷移語句", async () => {
+    const seen: string[] = [];
+    installClientHook({
+      onQuery: async ({ sql, run }) => {
+        seen.push(sql);
+        if (sql.includes("pg_advisory_lock(")) {
+          const err = new Error("lock-boom") as Error & { code?: string };
+          err.code = "08006";
+          throw err;
+        }
+        return run();
+      },
+    });
+    const outcome = await settleOpenDb();
+    if (outcome.ok) await outcome.db.close().catch(() => {});
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.err).toBeInstanceOf(Error);
+    expect((outcome.err as Error).message).toBe("lock-boom");
+    expect(seen.some((sql) => sql.includes("CREATE TABLE"))).toBe(false);
+  }, 15_000);
+
+  it("沒取到鎖時不呼叫 pg_advisory_unlock，並以 release(true) 結束遷移連線", async () => {
+    const seen: string[] = [];
+    const releases: unknown[] = [];
+    installClientHook({
+      onQuery: async ({ sql, run }) => {
+        seen.push(sql);
+        if (sql.includes("pg_advisory_lock(")) {
+          const err = new Error("no-lock") as Error & { code?: string };
+          err.code = "57P01";
+          throw err;
+        }
+        return run();
+      },
+      onRelease: (arg) => { releases.push(arg); },
+    });
+    const outcome = await settleOpenDb();
+    if (outcome.ok) await outcome.db.close().catch(() => {});
+    expect(outcome.ok).toBe(false);
+    expect(seen.some((sql) => sql.includes("pg_advisory_unlock("))).toBe(false);
+    expect(releases).toContain(true);
+  }, 15_000);
+});
