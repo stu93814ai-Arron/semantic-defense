@@ -682,3 +682,115 @@ main.login-page {
   flex: 1;
   min-width: 0;
 }
+
+/* 自動上榜開關與確認對話框（無專屬設計稿，沿用設計系統 tokens） */
+.auto-list__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.switch {
+  position: relative;
+  width: 52px;
+  height: 30px;
+  flex: none;
+  padding: 0;
+  border: 2px solid var(--color-text-muted);
+  border-radius: var(--radius-control);
+  background: var(--color-surface-2);
+  cursor: pointer;
+}
+
+.switch__thumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-control);
+  background: var(--color-text-muted);
+}
+
+.switch[data-state="on"] {
+  border-color: var(--color-primary);
+  background: var(--color-primary);
+}
+
+.switch[data-state="on"] .switch__thumb {
+  left: 25px;
+  background: var(--color-on-primary);
+}
+
+/* 寫入中（aria-disabled，不用 disabled 以保留焦點）；關閉時保留 2px 邊框維持非文字對比 */
+.switch[aria-disabled="true"] {
+  cursor: not-allowed;
+  border-color: var(--color-neutral);
+}
+
+.switch[aria-disabled="true"] .switch__thumb {
+  background: var(--color-neutral);
+}
+
+.switch[data-state="on"][aria-disabled="true"] {
+  border-color: color-mix(in srgb, var(--color-primary) 45%, var(--color-surface-2));
+  background: color-mix(in srgb, var(--color-primary) 45%, var(--color-surface-2));
+}
+
+.switch[data-state="on"][aria-disabled="true"] .switch__thumb {
+  background: var(--color-text);
+}
+
+.switch:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 3px;
+}
+
+.auto-list__state {
+  font-weight: 600;
+}
+
+/* 覆寫全域 label（flex column、muted、text-sm、margin-bottom），與開關同列對齊 */
+.auto-list__label {
+  display: inline;
+  margin: 0;
+  font-size: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+/* DOM 順序：button.switch → label.auto-list__label（相鄰兄弟） */
+.switch[aria-disabled="true"] + .auto-list__label {
+  cursor: not-allowed;
+}
+
+[data-testid="auto-list-read-error"],
+[data-testid="auto-list-write-error"] {
+  color: var(--color-danger);
+}
+
+.muted {
+  color: var(--color-text-muted);
+}
+
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(0 0 0 / 45%);
+}
+
+.dialog {
+  max-width: 32rem;
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-4);
+}
