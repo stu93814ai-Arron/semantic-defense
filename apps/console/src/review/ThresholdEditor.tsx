@@ -50,8 +50,8 @@ export function ThresholdEditor({ value, onSave }: Props) {
   }
 
   return (
-    <section className="card" data-testid="threshold-editor">
-      <h2>成案／自動上榜門檻</h2>
+    <div className="threshold-editor" data-testid="threshold-editor">
+      <h3>成案／自動上榜門檻</h3>
       <p data-testid="threshold-bounds" className="muted">
         成案（case）{B.case.min}–{B.case.max}；自動上榜（auto）{B.auto.min}–{B.auto.max}；且
         case &lt; auto
@@ -91,6 +91,6 @@ export function ThresholdEditor({ value, onSave }: Props) {
           {notice}
         </p>
       ) : null}
-    </section>
+    </div>
   );
 }

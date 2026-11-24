@@ -13,6 +13,8 @@ vi.mock("../review/reviewSource", () => ({
     listActive: vi.fn(),
     listWhitelist: vi.fn(),
     getThresholds: vi.fn(),
+    getAutoList: vi.fn(),
+    putAutoList: vi.fn(),
   },
 }));
 
@@ -27,6 +29,7 @@ const listPending = vi.mocked(reviewSource.listPending);
 const listActive = vi.mocked(reviewSource.listActive);
 const listWhitelist = vi.mocked(reviewSource.listWhitelist);
 const getThresholds = vi.mocked(reviewSource.getThresholds);
+const getAutoList = vi.mocked(reviewSource.getAutoList);
 
 beforeEach(() => {
   isDemo.mockReturnValue(false);
@@ -34,6 +37,7 @@ beforeEach(() => {
   listActive.mockResolvedValue({ ok: true, value: [] });
   listWhitelist.mockResolvedValue({ ok: true, value: [] });
   getThresholds.mockResolvedValue({ ok: true, value: { case: 0.5, auto: 0.9 } });
+  getAutoList.mockResolvedValue({ ok: true, value: { enabled: false } });
 });
 afterEach(() => {
   cleanup();

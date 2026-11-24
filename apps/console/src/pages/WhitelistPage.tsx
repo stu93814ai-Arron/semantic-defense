@@ -56,6 +56,7 @@ export function WhitelistPage() {
       <h1>白名單</h1>
       <DemoDataMarker />
       <WhitelistThresholdSection
+        role={user?.role}
         actorId={user?.username}
         onChanged={refresh}
       />
