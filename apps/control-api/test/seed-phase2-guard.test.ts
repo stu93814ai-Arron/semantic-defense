@@ -235,3 +235,116 @@ describe("專案前綴測試庫名", () => {
 
   it("NODE_ENV=test 時前綴近似名仍拒絕", () => runNamed(PREFIX_NEAR_MISS, "refuse"));
 });
+
+type QueryFn = <T>(sql: string) => Promise<{ rows: T[] }>;
+
+function channelQuery(trace: string[], channel: "outer" | "tx", databaseName: string, queryThrows: boolean): QueryFn {
+  return async <T>(sql: string): Promise<{ rows: T[] }> => {
+    const kind = classify(sql);
+    if (kind === "current_database") {
+      trace.push(`${channel}:current_database`);
+      if (queryThrows) throw new Error(LEAKED);
+      return { rows: [{ name: databaseName } as T] };
+    }
+    trace.push(`${channel}:${kind}`);
+    if (kind === "insert-user") return { rows: [{ id: 1 } as T] };
+    return { rows: [] };
+  };
+}
+
+/** 外層連線與交易客戶端各回不同的 current_database()，用來確認再驗發生在交易客戶端。 */
+function splitHarness(trace: string[], outerName: string, txName: string, txThrows: boolean): ControlApi {
+  const outer = channelQuery(trace, "outer", outerName, false);
+  const txq = channelQuery(trace, "tx", txName, txThrows);
+  const db: Db = {
+    query: outer,
+    exec: async () => undefined,
+    close: async () => undefined,
+    tx: (fn) => fn({ query: txq }),
+    withSession: (fn) => fn({ query: outer }),
+  };
+  vi.spyOn(argon2, "hash").mockImplementation((async () => {
+    trace.push("hash");
+    return "hash";
+  }) as unknown as typeof argon2.hash);
+  return { db } as unknown as ControlApi;
+}
+
+async function withSplit(
+  outerName: string,
+  txName: string,
+  txThrows: boolean,
+  body: (trace: string[], app: ControlApi) => Promise<void>,
+): Promise<void> {
+  vi.restoreAllMocks();
+  setEnv("test", undefined);
+  const trace: string[] = [];
+  try {
+    await body(trace, splitHarness(trace, outerName, txName, txThrows));
+  } finally {
+    setEnv(origNode, origDemo);
+    vi.restoreAllMocks();
+  }
+}
+
+async function refusedMessage(app: ControlApi): Promise<string> {
+  const err = await seedPhase2Fixtures(app).then(
+    () => ({ message: "沒有拒絕" }),
+    (caught: unknown) => (caught instanceof Error ? caught : { message: "非 Error" }),
+  );
+  return err.message;
+}
+
+function expectNoMutatingSql(trace: string[]): void {
+  expect(trace.some((step) => step.endsWith(":lock") || step === "lock")).toBe(false);
+  expect(trace.some((step) => step.endsWith(":truncate") || step === "truncate")).toBe(false);
+}
+
+describe("交易內再驗目前資料庫", () => {
+  // 軟體大總召裁示（未經使用者確認）；再驗位置為 A 組領航員裁示（未經使用者確認）。
+  // 實作前交易內沒有第二次 current_database()，用 it.fails 標成紅燈。
+  it.fails("取鎖前用交易客戶端再驗，庫名不符則拒絕且不取鎖不 TRUNCATE", () => withSplit(
+    "sd_ci",
+    "postgres",
+    false,
+    async (trace, app) => {
+      const message = await refusedMessage(app);
+      expect(message).toBe(REFUSED);
+      expect(message).not.toContain(LEAKED);
+      expect(trace).toContain("outer:current_database");
+      expect(trace).toContain("tx:current_database");
+      expect(trace.filter((step) => step === "hash")).toHaveLength(4);
+      expectNoMutatingSql(trace);
+    },
+  ));
+
+  it.fails("庫名符合時，交易客戶端的 current_database 在雜湊之後、取鎖之前", () => withSplit(
+    "sd_ci",
+    "sd_ci",
+    false,
+    async (trace, app) => {
+      await seedPhase2Fixtures(app);
+      const lastHash = trace.lastIndexOf("hash");
+      const txDb = trace.indexOf("tx:current_database");
+      const lockAt = trace.indexOf("tx:lock");
+      expect(trace[0]).toBe("outer:current_database");
+      expect(trace.filter((step) => step === "hash")).toHaveLength(4);
+      expect(txDb).toBeGreaterThan(lastHash);
+      expect(lockAt).toBeGreaterThan(txDb);
+      expect(trace.indexOf("tx:truncate")).toBeGreaterThan(lockAt);
+    },
+  ));
+
+  it.fails("交易內查庫名失敗時拒絕且不外洩、不取鎖", () => withSplit(
+    "sd_ci",
+    "sd_ci",
+    true,
+    async (trace, app) => {
+      const message = await refusedMessage(app);
+      expect(message).toBe(REFUSED);
+      expect(message).not.toContain(LEAKED);
+      expect(trace).toContain("tx:current_database");
+      expectNoMutatingSql(trace);
+    },
+  ));
+});
