@@ -77,6 +77,24 @@ async function finishOpenDb(opening: Promise<Db>, outcome: OpenDbRace | undefine
   await cancelForeignBackends();
 }
 
+const FOREIGN_DB = "sd_h2a_foreign";
+
+function foreignDatabaseUrl(): string {
+  const url = new URL(requireDatabaseUrl());
+  url.pathname = `/${FOREIGN_DB}`;
+  return url.href;
+}
+
+/** 清掉上次留下的外國資料庫。先斷開它的後端，再 DROP。只碰 FOREIGN_DB。 */
+async function resetForeignDatabase(admin: pg.Client): Promise<void> {
+  await admin.query("SET statement_timeout = '5s'");
+  await admin.query(
+    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()",
+    [FOREIGN_DB],
+  );
+  await admin.query(`DROP DATABASE IF EXISTS ${FOREIGN_DB}`);
+}
+
 /** 有誰持有（granted）或在等（!granted）某把 session advisory 鎖。 */
 async function advisory(key: number, granted: boolean): Promise<number[]> {
   const probe = await client();
@@ -222,4 +240,37 @@ describe("⑤ seed 計算密碼雜湊時不持有 SEED_LOCK，且中途失敗後
       spy.mockRestore();
     }
   });
+});
+
+describe("advisory() 只回報本次測試庫的鎖", () => {
+  // 軟體大總召裁示（未經使用者確認）：只處理本庫的鎖。
+  // 目前 advisory() 未以 pg_locks.database 過濾，其他資料庫的同號鎖也會出現。
+  // plain it() 會失敗；過濾補上後改回 it()。本測試不呼叫 cancelForeignBackends。
+  it.fails("其他資料庫持有同一把 SCHEMA_LOCK 時不列入，本庫持有者仍在", async () => {
+    const holder = await client();
+    await holder.query("SELECT pg_advisory_lock($1)", [SCHEMA_LOCK]);
+    const holderPid = clientPids.get(holder);
+    if (holderPid === undefined) throw new Error("missing pid");
+    const admin = await client();
+    let foreign: pg.Client | undefined;
+    try {
+      await resetForeignDatabase(admin);
+      await admin.query(`CREATE DATABASE ${FOREIGN_DB}`);
+      foreign = new pg.Client({ connectionString: foreignDatabaseUrl() });
+      await foreign.connect();
+      await foreign.query("SET statement_timeout = '5s'");
+      await foreign.query("SELECT pg_advisory_lock($1)", [SCHEMA_LOCK]);
+      const foreignPid = (await foreign.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0]!.pid;
+      const pids = await advisory(SCHEMA_LOCK, true);
+      expect(pids).toContain(holderPid);
+      expect(pids).not.toContain(foreignPid);
+    } finally {
+      if (foreign) {
+        await foreign.query("SELECT pg_advisory_unlock($1)", [SCHEMA_LOCK]).catch(() => {});
+        await foreign.end().catch(() => {});
+      }
+      await holder.query("SELECT pg_advisory_unlock($1)", [SCHEMA_LOCK]).catch(() => {});
+      await resetForeignDatabase(admin);
+    }
+  }, 20_000);
 });
