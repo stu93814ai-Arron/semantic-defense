@@ -66,7 +66,7 @@ const CASES: Case[] = [
   { title: "NODE_ENV=test 且資料庫名 flow_store_read_test 時放行", nodeEnv: "test", db: "flow_store_read_test", mode: "allow" },
 ];
 
-/** 旗標尚未從程式移除：這些現在會放行或先查庫，用 it.fails 鎖住。 */
+/** 程式不讀 DEMO_SEED_ALLOW。非 test 時設了它也拒絕，而且不查庫。 */
 const FLAG_IGNORED: Case[] = [
   { title: "DEMO_SEED_ALLOW=1 且 NODE_ENV 未設、庫名 ci 時拒絕", demo: "1", db: "ci", mode: "refuse" },
   { title: "DEMO_SEED_ALLOW=1 且 NODE_ENV 未設、庫名 flow_store_testing_test 時拒絕", demo: "1", db: "flow_store_testing_test", mode: "refuse" },
@@ -186,7 +186,7 @@ describe("seedPhase2Fixtures 反向守門", () => {
   }
 
   for (const c of FLAG_IGNORED) {
-    it.fails(c.title, () => runCase(c));
+    it(c.title, () => runCase(c));
   }
 
   it("NODE_ENV=test 時已知測試庫名全部放行", async () => {

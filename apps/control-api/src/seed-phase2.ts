@@ -22,8 +22,7 @@ const SEED_REFUSED =
 const TEST_DATABASE_NAME = /^(?:ci|flow_store_[a-z][a-z0-9_]*)$/;
 
 function seedEnvAllowed(): boolean {
-  if (process.env.NODE_ENV === "production") return false;
-  return process.env.NODE_ENV === "test" || process.env.DEMO_SEED_ALLOW === "1";
+  return process.env.NODE_ENV === "test";
 }
 
 async function currentDatabaseName(q: Queryable): Promise<string> {
