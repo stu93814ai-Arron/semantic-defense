@@ -1,10 +1,10 @@
 /**
  * TEST/DEV ONLY — 含明碼測試帳密。生產入口不得呼叫。
- * 驗收測試經 app.ts 再匯出 seedPhase2Fixtures。
+ * 測試經 helpers/app.ts 轉出；示範啟動器直接匯入本檔。app.ts 不轉出。
  */
 import argon2 from "argon2";
 import type { FastifyInstance } from "fastify";
-import type { Db } from "./db.js";
+import type { Db, Queryable } from "./db.js";
 import type { Role } from "./auth.js";
 import { insertUser } from "./users.js";
 
@@ -12,11 +12,39 @@ type SeedApp = FastifyInstance & { db: Db };
 
 const SEED_LOCK = 872_364_202;
 
+const SEED_REFUSED =
+  "拒絕執行測試種子：未同時符合測試環境與測試資料庫命名，已中止且未改動任何資料";
+
+/**
+ * `ci`：scripts/with-pg.mjs 的 createDatabase（CI 與 docs/demo）。
+ * `flow_store_` + 小寫字母開頭：flow-store 測試 openSchemaDb 的庫名。
+ */
+const TEST_DATABASE_NAME = /^(?:ci|flow_store_[a-z][a-z0-9_]*)$/;
+
+function seedEnvAllowed(): boolean {
+  return process.env.NODE_ENV === "test";
+}
+
+async function currentDatabaseName(q: Queryable): Promise<string> {
+  const found = await q.query<{ name: string }>("SELECT current_database() AS name");
+  const name = found.rows[0]?.name;
+  return typeof name === "string" ? name : "";
+}
+
+async function assertSeedAllowed(q: Queryable): Promise<void> {
+  if (!seedEnvAllowed()) throw new Error(SEED_REFUSED);
+  let name = "";
+  try {
+    name = await currentDatabaseName(q);
+  } catch {
+    throw new Error(SEED_REFUSED);
+  }
+  if (!TEST_DATABASE_NAME.test(name)) throw new Error(SEED_REFUSED);
+}
+
 /** 清空第 2 階段表後寫入固定種子（含 login_failures，因測試 truncate 未列該表）。 */
 export async function seedPhase2Fixtures(app: SeedApp): Promise<void> {
-  if (process.env.NODE_ENV === "production") {
-    throw new Error("seedPhase2Fixtures 禁止在 production 呼叫（含明碼測試帳密）");
-  }
+  await assertSeedAllowed(app.db);
   const users: [string, string, Role, string?, string?][] = [
     ["operator1", "pass-operator-1", "operator"],
     ["owner1", "pass-owner-1", "app_owner", "app-alpha", "app-alpha-note"],
