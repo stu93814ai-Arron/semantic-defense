@@ -22,7 +22,9 @@ const putRaw = (ts: string) => h.exec(
   `INSERT INTO flow_events (flow_id, app_id, ts, src_ip, dst_ip, src_port, dst_port, protocol, bytes_in, bytes_out,
      packets, duration_ms, sensor_id, received_at) VALUES ('${randomUUID()}', 'app-1', '${ts}', '64.0.113.5', '64.0.113.9',
      1, 2, 'tcp', 0, 0, 1, 0, 's-1', 1)`);
-const tsMs = async () => (await db.query<{ ts: string; ts_ms: string | null }>("SELECT ts, ts_ms FROM flow_events ORDER BY ts")).rows
+// COLLATE "C"：en_US.UTF-8 會把 "-infinity" 排到數字後面（軟體大總召裁示，未經使用者確認）。
+const tsMs = async () => (await db.query<{ ts: string; ts_ms: string | null }>(
+  `SELECT ts, ts_ms FROM flow_events ORDER BY ts COLLATE "C"`)).rows
   .map((r) => [r.ts, r.ts_ms === null ? null : Number(r.ts_ms)]);
 
 const VALID = "2026-11-05T12:00:00Z";
