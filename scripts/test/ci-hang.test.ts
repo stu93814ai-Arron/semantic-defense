@@ -6,7 +6,7 @@
  */
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, expect, it } from "vitest";
@@ -16,11 +16,14 @@ import LiveReporter, { resetLiveReporter } from "../vitest-live-reporter.mjs";
 
 const ROOT = resolve(__dirname, "../..");
 const dirs: string[] = [];
-const kids: { kill: (s: NodeJS.Signals) => boolean }[] = [];
+const kids: { pid?: number; kill: (s: NodeJS.Signals) => boolean }[] = [];
 afterEach(() => {
   resetLiveReporter();
   setReportDir("reports");
-  for (const k of kids.splice(0)) k.kill("SIGKILL");
+  for (const k of kids.splice(0)) {
+    if (k.pid) { try { process.kill(-k.pid, "SIGKILL"); } catch { /* 程序群組已結束 */ } }
+    try { k.kill("SIGKILL"); } catch { /* 已結束 */ }
+  }
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
@@ -140,6 +143,78 @@ it("必跑腳本接上 live reporter，被殺時會印部分報告", () => {
   expect(tests).toContain("formatPartial(");
   expect(required).toContain("dump-partial.sh");
   expect(required).toContain("TERM");
+});
+
+it.fails("錯誤快照不蓋掉上一份有效的 pg-live", () => {
+  const dir = scratch();
+  writeSnapshot(dir, { activity: [{ query: "kept-row" }], locks: [] });
+  writeSnapshot(dir, { error: "the database system is shutting down", activity: [], locks: [] });
+  const live = text(join(dir, "pg-live.json"));
+  expect(live).toContain("kept-row");
+  expect(live).not.toContain("shutting down");
+});
+
+it.fails("TERM 時資料庫正在關機，印出的仍是上一份有效快照", async () => {
+  const dir = scratch();
+  writeSnapshot(dir, {
+    activity: [{ pid: 7, query: "INSERT INTO case_hits SELECT 'kept-row'" }],
+    locks: [{ pid: 7, objid: 872364203 }],
+  });
+  const mod = JSON.stringify(resolve(__dirname, "../live-report.mjs"));
+  const ready = join(dir, "ready");
+  const childPath = join(dir, "child.mjs");
+  writeFileSync(childPath, `import { writeFileSync } from "node:fs";
+import { installKillSnapshot } from ${mod};
+installKillSnapshot(${JSON.stringify(dir)}, async () => { throw new Error("the database system is shutting down"); });
+writeFileSync(${JSON.stringify(ready)}, "1");
+setInterval(() => {}, 1000);
+`);
+  const child = spawn(process.execPath, [childPath], { stdio: "ignore" });
+  kids.push(child);
+  expect(await waitUntil(() => existsSync(ready), 2000)).toBe(true);
+  child.kill("SIGTERM");
+  expect(await Promise.race([once(child, "exit").then(() => true), delay(3000).then(() => false)])).toBe(true);
+  const live = text(join(dir, "pg-live.json"));
+  expect(live).toContain("kept-row");
+  expect(live).not.toContain("shutting down");
+  const dumped = spawnSync("bash", [resolve(__dirname, "../dump-partial.sh"), dir], { encoding: "utf8" });
+  expect(dumped.stdout).toContain("kept-row");
+});
+
+const TERM_CHILD = `import { writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
+writeFileSync(process.env.READY_FILE, "1");
+process.on("SIGTERM", () => {
+  const pg = createRequire(process.env.REQUIRE_FROM)("pg");
+  const client = new pg.Client({ connectionString: process.env.DATABASE_URL, connectionTimeoutMillis: 1000 });
+  client.on("error", () => {});
+  client.connect().then(() => client.query("select 1")).then(() => client.end())
+    .then(() => { writeFileSync(process.env.SNAP_FILE, "ok"); process.exit(0); })
+    .catch((err) => { writeFileSync(process.env.SNAP_FILE, "fail " + err.message); process.exit(1); });
+});
+setInterval(() => {}, 1000);
+`;
+
+it.fails("SIGTERM 等快照連線成功後才關 postgres，並刪掉 sd-pg 目錄", async () => {
+  const base = scratch();
+  const snap = join(base, "snap");
+  const ready = join(base, "ready");
+  const script = join(base, "child.mjs");
+  writeFileSync(script, TERM_CHILD);
+  const env: NodeJS.ProcessEnv = { ...process.env, TMPDIR: base, SNAP_FILE: snap, READY_FILE: ready, REQUIRE_FROM: join(ROOT, "package.json") };
+  delete env.DATABASE_URL;
+  const child = spawn(process.execPath, [resolve(ROOT, "scripts/with-pg.mjs"), process.execPath, script], {
+    cwd: ROOT, env, detached: true, stdio: ["ignore", "pipe", "pipe"],
+  });
+  kids.push(child);
+  child.stdout?.on("data", () => {});
+  child.stderr?.on("data", () => {});
+  expect(await waitUntil(() => existsSync(ready), 20000)).toBe(true);
+  process.kill(-child.pid!, "SIGTERM");
+  expect(await Promise.race([once(child, "exit").then(() => true), delay(8000).then(() => false)])).toBe(true);
+  expect(text(snap)).toBe("ok");
+  const left = existsSync(base) ? readdirSync(base).filter((name) => name.startsWith("sd-pg-")) : ["missing"];
+  expect(left).toEqual([]);
 });
 
 it("json reporter 與 live reporter 可同時跑", async () => {
