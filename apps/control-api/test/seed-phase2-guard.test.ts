@@ -60,14 +60,19 @@ const CASES: Case[] = [
   { title: "DEMO_SEED_ALLOW 帶空白且 NODE_ENV 未設時拒絕", demo: "1 ", db: "ci", mode: "refuse" },
   { title: "DEMO_SEED_ALLOW 空字串且 NODE_ENV 未設時拒絕", demo: "", db: "ci", mode: "refuse" },
   { title: "DEMO_SEED_ALLOW=1 但資料庫名不符時拒絕", demo: "1", db: "postgres", mode: "refuse" },
-  { title: "production 且 DEMO_SEED_ALLOW=1 但庫名 contest 時拒絕", nodeEnv: "production", demo: "1", db: "contest", mode: "refuse" },
   { title: "查詢目前資料庫名稱失敗時拒絕且不外洩例外", nodeEnv: "test", db: "ci", mode: "refuse", queryThrows: true },
   { title: "NODE_ENV=test 且資料庫名 ci 時放行", nodeEnv: "test", db: "ci", mode: "allow" },
   { title: "NODE_ENV=test 且 DEMO_SEED_ALLOW=0、庫名 ci 時放行", nodeEnv: "test", demo: "0", db: "ci", mode: "allow" },
   { title: "DEMO_SEED_ALLOW=1 且 NODE_ENV 未設、庫名 ci 時放行", demo: "1", db: "ci", mode: "allow" },
-  { title: "DEMO_SEED_ALLOW=1 且 NODE_ENV=production、庫名 ci 時放行", nodeEnv: "production", demo: "1", db: "ci", mode: "allow" },
   { title: "NODE_ENV=test 且資料庫名 flow_store_read_test 時放行", nodeEnv: "test", db: "flow_store_read_test", mode: "allow" },
   { title: "DEMO_SEED_ALLOW=1 且庫名 flow_store_testing_test 時放行", demo: "1", db: "flow_store_testing_test", mode: "allow" },
+];
+
+/** production 硬拒尚未落地：這三筆現在會查庫或放行，用 it.fails 鎖住。 */
+const PRODUCTION_HARD_REFUSE: Case[] = [
+  { title: "production 且 DEMO_SEED_ALLOW=1 但庫名 contest 時拒絕", nodeEnv: "production", demo: "1", db: "contest", mode: "refuse" },
+  { title: "DEMO_SEED_ALLOW=1 且 NODE_ENV=production、庫名 ci 時拒絕", nodeEnv: "production", demo: "1", db: "ci", mode: "refuse" },
+  { title: "DEMO_SEED_ALLOW=1 且 NODE_ENV=production、庫名 flow_store_test 時拒絕", nodeEnv: "production", demo: "1", db: "flow_store_test", mode: "refuse" },
 ];
 
 const origNode = process.env.NODE_ENV;
@@ -120,6 +125,7 @@ function harness(trace: string[], databaseName: string, queryThrows: boolean): C
 }
 
 function envOpensGate(c: Case): boolean {
+  if (c.nodeEnv === "production") return false;
   return c.nodeEnv === "test" || c.demo === "1";
 }
 
@@ -165,6 +171,10 @@ async function runCase(c: Case): Promise<void> {
 describe("seedPhase2Fixtures 反向守門", () => {
   for (const c of CASES) {
     it(c.title, () => runCase(c));
+  }
+
+  for (const c of PRODUCTION_HARD_REFUSE) {
+    it.fails(c.title, () => runCase(c));
   }
 
   it("NODE_ENV=test 時已知測試庫名全部放行", async () => {
