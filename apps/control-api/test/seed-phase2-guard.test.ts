@@ -68,7 +68,7 @@ const CASES: Case[] = [
   { title: "DEMO_SEED_ALLOW=1 且庫名 flow_store_testing_test 時放行", demo: "1", db: "flow_store_testing_test", mode: "allow" },
 ];
 
-/** production 硬拒尚未落地：這三筆現在會查庫或放行，用 it.fails 鎖住。 */
+/** NODE_ENV=production 時一律拒絕，不因 DEMO_SEED_ALLOW=1 而查庫或放行。 */
 const PRODUCTION_HARD_REFUSE: Case[] = [
   { title: "production 且 DEMO_SEED_ALLOW=1 但庫名 contest 時拒絕", nodeEnv: "production", demo: "1", db: "contest", mode: "refuse" },
   { title: "DEMO_SEED_ALLOW=1 且 NODE_ENV=production、庫名 ci 時拒絕", nodeEnv: "production", demo: "1", db: "ci", mode: "refuse" },
@@ -174,7 +174,7 @@ describe("seedPhase2Fixtures 反向守門", () => {
   }
 
   for (const c of PRODUCTION_HARD_REFUSE) {
-    it.fails(c.title, () => runCase(c));
+    it(c.title, () => runCase(c));
   }
 
   it("NODE_ENV=test 時已知測試庫名全部放行", async () => {
