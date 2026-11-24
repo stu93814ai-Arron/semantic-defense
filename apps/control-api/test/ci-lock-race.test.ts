@@ -298,29 +298,40 @@ describe("advisory() 只回報本次測試庫的鎖", () => {
 
 describe("cancelForeignBackends 只取消本專案在本庫的遷移鎖", () => {
   it("不取消其他資料庫，也不取消本庫沒有 SCHEMA_LOCK 的 pg_sleep", async () => {
+    // 外庫連線持鎖時必須正在 pg_sleep。閒置時 pg_cancel_backend 不會讓下一句失敗，
+    // 拿掉 datname／pg_locks.database 條件的突變就殺不死（A 組領航員裁示，未經使用者確認）。
     const admin = await client();
     const sleeper = new pg.Client({ connectionString: requireDatabaseUrl() });
     await sleeper.connect();
     const sleepPid = (await sleeper.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0]!.pid;
-    const sleeping = sleeper.query("SELECT pg_sleep(20)");
+    const sleeping = sleeper.query("SELECT pg_sleep(30)");
     sleeping.catch(() => {});
     let foreign: pg.Client | undefined;
+    let foreignPid = 0;
     try {
       expect(await waitBackendActive(sleepPid)).toBe(true);
       await resetForeignDatabase(admin);
       await admin.query(`CREATE DATABASE ${FOREIGN_DB}`);
       foreign = new pg.Client({ connectionString: foreignDatabaseUrl() });
       await foreign.connect();
-      await foreign.query("SET statement_timeout = '5s'");
       await foreign.query("SELECT pg_advisory_lock($1)", [SCHEMA_LOCK]);
+      foreignPid = (await foreign.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0]!.pid;
+      const foreignSleep = foreign.query("SELECT pg_sleep(30)");
+      const foreignDone = foreignSleep.then(() => "slept" as const, (err: unknown) => err);
+      expect(await waitBackendActive(foreignPid)).toBe(true);
       await cancelForeignBackends();
-      await foreign.query("SELECT 1");
+      const raced = await Promise.race([
+        foreignDone,
+        new Promise((resolve) => setTimeout(() => resolve("still-sleeping"), 500)),
+      ]);
+      expect(raced).toBe("still-sleeping");
       const probe = await client();
       const state = await probe.query<{ state: string }>("SELECT state FROM pg_stat_activity WHERE pid = $1", [sleepPid]);
       expect(state.rows[0]?.state).toBe("active");
     } finally {
       const probe = await client();
       await probe.query("SELECT pg_cancel_backend($1)", [sleepPid]).catch(() => {});
+      if (foreignPid) await probe.query("SELECT pg_cancel_backend($1)", [foreignPid]).catch(() => {});
       await Promise.race([sleeper.end(), new Promise((r) => setTimeout(r, 2_000))]);
       if (foreign) {
         await foreign.query("SELECT pg_advisory_unlock($1)", [SCHEMA_LOCK]).catch(() => {});
