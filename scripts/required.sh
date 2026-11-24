@@ -7,6 +7,7 @@
 #   E2E 在必跑中超過 180 秒 → 本次紅燈，並記錄 181，下次自動移出。
 set -uo pipefail
 cd "$(dirname "$0")/.."; mkdir -p .ci
+trap 'bash scripts/dump-partial.sh; exit 143' TERM
 e2e=$(cat .ci/e2e-seconds 2>/dev/null || echo 0); req=$(cat .ci/required-seconds 2>/dev/null || echo 0)
 if [ "$e2e" -le 180 ] && [ $((req + e2e)) -le 600 ]; then place=required; else place=gate; fi
 echo "$place" > .ci/e2e-placement

@@ -1,7 +1,14 @@
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 
-/** 目前與 with-pg 相同：spawnSync 會停住事件迴圈。測試預期改成可排空 stderr 的寫法。 */
+/**
+ * 跑 with-pg 的子行程，並把事件迴圈讓出來。
+ * spawnSync 會停住 with-pg 的 libuv loop，Postgres stderr 沒人讀；
+ * 管道一滿，後端寫 ERROR/STATEMENT 就停在 write()，交易與 advisory lock 一直留到外層 timeout。
+ */
 export function runChild(cmd, args, env) {
-  const status = spawnSync(cmd, args, { stdio: "inherit", env }).status ?? 1;
-  return Promise.resolve(status);
+  return new Promise((resolve) => {
+    const child = spawn(cmd, args, { stdio: "inherit", env });
+    child.on("error", () => resolve(1));
+    child.on("exit", (code, signal) => resolve(signal ? 1 : code ?? 1));
+  });
 }
