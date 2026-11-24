@@ -76,7 +76,7 @@ A 組領航員裁示（未經使用者確認）：還原 `statement_timeout`：�
 
 ### SEED_LOCK 改為交易級鎖
 
-A 組領航員裁示（未經使用者確認）：`seedPhase2Fixtures` 改在 `db.tx` 內 `pg_advisory_xact_lock(SEED_LOCK)`，與 TRUNCATE／INSERT 同一筆交易；COMMIT／ROLLBACK 自動釋放，不必（也不可在他連線）手動 unlock。密碼 `argon2.hash` 在取鎖前算完，避免持鎖期間做 CPU 密集運算。這是**正向的行為變更**：整段 seed 現在是單一交易。`app.ts` 仍 re-export，`docs/demo/start-server.ts` 的 `doSeed` 呼叫點不變。
+A 組領航員裁示（未經使用者確認）：`seedPhase2Fixtures` 改在 `db.tx` 內 `pg_advisory_xact_lock(SEED_LOCK)`，與 TRUNCATE／INSERT 同一筆交易；COMMIT／ROLLBACK 自動釋放，不必（也不可在他連線）手動 unlock。密碼 `argon2.hash` 在取鎖前算完，避免持鎖期間做 CPU 密集運算。這是**正向的行為變更**：整段 seed 現在是單一交易。`apps/control-api/src/app.ts` 已不再 re-export `seedPhase2Fixtures`（見 `docs/decisions/2026-11-24-seed-fail-closed.md`）。種子在 `apps/control-api/test-support/seed-phase2.ts`。`docs/demo/start-server.ts` 從該路徑匯入，`doSeed` 呼叫點不變。
 
 ### 測試 hung 清理用 cancel、不用 terminate
 
@@ -108,7 +108,7 @@ A 組領航員裁示（未經使用者確認）：`ci-lock-race` 在 openDb 競�
 2. `backend_type = 'client backend'`，不是這條探測連線，也不在本測試已用 `client()` 登錄的 pid。
 3. `pg_locks` 有一筆屬於該 pid 的 advisory 鎖：`objid` 為本檔的 `SCHEMA_LOCK`（872364201）、`objsubid = 1`，且 `database` 等於 `current_database()` 的 oid。持有或等待都算。
 
-第 3 點是「本專案連線」的辨識。這把鎖只用在 control-api 的 `migrate`。sensor-ingest 與單純的 `pg_sleep` 沒有這把鎖，即使連在同一個 `sd_ci` 也不會被取消。其他資料庫上的同號 advisory 鎖，`datname` 與 `pg_locks.database` 都對不上。
+第 3 點是「本專案連線」的辨識。這把鎖只用在 control-api 的 `migrate`。sensor-ingest 與單純的 `pg_sleep` 沒有這把鎖，即使連在同一個 `sd_ci` 也不會被取消。其他資料庫上的同號 advisory 鎖，`datname` 與 `pg_locks.database` 都對不上。這兩個條件互為備援：只拿掉 `datname`、或只拿掉 `pg_locks.database` 其中一個，另一個仍排除外庫，外庫 `pg_sleep` 測試仍綠。兩個一起拿掉，該後端會被取消（57014），測試轉紅。見文末 H2b。
 
 測試建立 `sd_h2a_foreign`，在那邊取同一把 `SCHEMA_LOCK`，確認 `advisory()` 只含本庫持有者。另測：取消不會打到該庫，也不會取消本庫上沒有這把鎖的 `pg_sleep`；未登錄、正在等本庫這把鎖的後端仍會被 `pg_cancel_backend`。
 
@@ -123,3 +123,37 @@ A 組領航員裁示（未經使用者確認）：`ci-lock-race` 在 openDb 競�
 ### unlock 不得蓋掉原錯
 
 `migrate` 先記下遷移錯誤，再釋放 `SCHEMA_LOCK`。unlock 失敗時，若原錯是 `Error` 且還沒有 `cause`，把 unlock 錯誤放在 `cause`，然後仍拋原來的那個物件。啟動訊息不把驅動例外拼進去。沒有原錯時，unlock 錯誤本身讓啟動失敗。`openDb` 的失敗路徑仍呼叫 `release(true)`。測試同時注入結構語句錯誤與 unlock 錯誤：訊息維持結構語句的原文，`cause` 是 unlock 錯誤，且 `release` 收到 `true`。
+
+## 強化切片 H2b
+
+分支 `team-a-harden-h2b`，rebase 到 `main` 的 `96288c9`（`bf03b08` 加上一筆 `.ci` 閘門紀錄，沒有程式或測試）。不改契約、不加依賴、不加功能。用語與排序是軟體大總召裁示（未經使用者確認）。第 7 項的布林旗標與本節是 A 組領航員裁示（未經使用者確認）。
+
+### 409 本文
+
+三向交握尚未上線時，開啟自動上榜回 409，本文是「三向交握佐證尚未上線，暫不能開啟自動上榜。」（句號在內）。`docs/decisions/2026-11-17-auto-list-setting.md` 同一句。
+
+### 遷移列排序
+
+`packages/flow-store/test/migration.test.ts` 讀 `flow_events` 時用 `ORDER BY ts COLLATE "C"`。`en_US.UTF-8` 會把 `-infinity` 排到數字後面；`C` 把 `-infinity` 放在最前。索引名稱的 `ORDER BY indexname` 不改。
+
+### 缺列與稽核
+
+`auto_list_settings` 缺列時 GET 視為關閉（`enabled: false`）。PUT 成功路徑的開關更新與 `audit_events` 寫入同一筆交易（`pg_current_xact_id` 相同），稽核不走 pool。註解寫明 PUT 是唯一核准寫入路徑；tick 仍 AND `HANDSHAKE_EVIDENCE_READY`，未就緒時不自動上榜。
+
+### src 不得 import test-support
+
+`scripts/boundaries.mjs` 檢查 `apps/*/src`。import 的 specifier 含 `test-support` 路徑段即失敗。`test/` 與 `docs/demo` 不在這條。`seed-build-artifact` 的正式編譯選項含 `noEmitOnError: true`。
+
+### 外庫持鎖必須正在 pg_sleep
+
+`cancelForeignBackends` 的外庫案例讓該連線在持有 `SCHEMA_LOCK` 的同一條 session 上 `pg_sleep(30)`，不設 5 秒 `statement_timeout`。閒置連線被 cancel 後，下一句不會失敗，測不到有沒有取消。
+
+`a.datname = current_database()` 與 `l.database` 等於本庫 oid 互為備援。只拿掉 `datname`，或只拿掉 `pg_locks.database` 其中一個，另一個仍把外庫排除，測試仍綠。兩個一起拿掉，外庫正在 `pg_sleep` 且持有同一把鎖的後端會被 `pg_cancel_backend`，下一句得到 57014，測試轉紅。
+
+### throw undefined
+
+`acquireSchemaLock` 用 `held`。取鎖那句若拋出 `undefined`，`errorCode` 不讀 `.code`（避免先變成讀取 `code` 的 TypeError），`if (!held)` 拋 `MIGRATE_ADVISORY_LOCK_FAILED`，不繼續遷移。
+
+`migrate` 用布林 `failed`。`catch` 到的值即使是 `undefined` 也把旗標設上。已取到鎖才呼叫 `releaseSchemaLock`。回傳值不是 `undefined` 時再把旗標設上，所以只有 unlock 失敗、遷移本身沒丟錯時，啟動仍會被拒絕。`catch` 已經設上的旗標不會因為 unlock 成功回傳 `undefined` 被清掉。最後是 `if (failed) throw failure`。
+
+因此第一句 `SHOW statement_timeout`（在取鎖的 try 之外）以 `undefined` reject 時，`openDb` 失敗，錯誤仍是 `undefined`。改回 `if (failure !== undefined) throw failure` 時該測試轉紅：`openDb` 成功（expected false、received true）。
