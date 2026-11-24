@@ -64,7 +64,8 @@ async function putAutoListSetting(db: Db, actor: string, after: AutoListSetting,
 
 /**
  * 三向交握佐證（(d) tcp_hs）是否已上線。軟體大總召裁示（未經使用者確認，依 11/9 使用者決定）：
- * 未就緒前 PUT enabled:true 一律 409 並寫 update_blocked；關閉一律允許。此 PUT 是開關值寫進 DB 的唯一途徑，tick 不另檢查。
+ * 未就緒前 PUT enabled:true 一律 409 並寫 update_blocked；關閉一律允許。此 PUT 是開關值寫進 DB 的唯一核准管道；
+ * tick 仍會再 AND 上本常數，未就緒時不自動上榜。
  */
 export const HANDSHAKE_EVIDENCE_READY = false;
 

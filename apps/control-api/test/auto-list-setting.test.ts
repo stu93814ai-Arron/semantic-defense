@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ADMIN_API_PATHS } from "@semantic-defense/contracts";
+import type { Queryable } from "../src/db.js";
 import { buildApp, seedPhase2Fixtures, type BuildAppOptions, type ControlApi } from "./helpers/app.js";
 import { cookieHeader, login } from "./helpers/session.js";
 import { requireDatabaseUrl, truncatePhase2Tables } from "./helpers/pg.js";
@@ -300,5 +301,50 @@ describe("自動上榜測試覆寫只限 NODE_ENV=test（A 組領航員裁示，
     expect(await boot({})).toBe("started");
     vi.stubEnv("NODE_ENV", "test");
     expect(await boot({ autoListEnabled: true, ...READY })).toBe("started");
+  });
+});
+
+describe("缺列 fail-closed、稽核與開關同一交易", () => {
+  // A 組領航員裁示（未經使用者確認）：缺列不得視為開啟；稽核必須走 tx 內的 q，不得走 pool。
+  // 現行程式已如此，故用 it()。臨時突變不提交（見該次 commit 說明）。
+  it("缺列時 GET 得到 {enabled:false}，不得當成開啟", async () => {
+    await start();
+    const cookie = await session("admin1", "pass-admin-1");
+    await api!.db.query("DELETE FROM auto_list_settings");
+    const res = await getSetting(cookie);
+    expect([res.statusCode, res.json()]).toEqual([200, { enabled: false }]);
+  });
+
+  it("開啟時稽核 INSERT 與 UPDATE 同一筆交易，不走 pool", async () => {
+    await start(READY);
+    const cookie = await session("admin1", "pass-admin-1");
+    const db = api!.db;
+    const poolSql: string[] = [];
+    const origQuery = db.query.bind(db);
+    db.query = (async <T>(sql: string, params?: unknown[]) => {
+      poolSql.push(sql);
+      return origQuery<T>(sql, params);
+    }) as typeof db.query;
+    let updateXact: string | undefined;
+    let auditXact: string | undefined;
+    const origTx = db.tx.bind(db);
+    db.tx = (<T>(fn: (q: Queryable) => Promise<T>) => origTx(async (q) => {
+      const origQ = q.query.bind(q);
+      q.query = (async <R>(sql: string, params?: unknown[]) => {
+        if (/UPDATE\s+auto_list_settings/i.test(sql)) {
+          updateXact = (await origQ<{ id: string }>("SELECT pg_current_xact_id()::text AS id")).rows[0]!.id;
+        }
+        if (/INSERT\s+INTO\s+audit_events/i.test(sql)) {
+          auditXact = (await origQ<{ id: string }>("SELECT pg_current_xact_id()::text AS id")).rows[0]!.id;
+        }
+        return origQ<R>(sql, params);
+      }) as typeof q.query;
+      return fn(q);
+    })) as typeof db.tx;
+    const res = await putSetting(cookie, { enabled: true });
+    expect(res.statusCode).toBe(200);
+    expect(updateXact).toEqual(expect.any(String));
+    expect(auditXact).toBe(updateXact);
+    expect(poolSql.some((sql) => /INSERT\s+INTO\s+audit_events/i.test(sql))).toBe(false);
   });
 });
