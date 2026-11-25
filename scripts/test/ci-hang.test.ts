@@ -563,6 +563,7 @@ function passedRun(unhandled: { ok: boolean; count: number } = { ok: true, count
       testResults: [{ name: "apps/a.test.ts", status: "passed", assertionResults: [{ fullName: "steady", status: "passed" }] }],
     },
     unhandled,
+    suite: { ok: true, count: 0 },
     startedAt: Date.now() - 5000,
   };
 }
@@ -811,7 +812,7 @@ it("真 FLAKY 仍寫出覆蓋率摘要且只把該筆列入 flaky", async () => 
     const report = JSON.parse(text(file));
     const m = new Map<string, string>();
     for (const suite of report.testResults) for (const row of suite.assertionResults) m.set(mod.failureIdentity(suite.name, row.fullName), row.status);
-    return { m, exitFail, ok: report.success, numFailedTests: report.numFailedTests, report, unhandled: { ok: true, count: 0 }, startedAt: started };
+    return { m, exitFail, ok: report.success, numFailedTests: report.numFailedTests, report, unhandled: { ok: true, count: 0 }, suite: { ok: true, count: 0 }, startedAt: started };
   };
   const outcome = mod.judge(round(first.json, true), round(second.json, false), join(root, "cov", "coverage-summary.json"));
   const caseId = mod.failureIdentity(join(root, "flaky.test.ts"), "case");
@@ -836,7 +837,7 @@ it("第 1 輪 afterAll 拋錯加上一筆 FLAKY 時退出碼不是 0", async () 
     const body = JSON.parse(text(file));
     const m = new Map<string, string>();
     for (const suite of body.testResults) for (const row of suite.assertionResults ?? []) m.set(mod.failureIdentity(suite.name, row.fullName), row.status);
-    return { m, exitFail, ok: body.success, numFailedTests: body.numFailedTests, report: body, unhandled: { ok: true, count: 0 }, startedAt: started };
+    return { m, exitFail, ok: body.success, numFailedTests: body.numFailedTests, report: body, unhandled: { ok: true, count: 0 }, suite: { ok: true, count: 0 }, startedAt: started };
   };
   const outcome = mod.judge(asRun(first.json, true), asRun(second.json, false), summary);
   expect(outcome.flaky).toContain(caseId);
@@ -866,8 +867,8 @@ function suiteCount(file: string): number {
   return JSON.parse(text(file)).count as number;
 }
 
-// 實作後 it.fails 改回 it()。JSON 的 message 是空的，同檔又有失敗 assertion，目前 rc=0。
-it.fails("同檔空 message 的 afterAll 寫出 suite 錯誤筆數，judge 不放行", async () => {
+// 實作後 it.fails 已改回 it()。JSON message 為空且同檔有失敗 assertion 時，靠 suite 筆數檔擋下。
+it("同檔空 message 的 afterAll 寫出 suite 錯誤筆數，judge 不放行", async () => {
   const mod = await import("../tests.mjs");
   const hooks = [
     "afterAll(() => { throw new Error(); });",
@@ -900,27 +901,28 @@ it.fails("同檔空 message 的 afterAll 寫出 suite 錯誤筆數，judge 不�
   }
 });
 
-it.fails("describe 裡空 message 的 afterAll 也寫進 suite 錯誤筆數", () => {
+it("describe 裡空 message 的 afterAll 也寫進 suite 錯誤筆數", () => {
   const root = writeSuiteProbe("import { afterAll, describe, expect, it } from \"vitest\";\ndescribe(\"g\", () => {\n  afterAll(() => { throw new Error(); });\n  it(\"flaky\", () => { expect(1).toBe(2); });\n});\n");
   const probed = runSuiteProbe(root);
   expect(probed.r.status, probed.r.stdout + probed.r.stderr).not.toBe(0);
   expect(suiteCount(probed.suiteFile)).toBeGreaterThan(0);
 });
 
-it.fails("只有 assertion 失敗時 suite 錯誤筆數是 0", () => {
+it("只有 assertion 失敗時 suite 錯誤筆數是 0", () => {
   const root = writeSuiteProbe("import { expect, it } from \"vitest\";\nit(\"flaky\", () => { expect(1).toBe(2); });\nit(\"ok\", () => { expect(1).toBe(1); });\n");
   const probed = runSuiteProbe(root);
   expect(probed.r.status, probed.r.stdout + probed.r.stderr).not.toBe(0);
   expect(suiteCount(probed.suiteFile)).toBe(0);
 });
 
-it.fails("suite 錯誤檔缺、壞或大於 0 就擋，筆數 0 的 FLAKY 仍放行", async () => {
+it("suite 錯誤檔缺、壞或大於 0 就擋，筆數 0 的 FLAKY 仍放行", async () => {
   const mod = await import("../tests.mjs");
   const id = "apps/a.test.ts > case";
-  const failedReport = { success: false, numFailedTests: 1, testResults: [{ name: "apps/a.test.ts", status: "failed", message: "", assertionResults: [{ fullName: "case", status: "failed" }] }] };
-  const passedReport = { success: true, numFailedTests: 0, testResults: [{ name: "apps/a.test.ts", status: "passed", assertionResults: [{ fullName: "case", status: "passed" }] }] };
+  const steady = "apps/a.test.ts > steady";
+  const failedReport = { success: false, numFailedTests: 1, testResults: [{ name: "apps/a.test.ts", status: "failed", message: "", assertionResults: [{ fullName: "case", status: "failed" }, { fullName: "steady", status: "passed" }] }] };
+  const passedReport = { success: true, numFailedTests: 0, testResults: [{ name: "apps/a.test.ts", status: "passed", assertionResults: [{ fullName: "case", status: "passed" }, { fullName: "steady", status: "passed" }] }] };
   const round = (status: string, report: object, suite: { ok: boolean; count: number } | undefined) => ({
-    m: new Map([[id, status]]), exitFail: status === "failed", ok: status !== "failed", numFailedTests: status === "failed" ? 1 : 0,
+    m: new Map([[id, status], [steady, "passed"]]), exitFail: status === "failed", ok: status !== "failed", numFailedTests: status === "failed" ? 1 : 0,
     report, unhandled: { ok: true, count: 0 }, suite, startedAt: Date.now() - 5000,
   });
   const summary = freshSummary();
@@ -928,10 +930,45 @@ it.fails("suite 錯誤檔缺、壞或大於 0 就擋，筆數 0 的 FLAKY 仍放
   expect(mod.judge(round("failed", failedReport, undefined), second, summary).stop).toBe(true);
   expect(mod.judge(round("failed", failedReport, { ok: false, count: 0 }), second, summary).stop).toBe(true);
   expect(mod.judge(round("failed", failedReport, { ok: true, count: 1 }), second, summary).stop).toBe(true);
-  expect(mod.judge(round("failed", failedReport, { ok: true, count: 0 }), round("passed", passedReport, { ok: true, count: 1 }), summary).stop).toBe(true);
+  const round2Suite = mod.judge(round("failed", failedReport, { ok: true, count: 0 }), round("passed", passedReport, { ok: true, count: 1 }), summary);
+  expect(round2Suite.stop).toBe(true);
+  expect(round2Suite.notes.join("\n")).toContain("第 2 輪有 suite 或 hook 錯誤");
   const clear = mod.judge(round("failed", failedReport, { ok: true, count: 0 }), second, summary);
   expect(clear.stop).toBe(false);
   expect([...clear.flaky]).toContain(id);
+});
+
+it("run 讀 suite 筆數檔，空 message 的 FLAKY 仍停下", async () => {
+  const mod = await import("../tests.mjs");
+  mkdirSync(join(ROOT, "reports"), { recursive: true });
+  const id = "apps/a.test.ts > case";
+  const report = { success: false, numFailedTests: 1, testResults: [{ name: "apps/a.test.ts", status: "failed", message: "", assertionResults: [{ fullName: "case", status: "failed" }, { fullName: "steady", status: "passed" }] }] };
+  const passed = { success: true, numFailedTests: 0, testResults: [{ name: "apps/a.test.ts", status: "passed", assertionResults: [{ fullName: "case", status: "passed" }, { fullName: "steady", status: "passed" }] }] };
+  const writeRound = (body: object, count: number, fail: boolean) => (_file: string, _args: string[], options: { env?: NodeJS.ProcessEnv }) => {
+    const env = options.env ?? {};
+    const suite = env.SUITE_REPORT;
+    const unhandled = env.UNHANDLED_REPORT;
+    if (!suite || !unhandled) throw new Error("suite report env missing");
+    writeFileSync(suite, `{"count":${count}}\n`);
+    writeFileSync(unhandled, "{\"count\":0}\n");
+    const out = [..._args].reverse().find((arg) => arg.startsWith("--outputFile="));
+    if (!out) throw new Error("outputFile missing");
+    writeFileSync(out.slice("--outputFile=".length), JSON.stringify(body));
+    if (fail) throw new Error("vitest exit 1");
+  };
+  try {
+    const failed = mod.run(9, false, writeRound(report, 1, true));
+    const okRound = mod.run(8, false, writeRound(passed, 0, false));
+    expect(failed.suite).toEqual({ ok: true, count: 1 });
+    expect(okRound.suite).toEqual({ ok: true, count: 0 });
+    const outcome = mod.judge(failed, okRound, freshSummary());
+    expect(outcome.flaky).toContain(id);
+    expect(outcome.stop).toBe(true);
+  } finally {
+    for (const name of ["vitest-run9.json", "vitest-run8.json", "suite-run9.json", "suite-run8.json", "unhandled-run9.json", "unhandled-run8.json"]) {
+      rmSync(join(ROOT, "reports", name), { force: true });
+    }
+  }
 });
 
 it("開跑前刪掉舊的 vitest 報告", async () => {
