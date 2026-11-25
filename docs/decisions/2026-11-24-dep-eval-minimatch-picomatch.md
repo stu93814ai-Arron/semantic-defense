@@ -104,11 +104,11 @@ H3 不續期，也沒有改例外程式。後續裁示見下方 H3b，這項待�
 
 ## H3b：例外已移除
 
-軟體大總召裁示（未經使用者確認）：同意移除，不續期、也不放著讓它變紅。
+**2026-11-25 已移除（台北時間）。** 軟體大總召裁示（未經使用者確認）：同意移除，不續期、也不放著讓它變紅。
 
 移除理由與 GitHub API 一致：summary 是 `Withdrawn Advisory: picomatch vulnerable to ReDoS through single-branch repeated extglobs`，`withdrawn_at` 是 `2026-11-18T15:38:56Z`，`first_patched_version` 是 `null`。
 
-`scripts/audit-allow.mjs` 的正式例外清單改為空陣列。清單是空的就不會因為到期而失敗。沒有 finding 的掃描在 2026-12-01（Asia/Taipei，含當天）之後可以通過。任何 high／critical，包括舊的 `GHSA-fc5q-39xc-vjpf`，在任何日期都擋下。新例外必須同時有到期日和理由；缺少任一項，或已到期，就失敗。例外的公告 id 若已不在這次掃描，印出含該 id 的警告並提示「應移除此例外」，不讓 ci 失敗。這些規則用測試注入的假例外證明，那筆不留在正式清單。沒有把 picomatch 升版，因為沒有修補版。
+`scripts/audit-allow.mjs` 的正式例外清單改為空陣列。清單是空的就不會因為到期而失敗。沒有 finding 的掃描在 2026-12-01（Asia/Taipei，含當天）之後可以通過。任何 high／critical，包括舊的 `GHSA-fc5q-39xc-vjpf`，在任何日期都擋下。新例外必須同時有到期日和理由；缺少任一項，或已到期，就失敗。到期日必須是真實的 `YYYY-MM-DD`，以 Asia/Taipei 的今天為準，最長 90 天（含第 90 天；`9999-12-31` 拒絕）。比對必須同時對上公告 id、套件、vulnerable 範圍、finding 版本與仍無修補版。不從環境變數或命令列注入例外。例外的公告 id 若已不在這次掃描，印出含該 id 的警告並提示「應移除此例外」，不讓 ci 失敗。這些規則用測試注入的假例外證明，那筆不留在正式清單。沒有把 picomatch 升版，因為沒有修補版。
 
 ## 依賴提交
 
