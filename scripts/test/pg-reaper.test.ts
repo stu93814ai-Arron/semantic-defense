@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect, it } from "vitest";
+import { postmasterPid } from "../pg-reaper.mjs";
 
 const REAPER = resolve(__dirname, "../pg-reaper.mjs");
 const deadParent = String(Number(readFileSync("/proc/sys/kernel/pid_max", "utf8")) + 1000);
@@ -59,6 +60,13 @@ function writePid(dir: string, text: string): void {
   writeFileSync(join(dir, "data", "postmaster.pid"), text);
 }
 
+it("postmasterPid 拒絕 0、1、負數、非數字、小數、空白，接受 4242", () => {
+  for (const text of ["0", "1", "-5", "abc", "1.5", "", " 2"]) {
+    expect(postmasterPid(text), JSON.stringify(text)).toBeNull();
+  }
+  expect(postmasterPid("4242")).toBe(4242);
+});
+
 // 實作後 it.fails 已改回 it()。pid 檔未驗證前會對 -1 或別人的 pid 送 SIGKILL。
 it("壞的 postmaster.pid 與不相干程序不會被守望殺掉", () => {
   const base = mkdtempSync(join(tmpdir(), "sd-reaper-"));
@@ -99,10 +107,10 @@ import { join } from "node:path";
 import { reapDir } from ${JSON.stringify(url)};
 const base = process.argv[2];
 const kills = [];
-function once(name, pgid, argv0, dataDir) {
+function once(name, pgid, argv0, dataDir, pidText) {
   const dir = join(base, name);
   mkdirSync(join(dir, "data"), { recursive: true });
-  writeFileSync(join(dir, "data", "postmaster.pid"), "4242\\n");
+  writeFileSync(join(dir, "data", "postmaster.pid"), String(pidText || "4242") + "\\n");
   const seen = [];
   reapDir(dir, {
     kill: (pid, sig) => seen.push([pid, String(sig)]),
@@ -116,6 +124,7 @@ once("leader", 4242, "postgres", data("leader"));
 once("member", 50, "/usr/lib/postgresql/bin/postgres", data("member"));
 once("other", 4242, "sleep", data("other"));
 once("elsewhere", 4242, "postgres", "/tmp/not-this-cluster");
+once("init", 1, "postgres", data("init"), "1");
 process.stdout.write(JSON.stringify(kills));
 `);
   try {
@@ -126,6 +135,7 @@ process.stdout.write(JSON.stringify(kills));
     expect(ran.stdout).toBe(JSON.stringify([
       [[-4242, "SIGKILL"]],
       [[4242, "SIGKILL"]],
+      [],
       [],
       [],
     ]));
