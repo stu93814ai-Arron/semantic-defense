@@ -198,6 +198,15 @@ describe("evaluateAudit：例外比對綁定 advisory、套件、範圍與修補
     }
     expect(EXCEPTIONS).toEqual([]);
   });
+  it("findings 是空陣列時，相符的例外也不放行", () => {
+    const body = fakeScan();
+    const current = body.advisories["1"];
+    if (!current) throw new Error("fixture");
+    body.advisories["1"] = { ...current, findings: [] };
+    const r = auditWith(body, OK_DAY, [FAKE]);
+    expect(r.ok).toBe(false);
+    expect(r.allowed).toHaveLength(0);
+  });
 });
 
 // m9：拿掉 YYYY-MM-DD 錨定後，未補零的 2026-12-1 會被當成真實日期而放行，本測試轉紅。
