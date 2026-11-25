@@ -611,40 +611,121 @@ it("judge 會讀傳入的覆蓋率摘要", () => {
   expect(src).toContain("loadRoundCoverage(a, coveragePath)");
 });
 
-it("judge 用第 2 輪報告逐筆對上 FLAKY", () => {
-  const src = readFileSync(resolve(__dirname, "../tests.mjs"), "utf8");
-  expect(src).toContain("round2ReportFails(b.exitFail, b.report, a.m, flaky)");
+function settleIo(coveragePath?: string) {
+  const logs: string[] = [];
+  const errors: string[] = [];
+  const files = new Map<string, string>();
+  return {
+    logs,
+    errors,
+    files,
+    reportDir: "reports",
+    coveragePath,
+    error: (msg: string) => { errors.push(msg); },
+    log: (msg: string) => { logs.push(msg); },
+    writeFile: (path: string, body: string) => { files.set(path, body); },
+  };
+}
+
+it("報告缺欄時，逐筆對不上 FLAKY 就停下", async () => {
+  const mod = await import("../tests.mjs");
+  const b = passedRun();
+  b.report = { success: true, numFailedTests: 0 };
+  const out = mod.judge(passedRun(), b, freshSummary());
+  expect(out.stop).toBe(true);
+  expect(out.notes.join("\n")).toContain("第 2 輪退出碼非 0 或報告不是成功");
 });
 
-it("judge 用 numFailedTests 對可解釋的筆數", () => {
-  const src = readFileSync(resolve(__dirname, "../tests.mjs"), "utf8");
-  expect(src).toContain("round2ExitContradicts(b.exitFail, b.ok, b.numFailedTests, explained)");
+it("同名失敗被合併時，筆數對不上就停下", async () => {
+  const mod = await import("../tests.mjs");
+  const id = "apps/a.test.ts > case";
+  const a = passedRun();
+  a.m = new Map([["apps/a.test.ts > steady", "passed"], [id, "passed"]]);
+  const b = passedRun();
+  b.m = new Map([["apps/a.test.ts > steady", "passed"], [id, "failed"]]);
+  b.ok = false;
+  b.exitFail = true;
+  b.numFailedTests = 2;
+  b.report = {
+    success: false,
+    numFailedTests: 2,
+    testResults: [{
+      name: "apps/a.test.ts",
+      status: "failed",
+      assertionResults: [
+        { fullName: "steady", status: "passed" },
+        { fullName: "case", status: "failed" },
+        { fullName: "case", status: "failed" },
+      ],
+    }],
+  };
+  const out = mod.judge(a, b, freshSummary());
+  expect(out.flaky.has(id)).toBe(true);
+  expect(out.failed).toEqual([]);
+  expect(out.stop).toBe(true);
 });
 
-it("第 2 輪說謊是報告或筆數任一成立", () => {
-  const src = readFileSync(resolve(__dirname, "../tests.mjs"), "utf8");
-  expect(src).toContain("const round2Lie = byReport || byCount");
+it("第 1 輪測試都過但退出碼非 0 時停下", async () => {
+  const mod = await import("../tests.mjs");
+  const a = passedRun();
+  a.exitFail = true;
+  a.ok = false;
+  const out = mod.judge(a, passedRun(), freshSummary());
+  expect(out.failed).toEqual([]);
+  expect(out.stop).toBe(true);
+  expect(out.notes.join("\n")).toContain("第 1 輪退出碼非 0");
 });
 
-it("第 1 輪無法解釋的非 0 退出碼送進 judge", () => {
-  const src = readFileSync(resolve(__dirname, "../tests.mjs"), "utf8");
-  expect(src).toContain("unexplainedExit(a, failed, summaryFail)");
+it("報告缺了就退出 1，而且不寫 flaky.json", async () => {
+  const mod = await import("../tests.mjs");
+  const io = settleIo();
+  const a = passedRun();
+  a.report = null;
+  expect(mod.settleMain(a, passedRun(), io)).toBe(1);
+  expect(io.files.size).toBe(0);
+  expect([...io.errors, ...io.logs].join("\n")).toContain("第 2 輪報告不存在");
 });
 
-it("suite 錯誤會送進 gateStops", () => {
-  const src = readFileSync(resolve(__dirname, "../tests.mjs"), "utf8");
-  expect(src).toContain("gateStops({ failedCount: failed.length, coverageFail: summaryFail || exitFail, unhandled, suiteFail, total, round2Lie })");
+it("要停下時退出碼是 1", async () => {
+  const mod = await import("../tests.mjs");
+  const io = settleIo(freshSummary());
+  const a = passedRun();
+  a.exitFail = true;
+  a.ok = false;
+  expect(mod.settleMain(a, passedRun(), io)).toBe(1);
 });
 
-it("主程式以 judge 的 stop 決定退出碼", () => {
-  const src = readFileSync(resolve(__dirname, "../tests.mjs"), "utf8");
-  expect(src).toContain("process.exit(stop ? 1 : 0)");
-  expect(src).toContain("if (!a.report || !b.report)");
-});
-
-it("主程式把 flaky 排序後寫進 flaky.json", () => {
-  const src = readFileSync(resolve(__dirname, "../tests.mjs"), "utf8");
-  expect(src).toContain("JSON.stringify([...flaky].sort(), null, 2)");
+it("FLAKY 依名稱排序寫進 .ci/flaky.json，可解釋時退出 0", async () => {
+  const mod = await import("../tests.mjs");
+  const aye = "apps/a.test.ts > aye";
+  const zed = "apps/z.test.ts > zed";
+  const steady = "apps/a.test.ts > steady";
+  const a = passedRun();
+  a.m = new Map([[steady, "passed"], [zed, "passed"], [aye, "passed"]]);
+  const b = passedRun();
+  b.m = new Map([[steady, "passed"], [zed, "failed"], [aye, "failed"]]);
+  b.ok = false;
+  b.exitFail = true;
+  b.numFailedTests = 2;
+  b.report = {
+    success: false,
+    numFailedTests: 2,
+    testResults: [
+      {
+        name: "apps/a.test.ts",
+        status: "failed",
+        assertionResults: [
+          { fullName: "steady", status: "passed" },
+          { fullName: "aye", status: "failed" },
+        ],
+      },
+      { name: "apps/z.test.ts", status: "failed", assertionResults: [{ fullName: "zed", status: "failed" }] },
+    ],
+  };
+  const io = settleIo(freshSummary());
+  expect(mod.settleMain(a, b, io)).toBe(0);
+  expect(io.files.get(".ci/flaky.json")).toBe(`${JSON.stringify([aye, zed], null, 2)}\n`);
+  expect(io.logs.join("\n")).toContain(`FLAKY ${2}`);
 });
 
 it("覆蓋率摘要缺了或壞了就失敗", async () => {

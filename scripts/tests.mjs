@@ -191,10 +191,6 @@ function finish(a, b) {
   return { flaky, failed, total };
 }
 
-function logNames(prefix, names) {
-  for (const name of names) console.log(`${prefix}${name}`);
-}
-
 function pctMeets(bucket, floor) {
   return Boolean(bucket) && typeof bucket.pct === "number" && Number.isFinite(bucket.pct) && bucket.pct >= floor;
 }
@@ -288,21 +284,31 @@ export function judge(a, b, coveragePath) {
   return { flaky, failed, total, notes, stop };
 }
 
+/** 報告缺就回 1。否則依 judge.stop 回 0 或 1，並把 FLAKY 排序寫進 .ci/flaky.json。 */
+export function settleMain(a, b, io) {
+  if (!a.report || !b.report) {
+    io.error(formatPartial(io.reportDir));
+    io.log("❌ 第 2 輪報告不存在、解析失敗，或是開跑前的舊檔");
+    return 1;
+  }
+  const outcome = judge(a, b, io.coveragePath);
+  io.writeFile(".ci/flaky.json", JSON.stringify([...outcome.flaky].sort(), null, 2) + "\n");
+  for (const name of outcome.flaky) io.log(`⚠️  FLAKY（已移出必跑清單，須修好再放回）：${name}`);
+  for (const name of outcome.failed) io.log(`❌ 必跑測試失敗：${name}`);
+  io.log(`必跑測試：${outcome.total} 筆，失敗 ${outcome.failed.length}，FLAKY ${outcome.flaky.size}`);
+  for (const line of outcome.notes) io.log(line);
+  return outcome.stop ? 1 : 0;
+}
+
 function main() {
   mkdirSync("reports", { recursive: true }); mkdirSync(".ci", { recursive: true });
-  const a = run(1, true), b = run(2, false);
-  if (!a.report || !b.report) {
-    console.error(formatPartial("reports"));
-    console.log("❌ 第 2 輪報告不存在、解析失敗，或是開跑前的舊檔");
-    process.exit(1);
-  }
-  const { flaky, failed, total, notes, stop } = judge(a, b);
-  writeFileSync(".ci/flaky.json", JSON.stringify([...flaky].sort(), null, 2) + "\n");
-  logNames("⚠️  FLAKY（已移出必跑清單，須修好再放回）：", flaky);
-  logNames("❌ 必跑測試失敗：", failed);
-  console.log(`必跑測試：${total} 筆，失敗 ${failed.length}，FLAKY ${flaky.size}`);
-  for (const line of notes) console.log(line);
-  process.exit(stop ? 1 : 0);
+  const code = settleMain(run(1, true), run(2, false), {
+    reportDir: "reports",
+    error: (msg) => console.error(msg),
+    log: (msg) => console.log(msg),
+    writeFile: writeFileSync,
+  });
+  process.exit(code);
 }
 
 const entry = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href : "";
