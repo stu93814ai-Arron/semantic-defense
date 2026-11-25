@@ -1,6 +1,7 @@
-// 完整依賴掃描（含 dev）的 high/critical 判定。正式例外清單目前是空的。
-// 空清單不會因為到期日失敗。以後的例外必須有 YYYY-MM-DD 到期日（Asia/Taipei，當天起失效）和理由；
-// 缺少任一項，或已到期，就失敗。例外的公告 id 若不在這次掃描，只印警告，不讓 ci 失敗。
+// 完整依賴掃描（含 dev）的 high/critical 判定。正式例外清單目前是空的 Object.freeze([])。
+// 空清單不會因為到期日失敗。以後的例外必須有真實的 YYYY-MM-DD 到期日（Asia/Taipei，當天起失效）和理由。
+// 格式不對、不是真實日期、已到期，或到期日晚於今天加 90 天，就失敗。不從環境變數或命令列讀例外。
+// 例外的公告 id 若不在這次掃描，只印警告，不讓 ci 失敗。
 // picomatch GHSA-fc5q-39xc-vjpf 已移除：summary 為
 // 「Withdrawn Advisory: picomatch vulnerable to ReDoS through single-branch repeated extglobs」，
 // withdrawn_at 2026-11-18T15:38:56Z，first_patched_version 是 null。
@@ -13,7 +14,7 @@ export const EXCEPTIONS = Object.freeze([]);
 const NO_FIX = new Set(["", "<0.0.0"]);
 const SKIP = new Set(["info", "low", "moderate"]), GATED = new Set(["high", "critical"]);
 const sevOf = a => String(a.severity ?? "").toLowerCase();
-const expiryOf = exc => (typeof exc?.expires === "string" && /^\d{4}-\d{2}-\d{2}$/.test(exc.expires) ? exc.expires : null);
+const MAX_EXC_DAYS = 90;
 const reasonOf = exc => (typeof exc?.reason === "string" && exc.reason.trim() !== "" ? exc.reason.trim() : null);
 const excName = exc => `${exc?.module ?? "?"} ${exc?.id ?? "?"}`;
 
@@ -32,12 +33,44 @@ function matchesExc(exc, a) {
     && f.length > 0 && f.every(x => versionOk(x.version, exc.maxVersion)) && NO_FIX.has(a.patched_versions ?? "");
 }
 
+function isoParts(s) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s));
+  if (!m) return null;
+  return [Number(m[1]), Number(m[2]), Number(m[3])];
+}
+
+function calendarOk(y, mo, d) {
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d;
+}
+
+function addIsoDays(iso, days) {
+  const p = isoParts(iso);
+  if (!p || !calendarOk(p[0], p[1], p[2])) return null;
+  const dt = new Date(Date.UTC(p[0], p[1] - 1, p[2]));
+  dt.setUTCDate(dt.getUTCDate() + days);
+  const mo = String(dt.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(dt.getUTCDate()).padStart(2, "0");
+  return `${dt.getUTCFullYear()}-${mo}-${day}`;
+}
+
+function expiryError(exc, today) {
+  const name = excName(exc);
+  const raw = exc?.expires;
+  const parts = typeof raw === "string" ? isoParts(raw) : null;
+  if (!parts) return `audit: ${name} 例外缺少到期日，拒絕放行`;
+  if (!calendarOk(parts[0], parts[1], parts[2])) return `audit: ${name} 例外到期日不是真實日期，拒絕放行`;
+  if (!(today < raw)) return `audit: ${name} 例外已於 ${raw} 到期，請移除例外並升版`;
+  const latest = addIsoDays(today, MAX_EXC_DAYS);
+  if (!latest || raw > latest) return `audit: ${name} 例外到期日距今超過 90 天，拒絕放行`;
+  return null;
+}
+
 function exceptionProblems(list, today) {
   const errors = [];
   for (const exc of list) {
-    const exp = expiryOf(exc);
-    if (!exp) errors.push(`audit: ${excName(exc)} 例外缺少到期日，拒絕放行`);
-    else if (!(today < exp)) errors.push(`audit: ${excName(exc)} 例外已於 ${exp} 到期，請移除例外並升版`);
+    const expErr = expiryError(exc, today);
+    if (expErr) errors.push(expErr);
     if (!reasonOf(exc)) errors.push(`audit: ${excName(exc)} 例外缺少理由，拒絕放行`);
   }
   return errors;
@@ -76,7 +109,7 @@ function finish(ok, allowed, lines, errors, warnings) {
 }
 
 function liveOf(list, today) {
-  return list.filter(exc => { const exp = expiryOf(exc); return exp !== null && today < exp && reasonOf(exc); });
+  return list.filter(exc => expiryError(exc, today) === null && reasonOf(exc));
 }
 
 /** @param {unknown} scan @param {string} today YYYY-MM-DD（Asia/Taipei） @param {readonly object[]} [exceptions] */

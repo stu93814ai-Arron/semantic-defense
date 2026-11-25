@@ -213,9 +213,9 @@ describe("evaluateAudit：到期日格式", () => {
   );
 });
 
-// 今天的程式會放行這些字串。實作後 it.fails 改回 it()。
+// 實作後 it.fails 已改回 it()。不是真實日期，或晚於今天加 90 天，都拒絕放行。
 describe("evaluateAudit：到期日必須存在，且距今最長 90 天", () => {
-  it.fails("2026-02-30、2026-02-29、2026-13-45 不是真實日期 → 擋", () => {
+  it("2026-02-30、2026-02-29、2026-13-45 不是真實日期 → 擋", () => {
     const cases = [["2026-02-30", "2026-02-01"], ["2026-02-29", "2026-02-01"], ["2026-13-45", "2026-01-01"]];
     for (const [expires, today] of cases) {
       const r = auditWith(emptyScan, today!, [{ ...FAKE, expires }]);
@@ -230,7 +230,7 @@ describe("evaluateAudit：到期日必須存在，且距今最長 90 天", () =>
     expect(r.errors).toEqual([]);
     expect(r.allowed[0]).toContain(FAKE.id);
   });
-  it.fails("9999-12-31 與 2026-11-25 加 91 天（2027-02-24）超過 90 天 → 擋", () => {
+  it("9999-12-31 與 2026-11-25 加 91 天（2027-02-24）超過 90 天 → 擋", () => {
     for (const expires of ["9999-12-31", "2027-02-24"]) {
       const empty = auditWith(emptyScan, "2026-11-25", [{ ...FAKE, expires }]);
       expect(empty.ok, expires).toBe(false);
