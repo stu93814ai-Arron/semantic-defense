@@ -250,6 +250,47 @@ it("快照 SQL 只取 query 前 200 字", async () => {
   expect(seen[0]).not.toContain("left(query, 2000)");
 });
 
+async function maskedQuery(query: string) {
+  const snap = await readServerSnapshot(async () => ({ rows: [{ query }] }));
+  return String(snap.activity[0].query);
+}
+
+it.fails("截斷切在字串中間時不會留下 SECRET_TRUNC", async () => {
+  const raw = `${"Q".repeat(180)}'SECRET_TRUNC_${"Y".repeat(80)}`;
+  expect(raw.slice(0, 200)).toContain("SECRET_TRUNC");
+  const out = await maskedQuery(raw);
+  expect(out).not.toContain("SECRET_TRUNC");
+  expect(out.length).toBeLessThanOrEqual(200);
+});
+
+it.fails("E 字串的反斜線引號不會讓 SECRET 漏出", async () => {
+  const out = await maskedQuery("SELECT E'abc\\'SECRET'");
+  expect(out).not.toContain("SECRET");
+  expect(out).toContain("E'?'");
+});
+
+it.fails("美元引號 $$SECRET$$ 會被遮住", async () => {
+  expect(await maskedQuery("SELECT $$SECRET$$")).not.toContain("SECRET");
+});
+
+it.fails("帶標籤的美元引號 $tag$SECRET$tag$ 會被遮住", async () => {
+  expect(await maskedQuery("SELECT $tag$SECRET$tag$")).not.toContain("SECRET");
+});
+
+it.fails("數字字面值會被遮住", async () => {
+  expect(await maskedQuery("SELECT 4111111111111111")).not.toContain("4111111111111111");
+});
+
+it.fails("沒閉合的引號遮到結尾", async () => {
+  expect(await maskedQuery("SELECT 'SECRET")).not.toContain("SECRET");
+});
+
+it.fails("快照 SQL 先取 2000 字再遮罩", async () => {
+  const seen: string[] = [];
+  await readServerSnapshot(async (sql) => { seen.push(sql); return { rows: [] }; });
+  expect(seen[0]).toContain("left(query, 2000)");
+});
+
 it("快照先讀 activity，不先取 advisory lock", async () => {
   const seen: string[] = [];
   await readServerSnapshot(async (sql) => { seen.push(sql); return { rows: [] }; });
@@ -299,12 +340,42 @@ it("第 2 輪跑前刪掉舊報告，退出碼非 0 且報告成功時不當通�
   expect(src).toContain("round2ExitContradicts(");
 });
 
-it("第 2 輪退出碼與報告成功矛盾時要失敗，flaky 失敗仍走原規則", async () => {
+it.fails("第 2 輪退出碼非 0 或報告不是成功時，失敗數 0 也要失敗", async () => {
   const mod = await import("../tests.mjs");
   expect(mod.round2ExitContradicts(true, true, 0)).toBe(true);
-  expect(mod.round2ExitContradicts(true, false, 0)).toBe(false);
+  expect(mod.round2ExitContradicts(true, false, 0)).toBe(true);
+  expect(mod.round2ExitContradicts(false, false, 0)).toBe(true);
   expect(mod.round2ExitContradicts(false, true, 0)).toBe(false);
   expect(mod.round2ExitContradicts(true, true, 2)).toBe(false);
+});
+
+it.fails("停不住的 postmaster 會在時限內收到 SIGKILL", async () => {
+  const mod = await import("../pg-lifecycle.mjs");
+  expect(mod.STOP_MS).toBe(5000);
+  expect(typeof mod.stopWithin).toBe("function");
+  const signals: string[] = [];
+  const started = Date.now();
+  await mod.stopWithin(() => new Promise(() => {}), 4321, 200, (pid: number, sig: string) => {
+    signals.push(`${pid}:${sig}`);
+  });
+  expect(Date.now() - started).toBeLessThan(1000);
+  expect(signals).toEqual(["4321:SIGKILL"]);
+});
+
+it.fails("SIGSTOP 的 postmaster 在 5 秒內被程序群組 SIGKILL", async () => {
+  const mod = await import("../pg-lifecycle.mjs");
+  expect(typeof mod.stopWithin).toBe("function");
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { detached: true, stdio: "ignore" });
+  kids.push(child);
+  await once(child, "spawn");
+  process.kill(child.pid!, "SIGSTOP");
+  const started = Date.now();
+  await mod.stopWithin(() => new Promise(() => {}), child.pid);
+  const elapsed = Date.now() - started;
+  expect(elapsed).toBeLessThan(5500);
+  expect(elapsed).toBeGreaterThan(4000);
+  const exited = await Promise.race([once(child, "exit"), delay(1000).then(() => null)]);
+  expect(exited?.[1]).toBe("SIGKILL");
 });
 
 it("開跑前刪掉舊的 vitest 報告", async () => {
