@@ -91,38 +91,48 @@ function readJson(path) {
   }
 }
 
-/** 報告不存在、解析失敗，或修改時間早於本輪開始，都不是這輪的結果。 */
-export function loadRoundReport(path, startedAt) {
-  let mtime = -1;
+function runMark(startedAt) {
+  return `run-${startedAt}`;
+}
+
+function belongsToRun(path, startedAt) {
+  return String(path).includes(runMark(startedAt));
+}
+
+function startedThisRun(startTime, startedAt) {
+  return typeof startTime === "number" && Number.isFinite(startTime) && startTime >= startedAt;
+}
+
+function isThisRun(path, startedAt, startTime) {
+  return startedThisRun(startTime, startedAt) || belongsToRun(path, startedAt);
+}
+
+function fileExists(path) {
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- 同上
-    mtime = statSync(path).mtimeMs;
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- 路徑是固定報告檔或測試暫存
+    statSync(path);
+    return true;
   } catch {
-    return { ok: false, reason: "missing" };
+    return false;
   }
-  if (mtime + 2000 < startedAt) return { ok: false, reason: "stale" };
+}
+
+/** 報告不存在、解析失敗，或 startTime 與路徑都不是這輪，都不是這輪的結果。 */
+export function loadRoundReport(path, startedAt) {
+  if (!fileExists(path)) return { ok: false, reason: "missing" };
   const report = readJson(path);
   if (!report || typeof report !== "object" || Array.isArray(report)) return { ok: false, reason: "parse" };
+  if (!isThisRun(path, startedAt, report.startTime)) return { ok: false, reason: "stale" };
   return { ok: true, report };
 }
 
-function fileMtime(path) {
-  try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- 路徑是固定報告檔或測試暫存
-    return statSync(path).mtimeMs;
-  } catch {
-    return -1;
-  }
-}
-
-/** 未處理錯誤筆數檔。讀不到、解析失敗或修改時間早於本輪開始都不是這輪的結果。 */
+/** 未處理錯誤筆數檔。讀不到、解析失敗，或 startTime 與路徑都不是這輪，都不是這輪的結果。 */
 export function loadUnhandled(path, startedAt) {
-  const mtime = fileMtime(path);
-  if (mtime < 0) return { ok: false, reason: "missing", count: 0 };
-  if (mtime + 2000 < startedAt) return { ok: false, reason: "stale", count: 0 };
+  if (!fileExists(path)) return { ok: false, reason: "missing", count: 0 };
   const body = readJson(path);
   const count = body && body.count;
   if (!Number.isInteger(count) || count < 0) return { ok: false, reason: "parse", count: 0 };
+  if (!isThisRun(path, startedAt, body.startTime)) return { ok: false, reason: "stale", count: 0 };
   return { ok: true, count };
 }
 
@@ -150,17 +160,18 @@ function loadSpawnedRound(out, unhandledOut, suiteOut, startedAt, exitFail) {
 }
 
 export function run(i, cov, spawnSyncFn) {
+  const startedAt = Date.now();
   const out = `reports/vitest-run${i}.json`;
   const unhandledOut = `reports/unhandled-run${i}.json`;
   const suiteOut = `reports/suite-run${i}.json`;
+  const coverageDir = `reports/coverage-${runMark(startedAt)}`;
   discardReport(out);
   discardReport(unhandledOut);
   discardReport(suiteOut);
   const args = ["scripts/with-pg.mjs", "npx", "vitest", "run", "--reporter=json", "--reporter=./scripts/vitest-live-reporter.mjs", `--outputFile=${out}`];
   if (cov) args.push("--coverage");
   let exitFail = false;
-  const startedAt = Date.now();
-  const env = { ...process.env, UNHANDLED_REPORT: unhandledOut, SUITE_REPORT: suiteOut };
+  const env = { ...process.env, UNHANDLED_REPORT: unhandledOut, SUITE_REPORT: suiteOut, SD_COVERAGE_DIR: coverageDir };
   const spawn = spawnSyncFn ?? execFileSync;
   try { spawn("node", args, { stdio: "inherit", env }); } catch { exitFail = true; }
   return loadSpawnedRound(out, unhandledOut, suiteOut, startedAt, exitFail);
@@ -208,14 +219,12 @@ export function coverageBelow(summary, floor = 70) {
   return !pctMeets(total.functions, floor) || !pctMeets(total.branches, floor);
 }
 
-/** 摘要不存在、解析失敗、修改時間或 startTime 早於本輪開始，都不是這輪的結果。 */
+/** 摘要不存在、解析失敗，或 startTime 與路徑都不是這輪，都不是這輪的結果。 */
 export function loadCoverageSummary(path, startedAt) {
-  const mtime = fileMtime(path);
-  if (mtime < 0) return { ok: false, reason: "missing" };
-  if (mtime + 2000 < startedAt) return { ok: false, reason: "stale" };
+  if (!fileExists(path)) return { ok: false, reason: "missing" };
   const summary = readJson(path);
   if (!summary || typeof summary !== "object" || Array.isArray(summary)) return { ok: false, reason: "parse" };
-  if (typeof summary.startTime === "number" && summary.startTime + 2000 < startedAt) return { ok: false, reason: "stale" };
+  if (!isThisRun(path, startedAt, summary.startTime)) return { ok: false, reason: "stale" };
   return { ok: true, summary };
 }
 
@@ -242,7 +251,7 @@ function exitNotes(summaryFail, exitFail, round1Unhandled, round2Unhandled, tota
 
 function loadRoundCoverage(runResult, coveragePath) {
   if (coveragePath) return loadCoverageSummary(coveragePath, runResult.startedAt);
-  return loadCoverageSummary("reports/coverage/coverage-summary.json", runResult.startedAt);
+  return loadCoverageSummary(`reports/coverage-${runMark(runResult.startedAt)}/coverage-summary.json`, runResult.startedAt);
 }
 
 /** 第 1 輪未處理錯誤、覆蓋率不足、suite 或 hook 錯誤都獨立失敗，不會被 FLAKY 吸收。 */

@@ -44,7 +44,7 @@ export default defineConfig({
       include: CORE_COVERAGE_INCLUDE,
       exclude: ["**/*.test.*", "**/*.d.ts"],
       reporter: ["text-summary", "json-summary"],
-      reportsDirectory: "reports/coverage",
+      reportsDirectory: process.env.SD_COVERAGE_DIR || "reports/coverage",
       reportOnFailure: true,
       thresholds: { lines: 70, branches: 70, functions: 70, statements: 70 },
     },

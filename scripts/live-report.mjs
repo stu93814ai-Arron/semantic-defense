@@ -121,7 +121,7 @@ function eatComment(query, i) {
 
 export function writeUnhandledCount(path, count) {
   mkdirSync(dirname(path), { recursive: true });
-  atomicWrite(path, `${JSON.stringify({ count })}\n`);
+  atomicWrite(path, `${JSON.stringify({ count, startTime: Date.now() })}\n`);
 }
 
 function eatIdent(query, i) {
