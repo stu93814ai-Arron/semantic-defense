@@ -217,6 +217,83 @@ it("SIGTERM 等快照連線成功後才關 postgres，並刪掉 sd-pg 目錄", a
   expect(left).toEqual([]);
 });
 
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function pidsMentioning(token: string): string[] {
+  const hits: string[] = [];
+  let entries: string[] = [];
+  try { entries = readdirSync("/proc"); } catch { return hits; }
+  for (const pid of entries) {
+    if (!/^\d+$/.test(pid)) continue;
+    try {
+      const cmd = readFileSync(join("/proc", pid, "cmdline"));
+      if (cmd.includes(token)) hits.push(pid);
+    } catch { /* 已結束或無權限 */ }
+  }
+  return hits;
+}
+
+function killPid(pid: number) {
+  try { process.kill(-pid, "SIGKILL"); } catch {
+    try { process.kill(pid, "SIGKILL"); } catch { /* 已結束 */ }
+  }
+}
+
+function killPostmaster(base: string) {
+  if (!existsSync(base)) return;
+  for (const name of readdirSync(base)) {
+    if (!name.startsWith("sd-pg-")) continue;
+    const pidFile = join(base, name, "data", "postmaster.pid");
+    if (existsSync(pidFile)) {
+      const pid = Number(readFileSync(pidFile, "utf8").split("\n")[0]);
+      if (pid) killPid(pid);
+    }
+    rmSync(join(base, name), { recursive: true, force: true });
+  }
+}
+
+it.fails("with-pg 被 SIGKILL 後清掉孤兒 postgres 與 sd-pg 目錄", async () => {
+  const base = scratch();
+  const ready = join(base, "ready");
+  const script = join(base, "child.mjs");
+  writeFileSync(script, "import { writeFileSync } from 'node:fs'; writeFileSync(process.env.READY_FILE, '1'); setInterval(() => {}, 1000);\n");
+  const env: NodeJS.ProcessEnv = { ...process.env, TMPDIR: base, READY_FILE: ready };
+  delete env.DATABASE_URL;
+  const child = spawn(process.execPath, [resolve(ROOT, "scripts/with-pg.mjs"), process.execPath, script], {
+    cwd: ROOT, env, detached: true, stdio: ["ignore", "pipe", "pipe"],
+  });
+  kids.push(child);
+  child.stdout?.on("data", () => {});
+  child.stderr?.on("data", () => {});
+  let token = "";
+  let postmaster = 0;
+  try {
+    expect(await waitUntil(() => existsSync(ready), 20000)).toBe(true);
+    const names = readdirSync(base).filter((name) => name.startsWith("sd-pg-"));
+    expect(names).toHaveLength(1);
+    token = names[0]!;
+    postmaster = Number(readFileSync(join(base, token, "data", "postmaster.pid"), "utf8").split("\n")[0]);
+    expect(postmaster).toBeGreaterThan(0);
+    expect(pidAlive(postmaster)).toBe(true);
+    process.kill(child.pid!, "SIGKILL");
+    const cleaned = await waitUntil(() => {
+      const left = readdirSync(base).filter((name) => name.startsWith("sd-pg-"));
+      return left.length === 0 && !pidAlive(postmaster) && pidsMentioning(token).length === 0;
+    }, 3000);
+    expect(cleaned).toBe(true);
+  } finally {
+    if (child.pid) { try { process.kill(-child.pid, "SIGKILL"); } catch { /* 群組已結束 */ } }
+    killPostmaster(base);
+  }
+});
+
 it("子行程被信號殺掉時不以 0 收場", async () => {
   const code = await runChild(process.execPath, ["-e", "process.kill(process.pid, 'SIGKILL')"], process.env);
   expect(code).not.toBe(0);
