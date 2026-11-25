@@ -2,8 +2,8 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
-import { afterEach, describe, expect, it } from "vitest";
-import { openDb, type Db } from "../src/db.js";
+import { describe, expect, it } from "vitest";
+import { type ClientHook, expectOpenDbRejected, settleOpenDb, useClientHooks } from "./helpers/pg-client-hook.js";
 import { requireDatabaseUrl } from "./helpers/pg.js";
 
 const DB_SRC = join(dirname(fileURLToPath(import.meta.url)), "../src/db.ts");
@@ -19,11 +19,7 @@ const MIGRATE_ADVISORY_LOCK_FAILED =
 const MIGRATE_TIMEOUT_RESTORE_FAILED =
   "無法還原資料庫語句時限設定，已拒絕啟動；請確認資料庫連線正常後再重試";
 
-function queryText(q: unknown): string {
-  if (typeof q === "string") return q;
-  if (q !== null && typeof q === "object" && "text" in q) return String((q as { text: unknown }).text);
-  return "";
-}
+const { install: installClientHook } = useClientHooks();
 
 function isShowTimeout(sql: string): boolean {
   return /^\s*SHOW\s+statement_timeout\s*$/i.test(sql);
@@ -33,74 +29,20 @@ function isSetTimeoutConfig(sql: string): boolean {
   return /set_config\(\s*'statement_timeout'/i.test(sql);
 }
 
-type QueryRun = (sql?: string, params?: unknown[]) => Promise<{ rows: Array<Record<string, unknown>> }>;
-
-type ClientHook = {
-  onQuery?: (info: { sql: string; params: unknown[] | undefined; run: QueryRun }) => Promise<{ rows: Array<Record<string, unknown>> }>;
-  onRelease?: (arg: unknown) => void;
-};
-
-const uninstalls: Array<() => void> = [];
-
-function installClientHook(hook: ClientHook): void {
-  const origConnect = pg.Pool.prototype.connect;
-  const connect = origConnect as unknown as (this: pg.Pool) => Promise<pg.PoolClient>;
-  pg.Pool.prototype.connect = function (this: pg.Pool, ...args: unknown[]) {
-    if (typeof args[0] === "function") {
-      return (origConnect as unknown as (this: pg.Pool, cb: unknown) => unknown).call(this, args[0]);
-    }
-    return connect.call(this).then((client) => {
-      const origQuery = client.query.bind(client) as QueryRun;
-      const origRelease = client.release.bind(client);
-      client.query = ((...qargs: unknown[]) => {
-        const sql = queryText(qargs[0]);
-        const params = Array.isArray(qargs[1]) ? (qargs[1] as unknown[]) : undefined;
-        const run: QueryRun = (s, p) => {
-          if (s === undefined) return origQuery(...(qargs as [string, unknown[]?]));
-          return origQuery(s, p);
-        };
-        if (hook.onQuery) return hook.onQuery({ sql, params, run });
-        return run();
-      }) as typeof client.query;
-      client.release = ((arg?: Error | boolean) => {
-        hook.onRelease?.(arg);
-        return origRelease(arg);
-      }) as typeof client.release;
-      return client;
-    });
-  } as typeof pg.Pool.prototype.connect;
-  uninstalls.push(() => {
-    pg.Pool.prototype.connect = origConnect;
-  });
-}
-
-afterEach(() => {
-  while (uninstalls.length > 0) uninstalls.pop()!();
-});
-
-async function settleOpenDb(): Promise<{ ok: true; db: Db } | { ok: false; err: unknown }> {
-  try {
-    const db = await openDb(requireDatabaseUrl());
-    return { ok: true, db };
-  } catch (err) {
-    return { ok: false, err };
+const failRestore: NonNullable<ClientHook["onQuery"]> = async ({ sql, params, run }) => {
+  if (isSetTimeoutConfig(sql) && params?.[0] !== LOCK_TIMEOUT_SETTING) {
+    throw new Error("injected");
   }
-}
+  return run();
+};
 
 describe("acquireSchemaLock 還原 statement_timeout", () => {
   it("取鎖成功但還原失敗 → 拒絕啟動並給出專屬中文訊息", async () => {
     installClientHook({
-      onQuery: async ({ sql, params, run }) => {
-        if (isSetTimeoutConfig(sql) && params?.[0] !== LOCK_TIMEOUT_SETTING) {
-          throw new Error("injected");
-        }
-        return run();
-      },
+      onQuery: failRestore,
     });
-    const outcome = await settleOpenDb();
-    if (outcome.ok) await outcome.db.close().catch(() => {});
-    expect(outcome.ok).toBe(false);
-    expect(outcome.ok === false && (outcome.err as Error).message).toBe(MIGRATE_TIMEOUT_RESTORE_FAILED);
+    const err = await expectOpenDbRejected();
+    expect((err as Error).message).toBe(MIGRATE_TIMEOUT_RESTORE_FAILED);
     expect(MIGRATE_TIMEOUT_RESTORE_FAILED).not.toBe(MIGRATE_ADVISORY_LOCK_FAILED);
   });
 
@@ -135,19 +77,12 @@ describe("acquireSchemaLock 還原 statement_timeout", () => {
     await holder.connect();
     await holder.query("SELECT pg_advisory_lock($1)", [SCHEMA_LOCK]);
     installClientHook({
-      onQuery: async ({ sql, params, run }) => {
-        if (isSetTimeoutConfig(sql) && params?.[0] !== LOCK_TIMEOUT_SETTING) {
-          throw new Error("injected");
-        }
-        return run();
-      },
+      onQuery: failRestore,
     });
     try {
-      const outcome = await settleOpenDb();
-      if (outcome.ok) await outcome.db.close().catch(() => {});
-      expect(outcome.ok).toBe(false);
-      expect(outcome.ok === false && (outcome.err as Error).message).toBe(MIGRATE_ADVISORY_LOCK_FAILED);
-      expect((outcome.ok === false && (outcome.err as Error).message) || "").not.toBe(MIGRATE_TIMEOUT_RESTORE_FAILED);
+      const err = await expectOpenDbRejected();
+      expect((err as Error).message).toBe(MIGRATE_ADVISORY_LOCK_FAILED);
+      expect(((err as Error).message) || "").not.toBe(MIGRATE_TIMEOUT_RESTORE_FAILED);
     } finally {
       await holder.query("SELECT pg_advisory_unlock($1)", [SCHEMA_LOCK]).catch(() => {});
       await holder.end().catch(() => {});
@@ -182,12 +117,9 @@ describe("K6／K8 取 SCHEMA_LOCK 失敗", () => {
         return run();
       },
     });
-    const outcome = await settleOpenDb();
-    if (outcome.ok) await outcome.db.close().catch(() => {});
-    expect(outcome.ok).toBe(false);
-    if (outcome.ok) return;
-    expect(outcome.err).toBeInstanceOf(Error);
-    expect((outcome.err as Error).message).toBe("lock-boom");
+    const err = await expectOpenDbRejected();
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toBe("lock-boom");
     expect(seen.some((sql) => sql.includes("CREATE TABLE"))).toBe(false);
   }, 15_000);
 
@@ -206,9 +138,7 @@ describe("K6／K8 取 SCHEMA_LOCK 失敗", () => {
       },
       onRelease: (arg) => { releases.push(arg); },
     });
-    const outcome = await settleOpenDb();
-    if (outcome.ok) await outcome.db.close().catch(() => {});
-    expect(outcome.ok).toBe(false);
+    await expectOpenDbRejected();
     expect(seen.some((sql) => sql.includes("pg_advisory_unlock("))).toBe(false);
     expect(releases).toContain(true);
   }, 15_000);
@@ -224,11 +154,8 @@ describe("K6／K8 取 SCHEMA_LOCK 失敗", () => {
         return run();
       },
     });
-    const outcome = await settleOpenDb();
-    if (outcome.ok) await outcome.db.close().catch(() => {});
-    expect(outcome.ok).toBe(false);
-    if (outcome.ok) return;
-    expect((outcome.err as Error).message).toBe(MIGRATE_ADVISORY_LOCK_FAILED);
+    const err = await expectOpenDbRejected();
+    expect((err as Error).message).toBe(MIGRATE_ADVISORY_LOCK_FAILED);
     expect(seen.some((sql) => sql.includes("CREATE TABLE"))).toBe(false);
   }, 15_000);
 });
@@ -246,11 +173,7 @@ describe("throw undefined 也必須拒絕啟動", () => {
         return run();
       },
     });
-    const outcome = await settleOpenDb();
-    if (outcome.ok) await outcome.db.close().catch(() => {});
-    expect(outcome.ok).toBe(false);
-    if (outcome.ok) return;
-    expect(outcome.err).toBeUndefined();
+    expect(await expectOpenDbRejected()).toBeUndefined();
   }, 15_000);
 });
 
@@ -270,13 +193,10 @@ describe("U6 非 55P03 的遷移錯誤拒絕啟動", () => {
         return run();
       },
     });
-    const outcome = await settleOpenDb();
-    if (outcome.ok) await outcome.db.close().catch(() => {});
-    expect(outcome.ok).toBe(false);
-    if (outcome.ok) return;
-    expect(outcome.err).toBeInstanceOf(Error);
-    expect((outcome.err as Error).message).toBe("schema-non-55P03");
-    expect((outcome.err as { code?: string }).code).toBe("42601");
+    const err = await expectOpenDbRejected();
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toBe("schema-non-55P03");
+    expect((err as { code?: string }).code).toBe("42601");
   }, 15_000);
 });
 
@@ -303,10 +223,6 @@ describe("errorCode 的位置與 auto_list_settings 遷移", () => {
         return run();
       },
     });
-    const outcome = await settleOpenDb();
-    if (outcome.ok) await outcome.db.close().catch(() => {});
-    expect(outcome.ok).toBe(false);
-    if (outcome.ok) return;
-    expect(outcome.err).toBeUndefined();
+    expect(await expectOpenDbRejected()).toBeUndefined();
   }, 15_000);
 });

@@ -4,6 +4,7 @@ import { openDb } from "../src/db.js";
 import { assertCreatableUsername, insertUser } from "../src/users.js";
 import type { ControlApi } from "./helpers/app.js";
 import { buildApp, seedPhase2Fixtures } from "./helpers/app.js";
+import { installClientHook, type QueryRun } from "./helpers/pg-client-hook.js";
 import { truncatePhase2Tables, requireDatabaseUrl } from "./helpers/pg.js";
 import {
   bootPending, closeAfterEach, pendingOps,
@@ -309,40 +310,6 @@ describe("啟動時 users 鎖：已具約束即略過，缺約束時 lock_timeou
   }, 20_000);
 });
 
-type QueryRun = (sql?: string, params?: unknown[]) => Promise<{ rows: Array<Record<string, unknown>> }>;
-
-function queryText(q: unknown): string {
-  if (typeof q === "string") return q;
-  if (q !== null && typeof q === "object" && "text" in q) return String((q as { text: unknown }).text);
-  return "";
-}
-
-/** 只包 openDb 的 migrate client。回傳解除安裝。 */
-function installMigrateHook(
-  onQuery: (info: { sql: string; run: QueryRun }) => Promise<{ rows: Array<Record<string, unknown>> }>,
-): () => void {
-  const origConnect = pg.Pool.prototype.connect;
-  const connect = origConnect as unknown as (this: pg.Pool) => Promise<pg.PoolClient>;
-  pg.Pool.prototype.connect = function (this: pg.Pool, ...args: unknown[]) {
-    if (typeof args[0] === "function") {
-      return (origConnect as unknown as (this: pg.Pool, cb: unknown) => unknown).call(this, args[0]);
-    }
-    return connect.call(this).then((client) => {
-      const origQuery = client.query.bind(client) as QueryRun;
-      client.query = ((...qargs: unknown[]) => {
-        const sql = queryText(qargs[0]);
-        const run: QueryRun = (s, p) => {
-          if (s === undefined) return origQuery(...(qargs as [string, unknown[]?]));
-          return origQuery(s, p);
-        };
-        return onQuery({ sql, run });
-      }) as typeof client.query;
-      return client;
-    });
-  } as typeof pg.Pool.prototype.connect;
-  return () => { pg.Pool.prototype.connect = origConnect; };
-}
-
 async function readXact(run: QueryRun): Promise<string> {
   const r = await run("SELECT pg_current_xact_id()::text AS id");
   return String(r.rows[0]!.id);
@@ -407,17 +374,19 @@ describe("U2 掃描與加約束在同一交易並持有 users 鎖", () => {
     let alterXact = "";
     let insertCode = "";
     let lockHeld = false;
-    uninstalls.push(installMigrateHook(async ({ sql, run }) => {
-      if (sql.trim() === "SELECT username FROM users") {
-        const rows = await run();
-        scanXact = await readXact(run);
-        lockHeld = await holdsUsersLock(url, await readPid(run));
-        insertCode = await blockedInsertCode(url);
-        return rows;
-      }
-      if (sql.includes(`ADD CONSTRAINT ${USERS_CHECK}`)) alterXact = await readXact(run);
-      return run();
-    }));
+    uninstalls.push(installClientHook({
+      onQuery: async ({ sql, run }) => {
+        if (sql.trim() === "SELECT username FROM users") {
+          const rows = await run();
+          scanXact = await readXact(run);
+          lockHeld = await holdsUsersLock(url, await readPid(run));
+          insertCode = await blockedInsertCode(url);
+          return rows;
+        }
+        if (sql.includes(`ADD CONSTRAINT ${USERS_CHECK}`)) alterXact = await readXact(run);
+        return run();
+      },
+    }, { wrapRelease: false }));
     const db = await openDb(url);
     await db.close();
     expect(lockHeld).toBe(true);
