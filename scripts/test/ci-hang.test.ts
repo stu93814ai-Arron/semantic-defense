@@ -298,6 +298,16 @@ it("區塊註解裡的引號不會讓 SECRET_B2 露出", async () => {
   expect(await maskedQuery("/* hunter2")).not.toContain("hunter2");
 });
 
+it.fails("巢狀區塊註解不會在第一個結束處露出 hunter2", async () => {
+  const out = await maskedQuery("/* a /* b */ 'x */ … pw='hunter2'");
+  expect(out).not.toContain("hunter2");
+});
+
+it.fails("巢狀區塊註解把 SECRET 留在註解裡", async () => {
+  const out = await maskedQuery("/* /* */ SECRET */");
+  expect(out).not.toContain("SECRET");
+});
+
 it("雙引號識別字裡的引號不會讓 SECRET_DQ 露出", async () => {
   const out = await maskedQuery("SELECT \"we'ird\", 'SECRET_DQ'");
   expect(out).not.toContain("SECRET_DQ");
@@ -483,6 +493,120 @@ it("第 1 輪 passed、第 2 輪缺席或 skipped 不寫入 FLAKY", async () => 
   expect(skipped.flaky).not.toContain(id);
   expect(absent.failed).toContain(id);
   expect(skipped.failed).toContain(id);
+});
+
+function unhandledFixture() {
+  const root = mkdtempSync(join(ROOT, "reports", "unhandled-"));
+  dirs.push(root);
+  writeFileSync(join(root, "leak.test.ts"), "import { expect, it } from \"vitest\";\nit(\"ok\", () => { expect(1).toBe(1); });\nPromise.reject(new Error(\"boom-top\"));\n");
+  writeFileSync(join(root, "vitest.config.ts"), "import { defineConfig } from \"vitest/config\";\nexport default defineConfig({ test: { include: [\"leak.test.ts\"], watch: false, fileParallelism: false } });\n");
+  const countFile = join(root, "live", "unhandled.json");
+  const json = join(root, "out.json");
+  const started = Date.now();
+  const r = spawnSync(process.execPath, [
+    resolve(ROOT, "node_modules/vitest/vitest.mjs"), "run", "--root", root, "--config", join(root, "vitest.config.ts"),
+    "--reporter=json", `--reporter=${resolve(__dirname, "../vitest-live-reporter.mjs")}`, `--outputFile=${json}`,
+  ], { encoding: "utf8", env: { ...process.env, LIVE_REPORT_DIR: join(root, "live"), UNHANDLED_REPORT: countFile }, cwd: ROOT });
+  return { r, json, countFile, started };
+}
+
+it.fails("真實 vitest 的未處理 rejection 寫進獨立檔", () => {
+  const { r, json, countFile } = unhandledFixture();
+  expect(r.status, r.stdout + r.stderr).not.toBe(0);
+  const report = JSON.parse(text(json));
+  expect(report.success).toBe(true);
+  expect(report.numFailedTests).toBe(0);
+  expect(report.unhandledErrors).toBeUndefined();
+  expect(text(countFile)).toContain("\"count\":1");
+});
+
+it.fails("未處理錯誤檔缺、壞或舊就失敗", async () => {
+  const mod = await import("../tests.mjs");
+  const dir = scratch();
+  expect(mod.loadUnhandled(join(dir, "missing.json"), Date.now()).ok).toBe(false);
+  const bad = join(dir, "bad.json");
+  writeFileSync(bad, "{");
+  expect(mod.loadUnhandled(bad, 0).ok).toBe(false);
+  const old = join(dir, "old.json");
+  writeFileSync(old, "{\"count\":0}\n");
+  utimesSync(old, 1, 1);
+  expect(mod.loadUnhandled(old, Date.now()).ok).toBe(false);
+});
+
+it.fails("未處理錯誤加上一筆 FLAKY 時退出碼不是 0", async () => {
+  const mod = await import("../tests.mjs");
+  const { countFile } = unhandledFixture();
+  const count = JSON.parse(text(countFile)).count;
+  const id = "apps/a.test.ts > case";
+  const out = mod.classifyRounds(new Map([[id, "failed"]]), new Map([[id, "passed"]]));
+  expect(out.failed).not.toContain(id);
+  expect(count).toBeGreaterThan(0);
+  expect(mod.gateStops({ failedCount: out.failed.length, coverageFail: false, unhandled: count > 0, total: 1, round2Lie: false })).toBe(true);
+});
+
+it.fails("主程式讀未處理錯誤檔，不再看報告裡的 unhandledErrors", () => {
+  const src = readFileSync(resolve(__dirname, "../tests.mjs"), "utf8");
+  expect(src).toContain("loadUnhandled(unhandledOut, startedAt)");
+  expect(src).toContain("UNHANDLED_REPORT: unhandledOut");
+  expect(src).toContain("discardReport(unhandledOut)");
+  expect(src).not.toContain("hasUnhandled(a.report)");
+  expect(src).not.toContain("report.unhandledErrors");
+});
+
+it.fails("覆蓋率摘要缺了或壞了就失敗", async () => {
+  const mod = await import("../tests.mjs");
+  expect(mod.coverageBelow(null)).toBe(true);
+  expect(mod.coverageBelow({})).toBe(true);
+  const dir = scratch();
+  expect(mod.loadCoverageSummary(join(dir, "missing.json"), Date.now()).ok).toBe(false);
+  const bad = join(dir, "bad.json");
+  writeFileSync(bad, "{");
+  expect(mod.loadCoverageSummary(bad, 0).ok).toBe(false);
+});
+
+it.fails("覆蓋率摘要太舊就失敗", async () => {
+  const mod = await import("../tests.mjs");
+  const dir = scratch();
+  const old = join(dir, "old.json");
+  writeFileSync(old, "{\"total\":{\"lines\":{\"pct\":99},\"statements\":{\"pct\":99},\"functions\":{\"pct\":99},\"branches\":{\"pct\":99}}}\n");
+  utimesSync(old, 1, 1);
+  expect(mod.loadCoverageSummary(old, Date.now()).ok).toBe(false);
+  const stamped = join(dir, "stamped.json");
+  writeFileSync(stamped, "{\"startTime\":1,\"total\":{\"lines\":{\"pct\":99},\"statements\":{\"pct\":99},\"functions\":{\"pct\":99},\"branches\":{\"pct\":99}}}\n");
+  expect(mod.loadCoverageSummary(stamped, Date.now()).ok).toBe(false);
+});
+
+it.fails("覆蓋率摘要少欄位或 pct 不是數字就失敗", async () => {
+  const mod = await import("../tests.mjs");
+  const full = { statements: { pct: 90 }, functions: { pct: 90 }, branches: { pct: 90 } };
+  expect(mod.coverageBelow({ total: full })).toBe(true);
+  expect(mod.coverageBelow({ total: { ...full, lines: { pct: null } } })).toBe(true);
+  expect(mod.coverageBelow({ total: { ...full, lines: { pct: "Unknown" } } })).toBe(true);
+  expect(mod.coverageBelow({ total: { ...full, lines: { pct: "96.88" } } })).toBe(true);
+});
+
+it.fails("覆蓋率摘要有問題時，一筆 FLAKY 仍要失敗", async () => {
+  const mod = await import("../tests.mjs");
+  const id = "apps/a.test.ts > case";
+  const out = mod.classifyRounds(new Map([[id, "failed"]]), new Map([[id, "passed"]]));
+  const coverageFail = mod.coverageBelow(null);
+  expect(out.failed).not.toContain(id);
+  expect(coverageFail).toBe(true);
+  expect(mod.gateStops({ failedCount: out.failed.length, coverageFail, unhandled: false, total: 1, round2Lie: false })).toBe(true);
+});
+
+it.fails("主程式有接上覆蓋率摘要檢查", () => {
+  const src = readFileSync(resolve(__dirname, "../tests.mjs"), "utf8");
+  expect(src).toContain("loadCoverageSummary(\"reports/coverage/coverage-summary.json\"");
+  expect(src).toContain("coverageBelow(coverage.summary)");
+});
+
+it.fails("非覆蓋率的非 0 退出碼印中性訊息", async () => {
+  const mod = await import("../tests.mjs");
+  expect(mod.round1ExitMessage(false, true)).toBe("第 1 輪退出碼非 0");
+  expect(mod.round1ExitMessage(true, true)).toContain("覆蓋率低於 70%");
+  const src = readFileSync(resolve(__dirname, "../tests.mjs"), "utf8");
+  expect(src).toContain("round1ExitMessage(summaryFail, exitFail)");
 });
 
 it("第 1 輪 unhandled 或覆蓋率不足時，一筆 FLAKY 仍要失敗", async () => {
