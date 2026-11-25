@@ -178,6 +178,70 @@ describe("evaluateAudit：空清單、缺欄與已不在掃描的公告", () => 
   });
 });
 
+// 假例外只活在這個檔案。m7 只比 advisory ID、m7b 只比 ID 加套件時，下面的案例要轉紅。
+describe("evaluateAudit：例外比對綁定 advisory、套件、範圍與修補版", () => {
+  const cases: Array<[string, Partial<Adv>]> = [
+    ["套件不同", { module_name: "other-pkg" }],
+    ["版本不在範圍", { findings: [{ version: "1.0.0", paths: [] }] }],
+    ["vulnerable 範圍不同", { vulnerable_versions: "<2.0.0" }],
+    ["已有修補版", { patched_versions: ">=1.0.0" }],
+  ];
+  it("同一個 advisory ID，套件、版本、範圍或修補版對不上就擋", () => {
+    for (const [label, patch] of cases) {
+      const body = fakeScan();
+      const current = body.advisories["1"];
+      if (!current) throw new Error("fixture");
+      body.advisories["1"] = { ...current, ...patch };
+      const r = auditWith(body, OK_DAY, [FAKE]);
+      expect(r.ok, label).toBe(false);
+      expect(r.allowed, label).toHaveLength(0);
+    }
+    expect(EXCEPTIONS).toEqual([]);
+  });
+});
+
+// m9：拿掉 YYYY-MM-DD 錨定後，未補零的 2026-12-1 會被當成真實日期而放行，本測試轉紅。
+describe("evaluateAudit：到期日格式", () => {
+  it.each(["2026-12-1", "2026-2-28", "2026/12/01", "2026-12-01 ", "not-a-date", "20261201"])(
+    "到期日 %s 不是 YYYY-MM-DD → 擋，並視為缺少到期日",
+    (expires) => {
+      const r = auditWith(emptyScan, "2026-11-25", [{ ...FAKE, expires }]);
+      expect(r.ok).toBe(false);
+      expect(r.allowed).toHaveLength(0);
+      expect(r.errors.join("\n")).toContain("缺少到期日");
+    },
+  );
+});
+
+// 今天的程式會放行這些字串。實作後 it.fails 改回 it()。
+describe("evaluateAudit：到期日必須存在，且距今最長 90 天", () => {
+  it.fails("2026-02-30、2026-02-29、2026-13-45 不是真實日期 → 擋", () => {
+    const cases = [["2026-02-30", "2026-02-01"], ["2026-02-29", "2026-02-01"], ["2026-13-45", "2026-01-01"]];
+    for (const [expires, today] of cases) {
+      const r = auditWith(emptyScan, today!, [{ ...FAKE, expires }]);
+      expect(r.ok, `${expires} @ ${today}`).toBe(false);
+      expect(r.errors.join("\n"), expires).toContain("不是真實日期");
+      expect(r.errors.join("\n"), expires).not.toContain("超過 90 天");
+    }
+  });
+  it("到期日恰為 2026-11-25 加 90 天（2027-02-23）仍放行", () => {
+    const r = auditWith(fakeScan(), "2026-11-25", [{ ...FAKE, expires: "2027-02-23" }]);
+    expect(r.ok).toBe(true);
+    expect(r.errors).toEqual([]);
+    expect(r.allowed[0]).toContain(FAKE.id);
+  });
+  it.fails("9999-12-31 與 2026-11-25 加 91 天（2027-02-24）超過 90 天 → 擋", () => {
+    for (const expires of ["9999-12-31", "2027-02-24"]) {
+      const empty = auditWith(emptyScan, "2026-11-25", [{ ...FAKE, expires }]);
+      expect(empty.ok, expires).toBe(false);
+      expect(empty.errors.join("\n"), expires).toContain("超過 90 天");
+      const hit = auditWith(fakeScan(), "2026-11-25", [{ ...FAKE, expires }]);
+      expect(hit.ok, expires).toBe(false);
+      expect(hit.allowed, expires).toHaveLength(0);
+    }
+  });
+});
+
 // audit.sh：第一關 --prod 沒有任何例外；用假的 pnpm（PATH 最前面）跑腳本副本
 const ROOT = resolve(__dirname, "../..");
 const dirs: string[] = [];
@@ -215,5 +279,57 @@ describe("audit.sh：--prod 關卡沒有例外", () => {
     const r = runAudit(0, scan({ github_advisory_id: "GHSA-aaaa-bbbb-cccc" }));
     expect(r.code).not.toBe(0);
     expect(r.out).toContain("GHSA-aaaa-bbbb-cccc");
+  });
+});
+
+// m5a／m5b／m5c：從環境變數或命令列注入例外時必須仍擋下。正式清單維持空的。
+function plusDays(iso: string, n: number): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  const dt = new Date(Date.UTC(y ?? 0, (m ?? 1) - 1, d ?? 1));
+  dt.setUTCDate(dt.getUTCDate() + n);
+  return dt.toISOString().slice(0, 10);
+}
+function injectedExc(): string {
+  return JSON.stringify([{ ...FAKE, expires: plusDays(taipeiToday(), 30) }]);
+}
+function runAllowCli(opts: { env?: Record<string, string>; args?: string[] }): { code: number; out: string } {
+  const root = mkdtempSync(join(tmpdir(), "sd-allow-"));
+  dirs.push(root);
+  mkdirSync(join(root, "scripts"));
+  mkdirSync(join(root, "reports"));
+  copyFileSync(join(ROOT, "scripts/audit-allow.mjs"), join(root, "scripts/audit-allow.mjs"));
+  writeFileSync(join(root, "reports/audit.json"), JSON.stringify(fakeScan()));
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  delete env.AUDIT_EXCEPTIONS;
+  delete env.AUDIT_ALLOW;
+  delete env.SD_AUDIT_EXCEPTIONS;
+  Object.assign(env, opts.env ?? {});
+  const r = spawnSync(process.execPath, [join(root, "scripts/audit-allow.mjs"), ...(opts.args ?? [])], {
+    encoding: "utf8", cwd: root, env,
+  });
+  return { code: r.status ?? -1, out: `${r.stdout ?? ""}\n${r.stderr ?? ""}` };
+}
+
+describe("audit-allow.mjs：不能從 env 或 argv 注入例外", () => {
+  it("m5a：AUDIT_EXCEPTIONS 注入與掃描相符的假例外仍擋下", () => {
+    const r = runAllowCli({ env: { AUDIT_EXCEPTIONS: injectedExc() } });
+    expect(r.code).not.toBe(0);
+    expect(r.out).not.toContain("[允許]");
+  });
+  it("m5b：argv 的 JSON 例外仍擋下", () => {
+    const r = runAllowCli({ args: [injectedExc()] });
+    expect(r.code).not.toBe(0);
+    expect(r.out).not.toContain("[允許]");
+  });
+  it("m5c：AUDIT_ALLOW 注入假例外仍擋下", () => {
+    const r = runAllowCli({ env: { AUDIT_ALLOW: injectedExc() } });
+    expect(r.code).not.toBe(0);
+    expect(r.out).not.toContain("[允許]");
+  });
+  it("程式本文不讀 process.env，也不把 argv[2] 當例外", () => {
+    const src = readFileSync(join(ROOT, "scripts/audit-allow.mjs"), "utf8");
+    expect(src).not.toMatch(/process\.env/);
+    expect(src).not.toMatch(/argv\[2\]|argv\[3\]|argv\.slice/);
+    expect(src).toContain("Object.freeze([])");
   });
 });
