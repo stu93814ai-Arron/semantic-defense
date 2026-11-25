@@ -222,11 +222,12 @@ function unexplainedExit(runResult, failed, summaryFail) {
   return Boolean(runResult.exitFail) && [...runResult.m.values()].every((status) => status === "passed");
 }
 
-function exitNotes(summaryFail, exitFail, unhandled, total) {
+function exitNotes(summaryFail, exitFail, round1Unhandled, round2Unhandled, total) {
   const notes = [];
   const exitNote = round1ExitMessage(summaryFail, exitFail);
   if (exitNote) notes.push(`❌ ${exitNote}`);
-  if (unhandled) notes.push("❌ 第 1 輪有未處理錯誤");
+  if (round1Unhandled) notes.push("❌ 第 1 輪有未處理錯誤");
+  if (round2Unhandled) notes.push("❌ 第 2 輪有未處理錯誤");
   if (total === 0) notes.push("❌ 沒有任何必跑測試");
   return notes;
 }
@@ -247,9 +248,11 @@ export function judge(a, b, coveragePath) {
   const coverage = loadRoundCoverage(a, coveragePath);
   const summaryFail = !coverage.ok || coverageBelow(coverage.summary);
   const exitFail = unexplainedExit(a, failed, summaryFail);
-  const unhandled = unhandledFails(a.unhandled) || unhandledFails(b.unhandled);
+  const round1Unhandled = unhandledFails(a.unhandled);
+  const round2Unhandled = unhandledFails(b.unhandled);
+  const unhandled = round1Unhandled || round2Unhandled;
   const suiteFail = Boolean(a.report) && !reportShapeBad(a.report) && suiteLevelFailure(a.report);
-  const notes = exitNotes(summaryFail, exitFail, unhandled, total);
+  const notes = exitNotes(summaryFail, exitFail, round1Unhandled, round2Unhandled, total);
   if (suiteFail) notes.push("❌ 第 1 輪有 suite 或 hook 錯誤");
   const explained = flakyExplainedCount(b.m, a.m, flaky);
   const byReport = round2ReportFails(b.exitFail, b.report, a.m, flaky);

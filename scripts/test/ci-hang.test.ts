@@ -591,7 +591,7 @@ it("第 2 輪未處理錯誤檔的結果會讓 judge 停下", async () => {
   expect(outcome.stop).toBe(true);
 });
 
-it.fails("第 2 輪的未處理錯誤印成第 2 輪", async () => {
+it("第 2 輪的未處理錯誤印成第 2 輪", async () => {
   const mod = await import("../tests.mjs");
   const only2 = mod.judge(passedRun(), passedRun({ ok: true, count: 1 }), freshSummary());
   const notes2 = only2.notes.join("\n");
