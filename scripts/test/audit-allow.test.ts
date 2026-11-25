@@ -198,19 +198,35 @@ describe("evaluateAudit：例外比對綁定 advisory、套件、範圍與修補
     }
     expect(EXCEPTIONS).toEqual([]);
   });
+  it("findings 是空陣列時，相符的例外也不放行", () => {
+    const body = fakeScan();
+    const current = body.advisories["1"];
+    if (!current) throw new Error("fixture");
+    body.advisories["1"] = { ...current, findings: [] };
+    const r = auditWith(body, OK_DAY, [FAKE]);
+    expect(r.ok).toBe(false);
+    expect(r.allowed).toHaveLength(0);
+  });
 });
 
 // m9：拿掉 YYYY-MM-DD 錨定後，未補零的 2026-12-1 會被當成真實日期而放行，本測試轉紅。
+// 實作後 it.fails 已改回 it()。格式錯誤講明 YYYY-MM-DD，仍然擋下。
 describe("evaluateAudit：到期日格式", () => {
-  it.each(["2026-12-1", "2026-2-28", "2026/12/01", "2026-12-01 ", "not-a-date", "20261201"])(
-    "到期日 %s 不是 YYYY-MM-DD → 擋，並視為缺少到期日",
-    (expires) => {
+  it("格式不對要講明須為 YYYY-MM-DD，仍然擋下", () => {
+    for (const expires of ["2026-12-1", "2026-2-28", "2026/12/01", "2026-12-01 ", "   ", "not-a-date", "20261201"]) {
       const r = auditWith(emptyScan, "2026-11-25", [{ ...FAKE, expires }]);
-      expect(r.ok).toBe(false);
-      expect(r.allowed).toHaveLength(0);
-      expect(r.errors.join("\n")).toContain("缺少到期日");
-    },
-  );
+      expect(r.ok, expires).toBe(false);
+      expect(r.allowed, expires).toHaveLength(0);
+      expect(r.errors.join("\n"), expires).toContain("格式須為 YYYY-MM-DD");
+      expect(r.errors.join("\n"), expires).not.toContain("缺少到期日");
+    }
+  });
+  it.each([undefined, "", 0, null])("到期日 %s 仍算缺少到期日", (expires) => {
+    const r = auditWith(emptyScan, "2026-11-25", [{ ...FAKE, expires: expires as string | undefined }]);
+    expect(r.ok).toBe(false);
+    expect(r.errors.join("\n")).toContain("缺少到期日");
+    expect(r.errors.join("\n")).not.toContain("格式須為 YYYY-MM-DD");
+  });
 });
 
 // 實作後 it.fails 已改回 it()。不是真實日期，或晚於今天加 90 天，都拒絕放行。

@@ -226,3 +226,31 @@ describe("errorCode 的位置與 auto_list_settings 遷移", () => {
     expect(await expectOpenDbRejected()).toBeUndefined();
   }, 15_000);
 });
+
+describe("帳號鎖路徑遇到 undefined", () => {
+  it("LOCK TABLE users 以 undefined reject 時，錯誤仍是 undefined", async () => {
+    const prep = await settleOpenDb();
+    if (!prep.ok) throw prep.err;
+    await prep.db.exec("DROP INDEX IF EXISTS users_username_lower");
+    await prep.db.close();
+    installClientHook({
+      onQuery: async ({ sql, run }) => {
+        if (sql.includes("LOCK TABLE users")) return Promise.reject(undefined);
+        return run();
+      },
+    });
+    try {
+      expect(await expectOpenDbRejected()).toBeUndefined();
+    } finally {
+      const restored = await settleOpenDb();
+      if (restored.ok) await restored.db.close();
+    }
+  }, 15_000);
+});
+
+describe("openDb 成功不得被當成 undefined 失敗", () => {
+  // 實作後 it.fails 已改回 it()。成功路徑直接丟出，不能回傳 undefined。
+  it("openDb 成功時直接丟出，不回傳 undefined", async () => {
+    await expect(expectOpenDbRejected()).rejects.toThrow("openDb 應該失敗");
+  }, 15_000);
+});

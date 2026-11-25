@@ -130,28 +130,40 @@ export function unhandledFails(loaded) {
   return !loaded || loaded.ok !== true || loaded.count > 0;
 }
 
-function run(i, cov) {
-  const out = `reports/vitest-run${i}.json`;
-  const unhandledOut = `reports/unhandled-run${i}.json`;
-  discardReport(out);
-  discardReport(unhandledOut);
-  const args = ["scripts/with-pg.mjs", "npx", "vitest", "run", "--reporter=json", "--reporter=./scripts/vitest-live-reporter.mjs", `--outputFile=${out}`];
-  if (cov) args.push("--coverage");
-  let exitFail = false;
-  const startedAt = Date.now();
-  const env = { ...process.env, UNHANDLED_REPORT: unhandledOut };
-  try { execFileSync("node", args, { stdio: "inherit", env }); } catch { exitFail = true; }
-  const loaded = loadRoundReport(out, startedAt);
-  const unhandled = loadUnhandled(unhandledOut, startedAt);
-  if (!loaded.ok) return { m: new Map(), exitFail: true, ok: false, numFailedTests: 0, report: null, unhandled, startedAt };
-  const r = loaded.report;
+function statusMap(report) {
   const m = new Map();
-  const files = Array.isArray(r.testResults) ? r.testResults : [];
+  const files = Array.isArray(report.testResults) ? report.testResults : [];
   for (const f of files) {
     const rows = Array.isArray(f && f.assertionResults) ? f.assertionResults : [];
     for (const t of rows) m.set(failureIdentity(f.name, t.fullName), t.status);
   }
-  return { m, exitFail, ok: r.success, numFailedTests: Number(r.numFailedTests) || 0, report: r, unhandled, startedAt };
+  return m;
+}
+
+function loadSpawnedRound(out, unhandledOut, suiteOut, startedAt, exitFail) {
+  const loaded = loadRoundReport(out, startedAt);
+  const unhandled = loadUnhandled(unhandledOut, startedAt);
+  const suite = loadUnhandled(suiteOut, startedAt);
+  if (!loaded.ok) return { m: new Map(), exitFail: true, ok: false, numFailedTests: 0, report: null, unhandled, suite, startedAt };
+  const r = loaded.report;
+  return { m: statusMap(r), exitFail, ok: r.success, numFailedTests: Number(r.numFailedTests) || 0, report: r, unhandled, suite, startedAt };
+}
+
+export function run(i, cov, spawnSyncFn) {
+  const out = `reports/vitest-run${i}.json`;
+  const unhandledOut = `reports/unhandled-run${i}.json`;
+  const suiteOut = `reports/suite-run${i}.json`;
+  discardReport(out);
+  discardReport(unhandledOut);
+  discardReport(suiteOut);
+  const args = ["scripts/with-pg.mjs", "npx", "vitest", "run", "--reporter=json", "--reporter=./scripts/vitest-live-reporter.mjs", `--outputFile=${out}`];
+  if (cov) args.push("--coverage");
+  let exitFail = false;
+  const startedAt = Date.now();
+  const env = { ...process.env, UNHANDLED_REPORT: unhandledOut, SUITE_REPORT: suiteOut };
+  const spawn = spawnSyncFn ?? execFileSync;
+  try { spawn("node", args, { stdio: "inherit", env }); } catch { exitFail = true; }
+  return loadSpawnedRound(out, unhandledOut, suiteOut, startedAt, exitFail);
 }
 
 function isFlakyPair(left, right) {
@@ -177,10 +189,6 @@ function finish(a, b) {
   const flaky = new Set(names);
   const total = a.m.size - [...a.m.keys()].filter((k) => flaky.has(k)).length;
   return { flaky, failed, total };
-}
-
-function logNames(prefix, names) {
-  for (const name of names) console.log(`${prefix}${name}`);
 }
 
 function pctMeets(bucket, floor) {
@@ -243,6 +251,18 @@ export function gateStops(flags) {
   return flags.failedCount > 0 || flags.total === 0 || flags.round2Lie;
 }
 
+function suiteOutcome(a, b) {
+  const suiteJson = Boolean(a.report) && !reportShapeBad(a.report) && suiteLevelFailure(a.report);
+  const round1Suite = suiteJson || unhandledFails(a.suite);
+  const round2Suite = unhandledFails(b.suite);
+  return { suiteFail: round1Suite || round2Suite, round1Suite, round2Suite };
+}
+
+function appendSuiteNotes(notes, outcome) {
+  if (outcome.round1Suite) notes.push("❌ 第 1 輪有 suite 或 hook 錯誤");
+  if (outcome.round2Suite) notes.push("❌ 第 2 輪有 suite 或 hook 錯誤");
+}
+
 export function judge(a, b, coveragePath) {
   const { flaky, failed, total } = finish(a, b);
   const coverage = loadRoundCoverage(a, coveragePath);
@@ -251,9 +271,10 @@ export function judge(a, b, coveragePath) {
   const round1Unhandled = unhandledFails(a.unhandled);
   const round2Unhandled = unhandledFails(b.unhandled);
   const unhandled = round1Unhandled || round2Unhandled;
-  const suiteFail = Boolean(a.report) && !reportShapeBad(a.report) && suiteLevelFailure(a.report);
+  const suite = suiteOutcome(a, b);
+  const suiteFail = suite.suiteFail;
   const notes = exitNotes(summaryFail, exitFail, round1Unhandled, round2Unhandled, total);
-  if (suiteFail) notes.push("❌ 第 1 輪有 suite 或 hook 錯誤");
+  appendSuiteNotes(notes, suite);
   const explained = flakyExplainedCount(b.m, a.m, flaky);
   const byReport = round2ReportFails(b.exitFail, b.report, a.m, flaky);
   const byCount = round2ExitContradicts(b.exitFail, b.ok, b.numFailedTests, explained);
@@ -263,21 +284,31 @@ export function judge(a, b, coveragePath) {
   return { flaky, failed, total, notes, stop };
 }
 
+/** 報告缺就回 1。否則依 judge.stop 回 0 或 1，並把 FLAKY 排序寫進 .ci/flaky.json。 */
+export function settleMain(a, b, io) {
+  if (!a.report || !b.report) {
+    io.error(formatPartial(io.reportDir));
+    io.log("❌ 第 2 輪報告不存在、解析失敗，或是開跑前的舊檔");
+    return 1;
+  }
+  const outcome = judge(a, b, io.coveragePath);
+  io.writeFile(".ci/flaky.json", JSON.stringify([...outcome.flaky].sort(), null, 2) + "\n");
+  for (const name of outcome.flaky) io.log(`⚠️  FLAKY（已移出必跑清單，須修好再放回）：${name}`);
+  for (const name of outcome.failed) io.log(`❌ 必跑測試失敗：${name}`);
+  io.log(`必跑測試：${outcome.total} 筆，失敗 ${outcome.failed.length}，FLAKY ${outcome.flaky.size}`);
+  for (const line of outcome.notes) io.log(line);
+  return outcome.stop ? 1 : 0;
+}
+
 function main() {
   mkdirSync("reports", { recursive: true }); mkdirSync(".ci", { recursive: true });
-  const a = run(1, true), b = run(2, false);
-  if (!a.report || !b.report) {
-    console.error(formatPartial("reports"));
-    console.log("❌ 第 2 輪報告不存在、解析失敗，或是開跑前的舊檔");
-    process.exit(1);
-  }
-  const { flaky, failed, total, notes, stop } = judge(a, b);
-  writeFileSync(".ci/flaky.json", JSON.stringify([...flaky].sort(), null, 2) + "\n");
-  logNames("⚠️  FLAKY（已移出必跑清單，須修好再放回）：", flaky);
-  logNames("❌ 必跑測試失敗：", failed);
-  console.log(`必跑測試：${total} 筆，失敗 ${failed.length}，FLAKY ${flaky.size}`);
-  for (const line of notes) console.log(line);
-  process.exit(stop ? 1 : 0);
+  const code = settleMain(run(1, true), run(2, false), {
+    reportDir: "reports",
+    error: (msg) => console.error(msg),
+    log: (msg) => console.log(msg),
+    writeFile: writeFileSync,
+  });
+  process.exit(code);
 }
 
 const entry = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href : "";

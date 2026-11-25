@@ -1,5 +1,5 @@
 import pg from "pg";
-import { afterEach, expect } from "vitest";
+import { afterEach } from "vitest";
 import { openDb, type Db } from "../../src/db.js";
 import { requireDatabaseUrl } from "./pg.js";
 
@@ -85,14 +85,12 @@ export async function settleOpenDb(): Promise<{ ok: true; db: Db } | { ok: false
   }
 }
 
-/**
- * 成功就關掉，並斷言 openDb 失敗。回傳那個錯誤（可能是 undefined）。
- * 等同原本的 settle、close、expect(ok).toBe(false)、if (ok) return。
- */
+/** 成功就關掉並直接丟出。失敗則回傳那個錯誤（可能是 undefined）。 */
 export async function expectOpenDbRejected(): Promise<unknown> {
   const outcome = await settleOpenDb();
-  if (outcome.ok) await outcome.db.close().catch(() => {});
-  expect(outcome.ok).toBe(false);
-  if (outcome.ok) return undefined;
+  if (outcome.ok) {
+    await outcome.db.close().catch(() => {});
+    throw new Error("openDb 應該失敗");
+  }
   return outcome.err;
 }

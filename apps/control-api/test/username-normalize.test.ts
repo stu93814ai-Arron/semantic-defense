@@ -396,3 +396,44 @@ describe("U2 掃描與加約束在同一交易並持有 users 鎖", () => {
     expect(await catalogHas(url)).toEqual({ index: true, check: true });
   }, 20_000);
 });
+
+describe("帳號正規化的鎖逾時與只剩索引", () => {
+  const uninstalls: Array<() => void> = [];
+  afterEach(async () => {
+    while (uninstalls.length > 0) uninstalls.pop()?.();
+    const db = await openDb(requireDatabaseUrl());
+    await db.close();
+  });
+
+  it("LOCK users 前，同一條連線的 lock_timeout 是 5s", async () => {
+    const url = requireDatabaseUrl();
+    const prep = await openDb(url);
+    await prep.exec(`DROP INDEX IF EXISTS ${USERS_LOWER_IDX}`);
+    await prep.close();
+    let seen = "";
+    uninstalls.push(installClientHook({
+      onQuery: async ({ sql, run }) => {
+        if (sql.includes("LOCK TABLE users")) {
+          const shown = await run("SHOW lock_timeout");
+          seen = String(shown.rows[0]?.lock_timeout ?? "");
+        }
+        return run();
+      },
+    }, { wrapRelease: false }));
+    const db = await openDb(url);
+    await db.close();
+    expect(seen).toBe("5s");
+  }, 20_000);
+
+  it("只有索引、CHECK 已拿掉時，啟動仍把 CHECK 加回去", async () => {
+    const url = requireDatabaseUrl();
+    const prep = await openDb(url);
+    await prep.exec(`ALTER TABLE users DROP CONSTRAINT IF EXISTS ${USERS_CHECK}`);
+    await prep.close();
+    expect((await catalogHas(url)).index).toBe(true);
+    expect((await catalogHas(url)).check).toBe(false);
+    const db = await openDb(url);
+    await db.close();
+    expect((await catalogHas(url)).check).toBe(true);
+  }, 20_000);
+});
