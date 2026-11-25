@@ -551,6 +551,101 @@ it("主程式讀未處理錯誤檔，不再看報告裡的 unhandledErrors", () 
   expect(src).not.toContain("report.unhandledErrors");
 });
 
+function passedRun(unhandled: { ok: boolean; count: number } = { ok: true, count: 0 }) {
+  return {
+    m: new Map([["apps/a.test.ts > steady", "passed"]]),
+    exitFail: false,
+    ok: true,
+    numFailedTests: 0,
+    report: {
+      success: true,
+      numFailedTests: 0,
+      testResults: [{ name: "apps/a.test.ts", status: "passed", assertionResults: [{ fullName: "steady", status: "passed" }] }],
+    },
+    unhandled,
+    startedAt: Date.now() - 5000,
+  };
+}
+
+function freshSummary() {
+  const summary = join(scratch(), "summary.json");
+  writeFileSync(summary, "{\"total\":{\"lines\":{\"pct\":100},\"statements\":{\"pct\":100},\"functions\":{\"pct\":100},\"branches\":{\"pct\":100}}}\n");
+  return summary;
+}
+
+it("第 1 輪未處理錯誤檔的結果會讓 judge 停下", async () => {
+  const mod = await import("../tests.mjs");
+  const src = readFileSync(resolve(__dirname, "../tests.mjs"), "utf8");
+  expect(src).toContain("const unhandled = loadUnhandled(unhandledOut, startedAt)");
+  expect(src).toContain("unhandledFails(a.unhandled)");
+  const outcome = mod.judge(passedRun({ ok: true, count: 1 }), passedRun(), freshSummary());
+  expect(outcome.stop).toBe(true);
+  expect(outcome.notes.join("\n")).toContain("第 1 輪有未處理錯誤");
+});
+
+it("第 2 輪未處理錯誤檔的結果會讓 judge 停下", async () => {
+  const mod = await import("../tests.mjs");
+  const src = readFileSync(resolve(__dirname, "../tests.mjs"), "utf8");
+  expect(src).toContain("unhandledFails(b.unhandled)");
+  const outcome = mod.judge(passedRun(), passedRun({ ok: true, count: 1 }), freshSummary());
+  expect(outcome.stop).toBe(true);
+});
+
+it.fails("第 2 輪的未處理錯誤印成第 2 輪", async () => {
+  const mod = await import("../tests.mjs");
+  const only2 = mod.judge(passedRun(), passedRun({ ok: true, count: 1 }), freshSummary());
+  const notes2 = only2.notes.join("\n");
+  expect(notes2).toContain("第 2 輪有未處理錯誤");
+  expect(notes2).not.toContain("第 1 輪有未處理錯誤");
+  const only1 = mod.judge(passedRun({ ok: true, count: 1 }), passedRun(), freshSummary());
+  const notes1 = only1.notes.join("\n");
+  expect(notes1).toContain("第 1 輪有未處理錯誤");
+  expect(notes1).not.toContain("第 2 輪有未處理錯誤");
+  const src = readFileSync(resolve(__dirname, "../tests.mjs"), "utf8");
+  expect(src).toContain("❌ 第 2 輪有未處理錯誤");
+});
+
+it("judge 會讀傳入的覆蓋率摘要", () => {
+  const src = readFileSync(resolve(__dirname, "../tests.mjs"), "utf8");
+  expect(src).toContain("loadRoundCoverage(a, coveragePath)");
+});
+
+it("judge 用第 2 輪報告逐筆對上 FLAKY", () => {
+  const src = readFileSync(resolve(__dirname, "../tests.mjs"), "utf8");
+  expect(src).toContain("round2ReportFails(b.exitFail, b.report, a.m, flaky)");
+});
+
+it("judge 用 numFailedTests 對可解釋的筆數", () => {
+  const src = readFileSync(resolve(__dirname, "../tests.mjs"), "utf8");
+  expect(src).toContain("round2ExitContradicts(b.exitFail, b.ok, b.numFailedTests, explained)");
+});
+
+it("第 2 輪說謊是報告或筆數任一成立", () => {
+  const src = readFileSync(resolve(__dirname, "../tests.mjs"), "utf8");
+  expect(src).toContain("const round2Lie = byReport || byCount");
+});
+
+it("第 1 輪無法解釋的非 0 退出碼送進 judge", () => {
+  const src = readFileSync(resolve(__dirname, "../tests.mjs"), "utf8");
+  expect(src).toContain("unexplainedExit(a, failed, summaryFail)");
+});
+
+it("suite 錯誤會送進 gateStops", () => {
+  const src = readFileSync(resolve(__dirname, "../tests.mjs"), "utf8");
+  expect(src).toContain("gateStops({ failedCount: failed.length, coverageFail: summaryFail || exitFail, unhandled, suiteFail, total, round2Lie })");
+});
+
+it("主程式以 judge 的 stop 決定退出碼", () => {
+  const src = readFileSync(resolve(__dirname, "../tests.mjs"), "utf8");
+  expect(src).toContain("process.exit(stop ? 1 : 0)");
+  expect(src).toContain("if (!a.report || !b.report)");
+});
+
+it("主程式把 flaky 排序後寫進 flaky.json", () => {
+  const src = readFileSync(resolve(__dirname, "../tests.mjs"), "utf8");
+  expect(src).toContain("JSON.stringify([...flaky].sort(), null, 2)");
+});
+
 it("覆蓋率摘要缺了或壞了就失敗", async () => {
   const mod = await import("../tests.mjs");
   expect(mod.coverageBelow(null)).toBe(true);
