@@ -426,7 +426,7 @@ async function ensureUsernameNormalized(q: Queryable): Promise<void> {
     try {
       await q.query("LOCK TABLE users IN SHARE ROW EXCLUSIVE MODE");
     } catch (err) {
-      if ((err as { code?: string }).code === "55P03") throw new Error(USERS_LOCK_FAILED);
+      if (errorCode(err) === "55P03") throw new Error(USERS_LOCK_FAILED);
       throw err;
     }
     await assertUsernamesNormalized(q);
@@ -443,16 +443,18 @@ async function ensureUsernameNormalized(q: Queryable): Promise<void> {
   }
 }
 
+/** undefined／null 沒有 code；直接讀 .code 會拋 TypeError。遷移語句與帳號鎖也走這裡。 */
+function errorCode(err: unknown): string | undefined {
+  if (err === null || typeof err !== "object") return undefined;
+  const coded = err as { code?: string };
+  return coded.code;
+}
+
 /**
  * 軟體大總召裁示（未經使用者確認）：pg_advisory_lock(SCHEMA_LOCK) 在交易外，不受
  * SET LOCAL lock_timeout 約束。只對取鎖那一句設 statement_timeout，取到或失敗後立刻還原。
  * 逾時 SQLSTATE 為 57014（不是 55P03）。訊息不含 IP、時間戳、憑證、URL、SQL 或例外字串。
  */
-/** undefined／null 沒有 code；直接讀 .code 會拋 TypeError。 */
-function errorCode(err: unknown): string | undefined {
-  return err !== null && typeof err === "object" ? (err as { code?: string }).code : undefined;
-}
-
 async function acquireSchemaLock(q: pg.PoolClient): Promise<void> {
   const prev = (await q.query<{ statement_timeout: string }>("SHOW statement_timeout")).rows[0]!.statement_timeout;
   await q.query("SELECT set_config('statement_timeout', $1, false)", [`${SCHEMA_LOCK_TIMEOUT_MS}ms`]);
@@ -497,7 +499,7 @@ async function runSchemaStatement(q: Queryable, sql: string): Promise<void> {
     await q.query("COMMIT");
   } catch (err) {
     try { await q.query("ROLLBACK"); } catch { /* 仍拋原錯 */ }
-    if ((err as { code?: string }).code === "55P03") throw new Error(MIGRATE_LOCK_FAILED);
+    if (errorCode(err) === "55P03") throw new Error(MIGRATE_LOCK_FAILED);
     throw err;
   }
 }

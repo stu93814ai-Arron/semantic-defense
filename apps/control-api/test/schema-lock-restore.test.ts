@@ -281,12 +281,10 @@ describe("U6 非 55P03 的遷移錯誤拒絕啟動", () => {
 });
 
 /**
- * errorCode 目前夾在取鎖註解與 acquireSchemaLock 之間，註解沒有對上函式。
- * auto_list_settings 的遷移語句仍直接讀 .code；undefined 會先變成 TypeError。
- * 實作後 it.fails 改回 it()。
+ * 實作後 it.fails 已改回 it()。errorCode 在取鎖註解之前；undefined 不讀 .code。
  */
 describe("errorCode 的位置與 auto_list_settings 遷移", () => {
-  it.fails("errorCode 寫在取鎖註解之前，遷移與帳號鎖都用它讀 code", () => {
+  it("errorCode 寫在取鎖註解之前，遷移與帳號鎖都用它讀 code", () => {
     const src = readFileSync(DB_SRC, "utf8");
     const codeAt = src.indexOf("function errorCode");
     const docAt = src.indexOf("pg_advisory_lock(SCHEMA_LOCK) 在交易外");
@@ -298,7 +296,7 @@ describe("errorCode 的位置與 auto_list_settings 遷移", () => {
     expect(src).not.toContain("(err as { code?: string }).code");
   });
 
-  it.fails("auto_list_settings 遷移語句以 undefined reject 時，錯誤仍是 undefined", async () => {
+  it("auto_list_settings 遷移語句以 undefined reject 時，錯誤仍是 undefined", async () => {
     installClientHook({
       onQuery: async ({ sql, run }) => {
         if (sql.includes("CREATE TABLE IF NOT EXISTS auto_list_settings")) return Promise.reject(undefined);
