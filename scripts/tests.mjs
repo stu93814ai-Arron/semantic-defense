@@ -9,9 +9,22 @@ export function discardReport(out) {
   rmSync(out, { force: true });
 }
 
-/** 第 2 輪退出碼非 0、報告卻顯示成功、且沒有必跑失敗。flaky 比較不走這裡。 */
-export function round2ExitContradicts(exitFail, reportOk, failedCount) {
-  return Boolean(exitFail) && Boolean(reportOk) && failedCount === 0;
+/** 非成功且 numFailedTests 為 0，或可解釋的 FLAKY 筆數對不上報告失敗數，就判失敗。 */
+export function round2ExitContradicts(exitFail, reportOk, numFailedTests, explained = 0) {
+  if (!exitFail && reportOk === true) return false;
+  const reported = Number(numFailedTests) || 0;
+  if (reported === 0) return true;
+  return explained !== reported;
+}
+
+/** 本輪 failed、另一輪 passed、且已標成 FLAKY 的筆數。對不到的失敗不算。 */
+export function flakyExplainedCount(thisRound, otherRound, flaky) {
+  let n = 0;
+  for (const [name, status] of thisRound) {
+    if (status !== "failed") continue;
+    if (flaky.has(name) && otherRound.get(name) === "passed") n += 1;
+  }
+  return n;
 }
 
 function run(i, cov) {
@@ -32,7 +45,7 @@ function run(i, cov) {
   const r = JSON.parse(raw);
   const m = new Map();
   for (const f of r.testResults) for (const t of f.assertionResults) m.set(`${f.name.replace(process.cwd() + "/", "")} > ${t.fullName}`, t.status);
-  return { m, exitFail: covFail, ok: r.success };
+  return { m, exitFail: covFail, ok: r.success, numFailedTests: Number(r.numFailedTests) || 0 };
 }
 
 function finish(a, b, prev) {
@@ -71,8 +84,9 @@ function main() {
   const covOnlyFail = coverageFailed(a, failed);
   if (covOnlyFail) console.log("❌ 覆蓋率低於 70% 門檻");
   if (total === 0) console.log("❌ 沒有任何必跑測試");
-  const round2Lie = round2ExitContradicts(b.exitFail, b.ok, failed.length);
-  if (round2Lie) console.log("❌ 第 2 輪 vitest 退出碼非 0，但報告顯示成功");
+  const explained = flakyExplainedCount(b.m, a.m, flaky);
+  const round2Lie = round2ExitContradicts(b.exitFail, b.ok, b.numFailedTests, explained);
+  if (round2Lie) console.log("❌ 第 2 輪退出碼非 0 或報告不是成功，且失敗沒有全部對上 FLAKY");
   process.exit(mustStop(failed.length, covOnlyFail, total, round2Lie) ? 1 : 0);
 }
 

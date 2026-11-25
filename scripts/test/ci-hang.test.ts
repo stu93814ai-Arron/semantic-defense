@@ -340,16 +340,16 @@ it("第 2 輪跑前刪掉舊報告，退出碼非 0 且報告成功時不當通�
   expect(src).toContain("round2ExitContradicts(");
 });
 
-it.fails("第 2 輪退出碼非 0 或報告不是成功時，失敗數 0 也要失敗", async () => {
+it("第 2 輪退出碼非 0 或報告不是成功時，失敗數 0 也要失敗", async () => {
   const mod = await import("../tests.mjs");
   expect(mod.round2ExitContradicts(true, true, 0)).toBe(true);
   expect(mod.round2ExitContradicts(true, false, 0)).toBe(true);
   expect(mod.round2ExitContradicts(false, false, 0)).toBe(true);
   expect(mod.round2ExitContradicts(false, true, 0)).toBe(false);
-  expect(mod.round2ExitContradicts(true, true, 2)).toBe(false);
+  expect(mod.round2ExitContradicts(true, true, 2)).toBe(true);
 });
 
-it.fails("numFailedTests 為 1 且該筆是 FLAKY 時放行", async () => {
+it("numFailedTests 為 1 且該筆是 FLAKY 時放行", async () => {
   const mod = await import("../tests.mjs");
   const name = "suite > one";
   const explained = mod.flakyExplainedCount(new Map([[name, "failed"]]), new Map([[name, "passed"]]), new Set([name]));
@@ -357,7 +357,7 @@ it.fails("numFailedTests 為 1 且該筆是 FLAKY 時放行", async () => {
   expect(mod.round2ExitContradicts(true, false, 1, explained)).toBe(false);
 });
 
-it.fails("numFailedTests 為 2 但只有 1 筆可對應 FLAKY 時失敗", async () => {
+it("numFailedTests 為 2 但只有 1 筆可對應 FLAKY 時失敗", async () => {
   const mod = await import("../tests.mjs");
   const flaky = new Set(["suite > one"]);
   const other = new Map([["suite > one", "passed"], ["suite > two", "failed"]]);
@@ -369,7 +369,7 @@ it.fails("numFailedTests 為 2 但只有 1 筆可對應 FLAKY 時失敗", async 
   expect(mod.round2ExitContradicts(true, false, 2, 1)).toBe(true);
 });
 
-it.fails("第 2 輪用報告的 numFailedTests 對可解釋的 FLAKY", () => {
+it("第 2 輪用報告的 numFailedTests 對可解釋的 FLAKY", () => {
   const src = readFileSync(resolve(__dirname, "../tests.mjs"), "utf8");
   expect(src).toContain("numFailedTests: Number(r.numFailedTests) || 0");
   expect(src).toContain("flakyExplainedCount(b.m, a.m, flaky)");
