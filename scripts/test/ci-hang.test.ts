@@ -648,7 +648,8 @@ function passedRun(unhandled: { ok: boolean; count: number } = { ok: true, count
 
 function freshSummary() {
   const summary = join(scratch(), "summary.json");
-  writeFileSync(summary, "{\"total\":{\"lines\":{\"pct\":100},\"statements\":{\"pct\":100},\"functions\":{\"pct\":100},\"branches\":{\"pct\":100}}}\n");
+  const total = { lines: { pct: 100 }, statements: { pct: 100 }, functions: { pct: 100 }, branches: { pct: 100 } };
+  writeFileSync(summary, `${JSON.stringify({ startTime: Date.now(), total })}\n`);
   return summary;
 }
 
@@ -886,8 +887,72 @@ it("第 2 輪報告不存在、解析失敗或是開跑前的舊檔就失敗", a
   utimesSync(old, 1, 1);
   expect(mod.loadRoundReport(old, Date.now()).ok).toBe(false);
   const fresh = join(dir, "fresh.json");
-  writeFileSync(fresh, "{\"success\":true,\"numFailedTests\":0,\"testResults\":[]}");
-  expect(mod.loadRoundReport(fresh, Date.now() - 5000).ok).toBe(true);
+  const now = Date.now();
+  writeFileSync(fresh, JSON.stringify({ success: true, numFailedTests: 0, testResults: [], startTime: now }));
+  expect(mod.loadRoundReport(fresh, now - 5000).ok).toBe(true);
+});
+
+function writeAged(path: string, body: string, mtimeMs: number) {
+  writeFileSync(path, body);
+  utimesSync(path, mtimeMs / 1000, mtimeMs / 1000);
+}
+
+it.fails("報告新舊看 startTime 或 run-id，不再放寬 2 秒 mtime", async () => {
+  const mod = await import("../tests.mjs");
+  const dir = scratch();
+  const startedAt = 1_700_000_000_000;
+  const round = { success: true, numFailedTests: 0, testResults: [] as unknown[] };
+  const total = { lines: { pct: 99 }, statements: { pct: 99 }, functions: { pct: 99 }, branches: { pct: 99 } };
+  const mtimeGrace = join(dir, "mtime-grace.json");
+  writeAged(mtimeGrace, JSON.stringify(round), startedAt - 1000);
+  expect(mod.loadRoundReport(mtimeGrace, startedAt).reason).toBe("stale");
+  const early = join(dir, "early.json");
+  writeAged(early, JSON.stringify({ ...round, startTime: startedAt - 1000 }), startedAt);
+  expect(mod.loadRoundReport(early, startedAt).reason).toBe("stale");
+  const byTime = join(dir, "by-time.json");
+  writeAged(byTime, JSON.stringify({ ...round, startTime: startedAt }), 1000);
+  expect(mod.loadRoundReport(byTime, startedAt - 5000).ok).toBe(true);
+  const byPath = join(dir, `report-run-${startedAt}.json`);
+  writeAged(byPath, JSON.stringify(round), 1000);
+  expect(mod.loadRoundReport(byPath, startedAt).ok).toBe(true);
+  const uGrace = join(dir, "u-grace.json");
+  writeAged(uGrace, "{\"count\":0}\n", startedAt - 1000);
+  expect(mod.loadUnhandled(uGrace, startedAt).reason).toBe("stale");
+  const uEarly = join(dir, "u-early.json");
+  writeAged(uEarly, JSON.stringify({ count: 0, startTime: startedAt - 1000 }), startedAt);
+  expect(mod.loadUnhandled(uEarly, startedAt).reason).toBe("stale");
+  const uTime = join(dir, "u-time.json");
+  writeAged(uTime, JSON.stringify({ count: 0, startTime: startedAt }), 1000);
+  expect(mod.loadUnhandled(uTime, startedAt - 5000).ok).toBe(true);
+  const uPath = join(dir, `count-run-${startedAt}.json`);
+  writeAged(uPath, "{\"count\":0}\n", 1000);
+  expect(mod.loadUnhandled(uPath, startedAt).ok).toBe(true);
+  const cGrace = join(dir, "c-grace.json");
+  writeAged(cGrace, JSON.stringify({ total }), startedAt - 1000);
+  expect(mod.loadCoverageSummary(cGrace, startedAt).reason).toBe("stale");
+  const cEarly = join(dir, "c-early.json");
+  writeAged(cEarly, JSON.stringify({ startTime: startedAt - 1000, total }), startedAt);
+  expect(mod.loadCoverageSummary(cEarly, startedAt).reason).toBe("stale");
+  const cTime = join(dir, "c-time.json");
+  writeAged(cTime, JSON.stringify({ startTime: startedAt, total }), 1000);
+  expect(mod.loadCoverageSummary(cTime, startedAt - 5000).ok).toBe(true);
+  const covDir = join(dir, `coverage-run-${startedAt}`);
+  mkdirSync(covDir, { recursive: true });
+  writeAged(join(covDir, "coverage-summary.json"), JSON.stringify({ total }), 1000);
+  expect(mod.loadCoverageSummary(join(covDir, "coverage-summary.json"), startedAt).ok).toBe(true);
+  const cfg = readFileSync(resolve(ROOT, "vitest.config.ts"), "utf8");
+  expect(cfg).toContain("reportsDirectory: process.env.SD_COVERAGE_DIR || \"reports/coverage\"");
+  let coverageDir = "";
+  const before = Date.now();
+  mod.run(6, true, (_file: string, _args: string[], options: { env?: NodeJS.ProcessEnv }) => {
+    coverageDir = String(options.env?.SD_COVERAGE_DIR ?? "");
+    throw new Error("stop");
+  });
+  const matched = /^reports\/coverage-run-(\d+)$/.exec(coverageDir);
+  expect(matched).not.toBeNull();
+  const stamp = Number(matched?.[1]);
+  expect(stamp).toBeGreaterThanOrEqual(before);
+  expect(stamp).toBeLessThanOrEqual(Date.now());
 });
 
 it("停不住的 postmaster 會在時限內收到 SIGKILL", async () => {
@@ -1163,11 +1228,12 @@ it("run 讀 suite 筆數檔，空 message 的 FLAKY 仍停下", async () => {
     const suite = env.SUITE_REPORT;
     const unhandled = env.UNHANDLED_REPORT;
     if (!suite || !unhandled) throw new Error("suite report env missing");
-    writeFileSync(suite, `{"count":${count}}\n`);
-    writeFileSync(unhandled, "{\"count\":0}\n");
+    const at = Date.now();
+    writeFileSync(suite, `{"count":${count},"startTime":${at}}\n`);
+    writeFileSync(unhandled, `{"count":0,"startTime":${at}}\n`);
     const out = [..._args].reverse().find((arg) => arg.startsWith("--outputFile="));
     if (!out) throw new Error("outputFile missing");
-    writeFileSync(out.slice("--outputFile=".length), JSON.stringify(body));
+    writeFileSync(out.slice("--outputFile=".length), JSON.stringify({ ...body, startTime: at }));
     if (fail) throw new Error("vitest exit 1");
   };
   try {
