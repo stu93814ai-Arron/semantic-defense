@@ -373,10 +373,12 @@ it("第 2 輪用報告的 numFailedTests 對可解釋的 FLAKY", () => {
   const src = readFileSync(resolve(__dirname, "../tests.mjs"), "utf8");
   expect(src).toContain("numFailedTests: Number(r.numFailedTests) || 0");
   expect(src).toContain("flakyExplainedCount(b.m, a.m, flaky)");
+  expect(src).toContain("loadRoundReport(");
+  expect(src).toContain("round2ReportFails(");
   expect(src).not.toContain("round2ExitContradicts(b.exitFail, b.ok, failed.length)");
 });
 
-it.fails("失敗對應必須是檔案加完整測試名稱，筆數要等於 numFailedTests", async () => {
+it("失敗對應必須是檔案加完整測試名稱，筆數要等於 numFailedTests", async () => {
   const mod = await import("../tests.mjs");
   const full = "Group case";
   const idA = mod.failureIdentity(`${process.cwd()}/apps/a.test.ts`, full);
@@ -393,7 +395,7 @@ it.fails("失敗對應必須是檔案加完整測試名稱，筆數要等於 num
   expect(mod.round2ReportFails(true, { ...report, numFailedTests: 2 }, new Map([[idA, "passed"]]), new Set([idA]))).toBe(true);
 });
 
-it.fails("報告沒有逐筆結果時無法對應，另一輪通過才算 FLAKY", async () => {
+it("報告沒有逐筆結果時無法對應，另一輪通過才算 FLAKY", async () => {
   const mod = await import("../tests.mjs");
   expect(mod.round2ReportFails(true, { success: false, numFailedTests: 1 }, new Map(), new Set())).toBe(true);
   const id = mod.failureIdentity("apps/a.test.ts", "Group case");
@@ -406,7 +408,7 @@ it.fails("報告沒有逐筆結果時無法對應，另一輪通過才算 FLAKY"
   expect(mod.round2ReportFails(true, report, new Map([[id, "passed"]]), new Set([id]))).toBe(false);
 });
 
-it.fails("suite 層級錯誤或 unhandled errors 即使其餘是 FLAKY 也失敗", async () => {
+it("suite 層級錯誤或 unhandled errors 即使其餘是 FLAKY 也失敗", async () => {
   const mod = await import("../tests.mjs");
   const id = mod.failureIdentity("apps/a.test.ts", "Group case");
   const flakyCase = { name: "apps/a.test.ts", status: "failed", assertionResults: [{ fullName: "Group case", status: "failed" }] };
@@ -422,7 +424,7 @@ it.fails("suite 層級錯誤或 unhandled errors 即使其餘是 FLAKY 也失敗
   expect(mod.round2ReportFails(true, unhandled, other, flaky)).toBe(true);
 });
 
-it.fails("第 2 輪報告不存在、解析失敗或是開跑前的舊檔就失敗", async () => {
+it("第 2 輪報告不存在、解析失敗或是開跑前的舊檔就失敗", async () => {
   const mod = await import("../tests.mjs");
   const dir = scratch();
   expect(mod.loadRoundReport(join(dir, "missing.json"), Date.now()).ok).toBe(false);
