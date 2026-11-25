@@ -50,6 +50,7 @@ function killLog(base: string, preload: string, dir: string): string {
   });
   expect(ran.error, ran.stderr).toBeUndefined();
   expect(ran.status, ran.stderr + ran.stdout).toBe(0);
+  expect(existsSync(dir), dir).toBe(false);
   return existsSync(log) ? readFileSync(log, "utf8") : "";
 }
 
@@ -58,7 +59,8 @@ function writePid(dir: string, text: string): void {
   writeFileSync(join(dir, "data", "postmaster.pid"), text);
 }
 
-it.fails("壞的 postmaster.pid 與不相干程序不會被守望殺掉", () => {
+// 實作後 it.fails 已改回 it()。pid 檔未驗證前會對 -1 或別人的 pid 送 SIGKILL。
+it("壞的 postmaster.pid 與不相干程序不會被守望殺掉", () => {
   const base = mkdtempSync(join(tmpdir(), "sd-reaper-"));
   const preload = join(base, "hook.cjs");
   writeFileSync(preload, HOOK);
@@ -87,7 +89,8 @@ it.fails("壞的 postmaster.pid 與不相干程序不會被守望殺掉", () => 
   }
 });
 
-it.fails("只有這個資料目錄的 postgres 才殺，而且只有群組首領才殺整群", () => {
+// 實作後 it.fails 已改回 it()。
+it("只有這個資料目錄的 postgres 才殺，而且只有群組首領才殺整群", () => {
   const base = mkdtempSync(join(tmpdir(), "sd-reaper-"));
   const driver = join(base, "driver.mjs");
   const url = pathToFileURL(REAPER).href;
