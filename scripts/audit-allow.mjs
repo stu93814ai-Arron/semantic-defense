@@ -57,8 +57,9 @@ function addIsoDays(iso, days) {
 function expiryError(exc, today) {
   const name = excName(exc);
   const raw = exc?.expires;
-  const parts = typeof raw === "string" ? isoParts(raw) : null;
-  if (!parts) return `audit: ${name} 例外缺少到期日，拒絕放行`;
+  if (typeof raw !== "string" || raw === "") return `audit: ${name} 例外缺少到期日，拒絕放行`;
+  const parts = isoParts(raw);
+  if (!parts) return `audit: ${name} 例外到期日格式須為 YYYY-MM-DD，拒絕放行`;
   if (!calendarOk(parts[0], parts[1], parts[2])) return `audit: ${name} 例外到期日不是真實日期，拒絕放行`;
   if (!(today < raw)) return `audit: ${name} 例外已於 ${raw} 到期，請移除例外並升版`;
   const latest = addIsoDays(today, MAX_EXC_DAYS);

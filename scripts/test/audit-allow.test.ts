@@ -210,9 +210,9 @@ describe("evaluateAudit：例外比對綁定 advisory、套件、範圍與修補
 });
 
 // m9：拿掉 YYYY-MM-DD 錨定後，未補零的 2026-12-1 會被當成真實日期而放行，本測試轉紅。
-// 格式錯誤目前仍說「缺少到期日」。改成精確訊息後，it.fails 會改回 it。
+// 實作後 it.fails 已改回 it()。格式錯誤講明 YYYY-MM-DD，仍然擋下。
 describe("evaluateAudit：到期日格式", () => {
-  it.fails("格式不對要講明須為 YYYY-MM-DD，仍然擋下", () => {
+  it("格式不對要講明須為 YYYY-MM-DD，仍然擋下", () => {
     for (const expires of ["2026-12-1", "2026-2-28", "2026/12/01", "2026-12-01 ", "   ", "not-a-date", "20261201"]) {
       const r = auditWith(emptyScan, "2026-11-25", [{ ...FAKE, expires }]);
       expect(r.ok, expires).toBe(false);
