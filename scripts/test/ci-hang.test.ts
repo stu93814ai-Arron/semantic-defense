@@ -679,6 +679,76 @@ it("停 postgres 逾時會對程序群組 SIGKILL", () => {
   expect(boot).toContain("cluster.process.pid");
 });
 
+function writeFlakyProject(hook: boolean) {
+  const root = mkdtempSync(join(ROOT, "reports", "flaky-"));
+  dirs.push(root);
+  writeFileSync(join(root, "covered.ts"), "export function covered(n: number) { return n + 1; }\n");
+  const imports = hook ? "afterAll, expect, it" : "expect, it";
+  const hookLine = hook ? "afterAll(() => { if (process.env.HOOK === \"1\") throw new Error(\"hook-boom\"); });\n" : "";
+  writeFileSync(join(root, "flaky.test.ts"), `import { ${imports} } from "vitest";\nimport { covered } from "./covered";\nit("steady", () => { expect(covered(0)).toBe(1); });\nit("case", () => { expect(covered(1)).toBe(process.env.ROUND === "1" ? 1 : 2); });\n${hookLine}`);
+  const cov = JSON.stringify(join(root, "cov"));
+  const configPath = JSON.stringify(join(ROOT, "vitest.config.ts"));
+  writeFileSync(join(root, "vitest.config.ts"), `import { defineConfig } from "vitest/config";\nimport rootConfig from ${configPath};\nconst base = rootConfig.test.coverage;\nexport default defineConfig({ test: { include: ["flaky.test.ts"], watch: false, fileParallelism: false,\n  coverage: { ...base, include: ["covered.ts"], reportsDirectory: ${cov}, reporter: ["json-summary"] } } });\n`);
+  return root;
+}
+
+function runFixture(root: string, env: Record<string, string>, outName: string, coverage: boolean) {
+  const json = join(root, outName);
+  const args = [resolve(ROOT, "node_modules/vitest/vitest.mjs"), "run", "--root", root, "--config", join(root, "vitest.config.ts")];
+  if (coverage) args.push("--coverage");
+  args.push("--reporter=json", `--outputFile=${json}`);
+  const r = spawnSync(process.execPath, args, { encoding: "utf8", env: { ...process.env, ...env, LIVE_REPORT_DIR: join(root, "live") }, cwd: ROOT });
+  return { r, json };
+}
+
+it.fails("真 FLAKY 仍寫出覆蓋率摘要且只把該筆列入 flaky", async () => {
+  const src = readFileSync(join(ROOT, "vitest.config.ts"), "utf8");
+  expect(src).toContain("reportOnFailure: true");
+  const root = writeFlakyProject(false);
+  const started = Date.now() - 5000;
+  const first = runFixture(root, { ROUND: "1" }, "run1.json", true);
+  expect(first.r.status, first.r.stdout + first.r.stderr).not.toBe(0);
+  expect(existsSync(join(root, "cov", "coverage-summary.json"))).toBe(true);
+  const second = runFixture(root, { ROUND: "2" }, "run2.json", false);
+  expect(second.r.status, second.r.stdout + second.r.stderr).toBe(0);
+  const mod = await import("../tests.mjs");
+  const round = (file: string, exitFail: boolean) => {
+    const report = JSON.parse(text(file));
+    const m = new Map<string, string>();
+    for (const suite of report.testResults) for (const row of suite.assertionResults) m.set(mod.failureIdentity(suite.name, row.fullName), row.status);
+    return { m, exitFail, ok: report.success, numFailedTests: report.numFailedTests, report, unhandled: { ok: true, count: 0 }, startedAt: started };
+  };
+  const outcome = mod.judge(round(first.json, true), round(second.json, false), join(root, "cov", "coverage-summary.json"));
+  const caseId = mod.failureIdentity(join(root, "flaky.test.ts"), "case");
+  expect(outcome.stop).toBe(false);
+  expect([...outcome.flaky].sort()).toEqual([caseId]);
+});
+
+it.fails("第 1 輪 afterAll 拋錯加上一筆 FLAKY 時退出碼不是 0", async () => {
+  const root = writeFlakyProject(true);
+  const first = runFixture(root, { ROUND: "1", HOOK: "1" }, "run1.json", false);
+  const second = runFixture(root, { ROUND: "2" }, "run2.json", false);
+  expect(first.r.status, first.r.stdout + first.r.stderr).not.toBe(0);
+  expect(second.r.status, second.r.stdout + second.r.stderr).toBe(0);
+  const mod = await import("../tests.mjs");
+  const report = JSON.parse(text(first.json));
+  const caseId = mod.failureIdentity(report.testResults[0].name, "case");
+  expect(mod.round2ReportFails(true, report, new Map([[caseId, "passed"]]), new Set([caseId]))).toBe(true);
+  const summary = join(root, "summary.json");
+  writeFileSync(summary, "{\"total\":{\"lines\":{\"pct\":100},\"statements\":{\"pct\":100},\"functions\":{\"pct\":100},\"branches\":{\"pct\":100}}}\n");
+  const started = Date.now() - 5000;
+  const asRun = (file: string, exitFail: boolean) => {
+    const body = JSON.parse(text(file));
+    const m = new Map<string, string>();
+    for (const suite of body.testResults) for (const row of suite.assertionResults ?? []) m.set(mod.failureIdentity(suite.name, row.fullName), row.status);
+    return { m, exitFail, ok: body.success, numFailedTests: body.numFailedTests, report: body, unhandled: { ok: true, count: 0 }, startedAt: started };
+  };
+  const outcome = mod.judge(asRun(first.json, true), asRun(second.json, false), summary);
+  expect(outcome.flaky).toContain(caseId);
+  expect(outcome.stop).toBe(true);
+  expect(readFileSync(resolve(__dirname, "../tests.mjs"), "utf8")).toContain("suiteLevelFailure(a.report)");
+});
+
 it("開跑前刪掉舊的 vitest 報告", async () => {
   const mod = await import("../tests.mjs");
   const dir = scratch();
