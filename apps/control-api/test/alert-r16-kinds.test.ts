@@ -4,6 +4,7 @@ import { enqueueAlerts, type AlertKind } from "../src/alert-outbox.js";
 import { formatMail } from "../src/alert-smtp.js";
 import { buildApp, seedPhase2Fixtures, type ControlApi } from "./helpers/app.js";
 import { openDb } from "../src/db.js";
+import { installClientHook } from "./helpers/pg-client-hook.js";
 import { requireDatabaseUrl } from "./helpers/pg.js";
 
 let app: ControlApi;
@@ -98,6 +99,15 @@ describe("ensureAlertKindCheck（資安非阻擋項）", () => {
     }
   });
 
+  it("kind CHECK 過時時，ADD CONSTRAINT 當下 SHOW lock_timeout 是 5s", async () => {
+    const url = requireDatabaseUrl();
+    await narrowKindCheck(url);
+    const seen = await lockTimeoutAtKindAdd(url);
+    expect(seen).toBe("5s");
+    const restored = await openDb(url);
+    await restored.close();
+  }, 20_000);
+
   it("舊庫只有 R16 以前的 kind（含 tick_fail）：啟動時升級為含全部 kind，approve_cap／approve_volume 可入列", async () => {
     await boot();
     await app.db.exec("ALTER TABLE alert_outbox DROP CONSTRAINT alert_outbox_kind_check");
@@ -120,6 +130,35 @@ describe("ensureAlertKindCheck（資安非阻擋項）", () => {
 });
 
 type Q = { query<T>(sql: string, params?: unknown[]): Promise<{ rows: T[] }> };
+
+async function narrowKindCheck(url: string): Promise<void> {
+  const prep = await openDb(url);
+  await prep.exec("DELETE FROM alert_outbox WHERE kind NOT IN ('auto_list','volume','breaker_open')");
+  await prep.exec("ALTER TABLE alert_outbox DROP CONSTRAINT IF EXISTS alert_outbox_kind_check");
+  await prep.exec(
+    "ALTER TABLE alert_outbox ADD CONSTRAINT alert_outbox_kind_check CHECK (kind IN ('auto_list','volume','breaker_open'))",
+  );
+  await prep.close();
+}
+
+async function lockTimeoutAtKindAdd(url: string): Promise<string> {
+  let seen = "";
+  const off = installClientHook({
+    onQuery: async ({ sql, run }) => {
+      if (!sql.includes("ADD CONSTRAINT") || !sql.includes("alert_outbox_kind_check")) return run();
+      const shown = await run("SHOW lock_timeout");
+      seen = String(shown.rows[0]?.lock_timeout ?? "");
+      return run();
+    },
+  }, { wrapRelease: false });
+  try {
+    const db = await openDb(url);
+    await db.close();
+    return seen;
+  } finally {
+    off();
+  }
+}
 
 async function insertKind(db: Q, kind: string): Promise<void> {
   await db.query(
