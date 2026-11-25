@@ -1,6 +1,6 @@
-// 必跑測試：跑兩次比對每個測試結果；時過時不過者標為 FLAKY，寫入 .ci/flaky.json 並移出必跑清單
+// 必跑測試：跑兩次。只有同一筆一輪 failed、另一輪 passed 才寫入 .ci/flaky.json。
 import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, statSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, rmSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { formatPartial } from "./live-report.mjs";
@@ -126,29 +126,54 @@ function run(i, cov) {
   return { m, exitFail: covFail, ok: r.success, numFailedTests: Number(r.numFailedTests) || 0, report: r };
 }
 
-function finish(a, b, prev) {
-  const flaky = new Set(prev);
-  for (const [k, s] of a.m) if (b.m.get(k) !== s) flaky.add(k);
-  const failed = [...a.m].filter(([k, s]) => !flaky.has(k) && (s !== "passed" || b.m.get(k) !== "passed")).map(([k]) => k);
-  const total = a.m.size - [...a.m.keys()].filter((k) => flaky.has(k)).length;
-  return { flaky, failed, total };
+function isFlakyPair(left, right) {
+  return (left === "failed" && right === "passed") || (left === "passed" && right === "failed");
 }
 
-function loadPrev() {
-  if (!existsSync(".ci/flaky.json")) return [];
-  return JSON.parse(readFileSync(".ci/flaky.json", "utf8"));
+/** 只有同一筆一輪 failed、另一輪 passed 才是 FLAKY。缺席與 skipped 留在失敗清單。 */
+export function classifyRounds(round1, round2) {
+  const flaky = [];
+  const failed = [];
+  const keys = new Set([...round1.keys(), ...round2.keys()]);
+  for (const key of keys) {
+    const left = round1.get(key);
+    const right = round2.get(key);
+    if (isFlakyPair(left, right)) flaky.push(key);
+    else if (left !== "passed" || right !== "passed") failed.push(key);
+  }
+  return { flaky, failed };
+}
+
+function finish(a, b) {
+  const { flaky: names, failed } = classifyRounds(a.m, b.m);
+  const flaky = new Set(names);
+  const total = a.m.size - [...a.m.keys()].filter((k) => flaky.has(k)).length;
+  return { flaky, failed, total };
 }
 
 function logNames(prefix, names) {
   for (const name of names) console.log(`${prefix}${name}`);
 }
 
+function belowFloor(bucket, floor) {
+  return Boolean(bucket) && typeof bucket.pct === "number" && bucket.pct < floor;
+}
+
+/** 覆蓋率摘要的 lines／statements／functions／branches 任一低於門檻。 */
+export function coverageBelow(summary, floor = 70) {
+  const total = summary && summary.total;
+  if (!total) return false;
+  return belowFloor(total.lines, floor) || belowFloor(total.statements, floor) || belowFloor(total.functions, floor) || belowFloor(total.branches, floor);
+}
+
 function coverageFailed(runResult, failed) {
   return runResult.exitFail && failed.length === 0 && [...runResult.m.values()].every((status) => status === "passed");
 }
 
-function mustStop(failedCount, covOnlyFail, total, round2Lie) {
-  return failedCount > 0 || covOnlyFail || total === 0 || round2Lie;
+/** 第 1 輪未處理錯誤與覆蓋率不足獨立失敗，不會被 FLAKY 吸收。 */
+export function gateStops(flags) {
+  if (flags.unhandled || flags.coverageFail) return true;
+  return flags.failedCount > 0 || flags.total === 0 || flags.round2Lie;
 }
 
 function main() {
@@ -159,20 +184,22 @@ function main() {
     console.log("❌ 第 2 輪報告不存在、解析失敗，或是開跑前的舊檔");
     process.exit(1);
   }
-  const { flaky, failed, total } = finish(a, b, loadPrev());
+  const { flaky, failed, total } = finish(a, b);
   writeFileSync(".ci/flaky.json", JSON.stringify([...flaky].sort(), null, 2) + "\n");
   logNames("⚠️  FLAKY（已移出必跑清單，須修好再放回）：", flaky);
   logNames("❌ 必跑測試失敗：", failed);
   console.log(`必跑測試：${total} 筆，失敗 ${failed.length}，FLAKY ${flaky.size}`);
-  const covOnlyFail = coverageFailed(a, failed);
-  if (covOnlyFail) console.log("❌ 覆蓋率低於 70% 門檻");
+  const coverageFail = coverageBelow(readJson("reports/coverage/coverage-summary.json")) || coverageFailed(a, failed);
+  const unhandled = hasUnhandled(a.report);
+  if (coverageFail) console.log("❌ 覆蓋率低於 70% 門檻");
+  if (unhandled) console.log("❌ 第 1 輪有未處理錯誤");
   if (total === 0) console.log("❌ 沒有任何必跑測試");
   const explained = flakyExplainedCount(b.m, a.m, flaky);
   const byReport = round2ReportFails(b.exitFail, b.report, a.m, flaky);
   const byCount = round2ExitContradicts(b.exitFail, b.ok, b.numFailedTests, explained);
   const round2Lie = byReport || byCount;
   if (round2Lie) console.log("❌ 第 2 輪退出碼非 0 或報告不是成功，且失敗沒有全部對上 FLAKY");
-  process.exit(mustStop(failed.length, covOnlyFail, total, round2Lie) ? 1 : 0);
+  process.exit(gateStops({ failedCount: failed.length, coverageFail, unhandled, total, round2Lie }) ? 1 : 0);
 }
 
 const entry = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href : "";

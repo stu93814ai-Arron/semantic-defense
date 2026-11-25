@@ -285,32 +285,35 @@ it("沒閉合的引號遮到結尾", async () => {
   expect(await maskedQuery("SELECT 'SECRET")).toBe("SELECT '?'");
 });
 
-it.fails("行註解裡的引號不會讓 SECRET_AFTER 露出", async () => {
+it("行註解裡的引號不會讓 SECRET_AFTER 露出", async () => {
   const out = await maskedQuery("-- it's\nSELECT 'SECRET_AFTER'");
   expect(out).not.toContain("SECRET_AFTER");
   expect(out).not.toContain("it's");
 });
 
-it.fails("區塊註解裡的引號不會讓 SECRET_B2 露出", async () => {
+it("區塊註解裡的引號不會讓 SECRET_B2 露出", async () => {
   const out = await maskedQuery("/* don't */ SELECT 'SECRET_B2'");
   expect(out).not.toContain("SECRET_B2");
   expect(out).not.toContain("don't");
   expect(await maskedQuery("/* hunter2")).not.toContain("hunter2");
 });
 
-it.fails("雙引號識別字裡的引號不會讓 SECRET_DQ 露出", async () => {
+it("雙引號識別字裡的引號不會讓 SECRET_DQ 露出", async () => {
   const out = await maskedQuery("SELECT \"we'ird\", 'SECRET_DQ'");
   expect(out).not.toContain("SECRET_DQ");
   expect(out).toContain("\"we'ird\"");
+  const escaped = await maskedQuery("SELECT \"we\"\"ird\", 'SECRET_DQ'");
+  expect(escaped).toContain("\"we\"\"ird\"");
+  expect(escaped).not.toContain("SECRET_DQ");
 });
 
-it.fails("行註解整段遮掉", async () => {
+it("行註解整段遮掉", async () => {
   const out = await maskedQuery("SELECT 1 -- password hunter2");
   expect(out).not.toContain("hunter2");
   expect(out).not.toContain("password");
 });
 
-it.fails("十六進位與指數整段遮成問號，識別字裡的數字保留", async () => {
+it("十六進位與指數整段遮成問號，識別字裡的數字保留", async () => {
   const nums = await maskedQuery("SELECT 0xFF, 1e10, 1.5E-3");
   expect(nums).not.toContain("FF");
   expect(nums).not.toContain("e10");
@@ -410,6 +413,9 @@ it("第 2 輪用報告的 numFailedTests 對可解釋的 FLAKY", () => {
   expect(src).toContain("flakyExplainedCount(b.m, a.m, flaky)");
   expect(src).toContain("loadRoundReport(");
   expect(src).toContain("round2ReportFails(");
+  expect(src).toContain("classifyRounds(a.m, b.m)");
+  expect(src).toContain("hasUnhandled(a.report)");
+  expect(src).toContain("coverageBelow(");
   expect(src).not.toContain("round2ExitContradicts(b.exitFail, b.ok, failed.length)");
 });
 
@@ -459,7 +465,7 @@ it("suite 層級錯誤或 unhandled errors 即使其餘是 FLAKY 也失敗", asy
   expect(mod.round2ReportFails(true, unhandled, other, flaky)).toBe(true);
 });
 
-it.fails("第 1 輪 failed、第 2 輪缺席不算 FLAKY 且要失敗", async () => {
+it("第 1 輪 failed、第 2 輪缺席不算 FLAKY 且要失敗", async () => {
   const mod = await import("../tests.mjs");
   const id = "apps/a.test.ts > case";
   const out = mod.classifyRounds(new Map([[id, "failed"]]), new Map());
@@ -468,7 +474,7 @@ it.fails("第 1 輪 failed、第 2 輪缺席不算 FLAKY 且要失敗", async ()
   expect(mod.gateStops({ failedCount: out.failed.length, coverageFail: false, unhandled: false, total: 1, round2Lie: false })).toBe(true);
 });
 
-it.fails("第 1 輪 passed、第 2 輪缺席或 skipped 不寫入 FLAKY", async () => {
+it("第 1 輪 passed、第 2 輪缺席或 skipped 不寫入 FLAKY", async () => {
   const mod = await import("../tests.mjs");
   const id = "apps/a.test.ts > case";
   const absent = mod.classifyRounds(new Map([[id, "passed"]]), new Map());
@@ -479,7 +485,7 @@ it.fails("第 1 輪 passed、第 2 輪缺席或 skipped 不寫入 FLAKY", async 
   expect(skipped.failed).toContain(id);
 });
 
-it.fails("第 1 輪 unhandled 或覆蓋率不足時，一筆 FLAKY 仍要失敗", async () => {
+it("第 1 輪 unhandled 或覆蓋率不足時，一筆 FLAKY 仍要失敗", async () => {
   const mod = await import("../tests.mjs");
   const id = "apps/a.test.ts > case";
   const out = mod.classifyRounds(new Map([[id, "failed"]]), new Map([[id, "passed"]]));

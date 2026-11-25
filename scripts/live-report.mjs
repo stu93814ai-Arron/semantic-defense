@@ -98,24 +98,84 @@ function eatDollar(query, i) {
   return { next: at < 0 ? query.length : at + close.length, tag: open[1] };
 }
 
+function eatComment(query, i) {
+  if (ch(query, i) === "-" && ch(query, i + 1) === "-") {
+    let j = i + 2;
+    while (j < query.length && ch(query, j) !== "\n") j += 1;
+    return { next: j, text: "--?" };
+  }
+  if (ch(query, i) !== "/" || ch(query, i + 1) !== "*") return null;
+  const end = query.indexOf("*/", i + 2);
+  if (end < 0) return { next: query.length, text: "/*?" };
+  return { next: end + 2, text: "/*?*/" };
+}
+
+function eatIdent(query, i) {
+  if (ch(query, i) !== "\"") return -1;
+  let j = i + 1;
+  while (j < query.length) {
+    if (ch(query, j) === "\"" && ch(query, j + 1) === "\"") { j += 2; continue; }
+    if (ch(query, j) === "\"") return j + 1;
+    j += 1;
+  }
+  return query.length;
+}
+
+function isDigit(c) {
+  return c >= "0" && c <= "9";
+}
+
+function isHex(c) {
+  return isDigit(c) || (c >= "a" && c <= "f") || (c >= "A" && c <= "F");
+}
+
+function eatHex(query, i) {
+  if (ch(query, i) !== "0" || (ch(query, i + 1) !== "x" && ch(query, i + 1) !== "X") || !isHex(ch(query, i + 2))) return -1;
+  let j = i + 2;
+  while (isHex(ch(query, j))) j += 1;
+  return j;
+}
+
+function eatExponent(query, j) {
+  const exp = ch(query, j);
+  if (exp !== "e" && exp !== "E") return j;
+  let k = j + 1;
+  if (ch(query, k) === "+" || ch(query, k) === "-") k += 1;
+  if (!isDigit(ch(query, k))) return j;
+  while (isDigit(ch(query, k))) k += 1;
+  return k;
+}
+
 function eatNumber(query, i) {
   if (i > 0 && /[A-Za-z0-9_$]/.test(ch(query, i - 1))) return -1;
-  const found = /^\d+/.exec(query.slice(i));
-  return found ? i + found[0].length : -1;
+  const hex = eatHex(query, i);
+  if (hex >= 0) return hex;
+  if (!isDigit(ch(query, i))) return -1;
+  let j = i;
+  while (isDigit(ch(query, j))) j += 1;
+  if (ch(query, j) === "." && isDigit(ch(query, j + 1))) {
+    j += 1;
+    while (isDigit(ch(query, j))) j += 1;
+  }
+  return eatExponent(query, j);
 }
 
 function maskedSpan(query, i) {
+  const comment = eatComment(query, i);
+  if (comment) return comment;
   const dollar = eatDollar(query, i);
   if (dollar) return { next: dollar.next, text: `$${dollar.tag}$?$${dollar.tag}$` };
   const estr = eatEscapeString(query, i);
   if (estr >= 0) return { next: estr, text: `${ch(query, i)}'?'` };
+  const ident = eatIdent(query, i);
+  if (ident >= 0) return { next: ident, text: query.slice(i, ident) };
   if (ch(query, i) === "'") return { next: eatStandard(query, i), text: "'?'" };
   const num = eatNumber(query, i);
   if (num >= 0) return { next: num, text: "?" };
   return { next: i + 1, text: ch(query, i) };
 }
 
-/** 先遮引號、E 字串、美元引號與數字，沒閉合就遮到結尾，最後才截到 200 字。 */
+/** 先遮註解、引號、E 字串、美元引號與數字，沒閉合就遮到結尾，最後才截到 200 字。 */
 export function redactQuery(query) {
   const source = String(query ?? "");
   let out = "";
