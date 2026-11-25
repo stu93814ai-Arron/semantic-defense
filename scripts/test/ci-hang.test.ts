@@ -259,7 +259,8 @@ function killPostmaster(base: string) {
   }
 }
 
-it.fails("with-pg 被 SIGKILL 後清掉孤兒 postgres 與 sd-pg 目錄", async () => {
+// 實作後 it.fails 已改回 it()。SIGKILL 沒有 hook，由守望行程清目錄與 postmaster。
+it("with-pg 被 SIGKILL 後清掉孤兒 postgres 與 sd-pg 目錄", async () => {
   const base = scratch();
   const ready = join(base, "ready");
   const script = join(base, "child.mjs");

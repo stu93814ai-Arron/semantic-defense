@@ -3,13 +3,24 @@
 // - 否則若 apps/control-api 存在 → 用 embedded-postgres 在暫存目錄起一個叢集（隨機埠、隨機密碼），結束即刪除
 // - 都不需要 → 直接執行
 import { existsSync, mkdtempSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { createServer } from "node:net";
+import { fileURLToPath } from "node:url";
 import "./detach-postgres.mjs";
 import { currentChild, runChild } from "./run-child.mjs";
 import { armClusterTerm, dropSigtermListeners, stopAndRemove } from "./pg-lifecycle.mjs";
+
+const nodeRequire = createRequire(import.meta.url);
+
+function armOrphanReaper(dir) {
+  const { spawn } = nodeRequire("node:child_process");
+  const script = join(dirname(fileURLToPath(import.meta.url)), "pg-reaper.mjs");
+  const child = spawn(process.execPath, [script, String(process.pid), dir], { detached: true, stdio: "ignore" });
+  child.unref();
+}
 
 const [cmd, ...args] = process.argv.slice(2);
 // 不可用 spawnSync：那會停住這個行程的事件迴圈，Postgres stderr 沒人讀，後端寫 log 時抱著鎖卡住。
@@ -33,6 +44,7 @@ const shutdown = () => {
 armClusterTerm({ getChild: currentChild, shutdown, exit: (code) => process.exit(code) });
 
 tempDir = mkdtempSync(join(tmpdir(), "sd-pg-"));
+armOrphanReaper(tempDir);
 const port = await freePort();
 const password = randomBytes(18).toString("hex");
 cluster = new EmbeddedPostgres({ databaseDir: join(tempDir, "data"), user: "ci", password, port, persistent: false, onLog: () => {} });
