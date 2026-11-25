@@ -1,7 +1,12 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { afterEach, describe, expect, it } from "vitest";
 import { openDb, type Db } from "../src/db.js";
 import { requireDatabaseUrl } from "./helpers/pg.js";
+
+const DB_SRC = join(dirname(fileURLToPath(import.meta.url)), "../src/db.ts");
 
 /**
  * B2：驗證 acquireSchemaLock 還原 statement_timeout 的成敗路徑。
@@ -272,5 +277,38 @@ describe("U6 非 55P03 的遷移錯誤拒絕啟動", () => {
     expect(outcome.err).toBeInstanceOf(Error);
     expect((outcome.err as Error).message).toBe("schema-non-55P03");
     expect((outcome.err as { code?: string }).code).toBe("42601");
+  }, 15_000);
+});
+
+/**
+ * errorCode 目前夾在取鎖註解與 acquireSchemaLock 之間，註解沒有對上函式。
+ * auto_list_settings 的遷移語句仍直接讀 .code；undefined 會先變成 TypeError。
+ * 實作後 it.fails 改回 it()。
+ */
+describe("errorCode 的位置與 auto_list_settings 遷移", () => {
+  it.fails("errorCode 寫在取鎖註解之前，遷移與帳號鎖都用它讀 code", () => {
+    const src = readFileSync(DB_SRC, "utf8");
+    const codeAt = src.indexOf("function errorCode");
+    const docAt = src.indexOf("pg_advisory_lock(SCHEMA_LOCK) 在交易外");
+    const fnAt = src.indexOf("async function acquireSchemaLock");
+    expect(codeAt).toBeGreaterThan(-1);
+    expect(docAt).toBeGreaterThan(codeAt);
+    expect(fnAt).toBeGreaterThan(docAt);
+    expect(src.slice(docAt, fnAt)).not.toContain("function errorCode");
+    expect(src).not.toContain("(err as { code?: string }).code");
+  });
+
+  it.fails("auto_list_settings 遷移語句以 undefined reject 時，錯誤仍是 undefined", async () => {
+    installClientHook({
+      onQuery: async ({ sql, run }) => {
+        if (sql.includes("CREATE TABLE IF NOT EXISTS auto_list_settings")) return Promise.reject(undefined);
+        return run();
+      },
+    });
+    const outcome = await settleOpenDb();
+    if (outcome.ok) await outcome.db.close().catch(() => {});
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.err).toBeUndefined();
   }, 15_000);
 });

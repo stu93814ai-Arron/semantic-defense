@@ -90,4 +90,23 @@ describe("unlock 失敗不得蓋掉遷移原錯", () => {
     expect((err.cause as Error).message).toBe("unlock-broke");
     expect(releases).toContain(true);
   }, 15_000);
+
+  // f2：遷移本身成功時，unlock 失敗仍須拒絕啟動。拿掉「failure !== undefined 則 failed」會讓 openDb 成功。
+  it("遷移成功但 advisory unlock 失敗時仍拒絕啟動", async () => {
+    const releases: unknown[] = [];
+    installClientHook({
+      onQuery: async ({ sql, run }) => {
+        if (sql.includes("pg_advisory_unlock(")) throw new Error("unlock-after-ok");
+        return run();
+      },
+      onRelease: (arg) => { releases.push(arg); },
+    });
+    const outcome = await settleOpenDb();
+    if (outcome.ok) await outcome.db.close().catch(() => {});
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.err).toBeInstanceOf(Error);
+    expect((outcome.err as Error).message).toBe("unlock-after-ok");
+    expect(releases).toContain(true);
+  }, 15_000);
 });
