@@ -844,6 +844,96 @@ it("第 1 輪 afterAll 拋錯加上一筆 FLAKY 時退出碼不是 0", async () 
   expect(readFileSync(resolve(__dirname, "../tests.mjs"), "utf8")).toContain("suiteLevelFailure(a.report)");
 });
 
+function writeSuiteProbe(source: string) {
+  const root = mkdtempSync(join(ROOT, "reports", "suite-"));
+  dirs.push(root);
+  writeFileSync(join(root, "x.test.ts"), source);
+  writeFileSync(join(root, "vitest.config.ts"), "import { defineConfig } from \"vitest/config\";\nexport default defineConfig({ test: { include: [\"x.test.ts\"], watch: false, fileParallelism: false } });\n");
+  return root;
+}
+
+function runSuiteProbe(root: string) {
+  const suiteFile = join(root, "suite.json");
+  const json = join(root, "out.json");
+  const r = spawnSync(process.execPath, [
+    resolve(ROOT, "node_modules/vitest/vitest.mjs"), "run", "--root", root, "--config", join(root, "vitest.config.ts"),
+    "--reporter=json", `--reporter=${resolve(__dirname, "../vitest-live-reporter.mjs")}`, `--outputFile=${json}`,
+  ], { encoding: "utf8", env: { ...process.env, LIVE_REPORT_DIR: join(root, "live"), SUITE_REPORT: suiteFile }, cwd: ROOT });
+  return { r, json, suiteFile };
+}
+
+function suiteCount(file: string): number {
+  return JSON.parse(text(file)).count as number;
+}
+
+// 實作後 it.fails 改回 it()。JSON 的 message 是空的，同檔又有失敗 assertion，目前 rc=0。
+it.fails("同檔空 message 的 afterAll 寫出 suite 錯誤筆數，judge 不放行", async () => {
+  const mod = await import("../tests.mjs");
+  const hooks = [
+    "afterAll(() => { throw new Error(); });",
+    "afterAll(() => { throw {}; });",
+    "afterAll(() => { throw new Error(\"\"); });",
+    "afterAll(async () => { await Promise.reject(new Error()); });",
+  ];
+  for (const hook of hooks) {
+    const root = writeSuiteProbe(`import { afterAll, expect, it } from "vitest";\n${hook}\nit("flaky", () => { expect(1).toBe(2); });\nit("ok", () => { expect(1).toBe(1); });\n`);
+    const probed = runSuiteProbe(root);
+    expect(probed.r.status, probed.r.stdout + probed.r.stderr).not.toBe(0);
+    expect(suiteCount(probed.suiteFile)).toBeGreaterThan(0);
+    const report = JSON.parse(text(probed.json));
+    const file = report.testResults[0];
+    expect(String(file.message ?? "").trim()).toBe("");
+    const id = mod.failureIdentity(file.name, "flaky");
+    const okId = mod.failureIdentity(file.name, "ok");
+    const passed = {
+      success: true, numFailedTests: 0,
+      testResults: [{ name: file.name, status: "passed", assertionResults: [{ fullName: "flaky", status: "passed" }, { fullName: "ok", status: "passed" }] }],
+    };
+    const outcome = mod.judge(
+      { m: new Map([[id, "failed"], [okId, "passed"]]), exitFail: true, ok: false, numFailedTests: 1, report, unhandled: { ok: true, count: 0 }, suite: { ok: true, count: suiteCount(probed.suiteFile) }, startedAt: Date.now() - 5000 },
+      { m: new Map([[id, "passed"], [okId, "passed"]]), exitFail: false, ok: true, numFailedTests: 0, report: passed, unhandled: { ok: true, count: 0 }, suite: { ok: true, count: 0 }, startedAt: Date.now() - 5000 },
+      freshSummary(),
+    );
+    expect(outcome.flaky).toContain(id);
+    expect(outcome.stop).toBe(true);
+    expect(outcome.notes.join("\n")).toContain("第 1 輪有 suite 或 hook 錯誤");
+  }
+});
+
+it.fails("describe 裡空 message 的 afterAll 也寫進 suite 錯誤筆數", () => {
+  const root = writeSuiteProbe("import { afterAll, describe, expect, it } from \"vitest\";\ndescribe(\"g\", () => {\n  afterAll(() => { throw new Error(); });\n  it(\"flaky\", () => { expect(1).toBe(2); });\n});\n");
+  const probed = runSuiteProbe(root);
+  expect(probed.r.status, probed.r.stdout + probed.r.stderr).not.toBe(0);
+  expect(suiteCount(probed.suiteFile)).toBeGreaterThan(0);
+});
+
+it.fails("只有 assertion 失敗時 suite 錯誤筆數是 0", () => {
+  const root = writeSuiteProbe("import { expect, it } from \"vitest\";\nit(\"flaky\", () => { expect(1).toBe(2); });\nit(\"ok\", () => { expect(1).toBe(1); });\n");
+  const probed = runSuiteProbe(root);
+  expect(probed.r.status, probed.r.stdout + probed.r.stderr).not.toBe(0);
+  expect(suiteCount(probed.suiteFile)).toBe(0);
+});
+
+it.fails("suite 錯誤檔缺、壞或大於 0 就擋，筆數 0 的 FLAKY 仍放行", async () => {
+  const mod = await import("../tests.mjs");
+  const id = "apps/a.test.ts > case";
+  const failedReport = { success: false, numFailedTests: 1, testResults: [{ name: "apps/a.test.ts", status: "failed", message: "", assertionResults: [{ fullName: "case", status: "failed" }] }] };
+  const passedReport = { success: true, numFailedTests: 0, testResults: [{ name: "apps/a.test.ts", status: "passed", assertionResults: [{ fullName: "case", status: "passed" }] }] };
+  const round = (status: string, report: object, suite: { ok: boolean; count: number } | undefined) => ({
+    m: new Map([[id, status]]), exitFail: status === "failed", ok: status !== "failed", numFailedTests: status === "failed" ? 1 : 0,
+    report, unhandled: { ok: true, count: 0 }, suite, startedAt: Date.now() - 5000,
+  });
+  const summary = freshSummary();
+  const second = round("passed", passedReport, { ok: true, count: 0 });
+  expect(mod.judge(round("failed", failedReport, undefined), second, summary).stop).toBe(true);
+  expect(mod.judge(round("failed", failedReport, { ok: false, count: 0 }), second, summary).stop).toBe(true);
+  expect(mod.judge(round("failed", failedReport, { ok: true, count: 1 }), second, summary).stop).toBe(true);
+  expect(mod.judge(round("failed", failedReport, { ok: true, count: 0 }), round("passed", passedReport, { ok: true, count: 1 }), summary).stop).toBe(true);
+  const clear = mod.judge(round("failed", failedReport, { ok: true, count: 0 }), second, summary);
+  expect(clear.stop).toBe(false);
+  expect([...clear.flaky]).toContain(id);
+});
+
 it("開跑前刪掉舊的 vitest 報告", async () => {
   const mod = await import("../tests.mjs");
   const dir = scratch();
