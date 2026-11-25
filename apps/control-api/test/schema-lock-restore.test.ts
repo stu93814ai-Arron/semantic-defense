@@ -226,3 +226,10 @@ describe("errorCode 的位置與 auto_list_settings 遷移", () => {
     expect(await expectOpenDbRejected()).toBeUndefined();
   }, 15_000);
 });
+
+describe("openDb 成功不得被當成 undefined 失敗", () => {
+  // 實作前 it.fails：成功路徑目前回傳 undefined，與 toBeUndefined 組合會假綠。
+  it.fails("openDb 成功時直接丟出，不回傳 undefined", async () => {
+    await expect(expectOpenDbRejected()).rejects.toThrow("openDb 應該失敗");
+  }, 15_000);
+});
