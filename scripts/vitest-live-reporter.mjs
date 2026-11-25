@@ -1,4 +1,4 @@
-import { captureActivity, installKillSnapshot, reportDir, setReportDir, startActivityLoop, writeRunning } from "./live-report.mjs";
+import { captureActivity, installKillSnapshot, reportDir, setReportDir, startActivityLoop, writeRunning, writeUnhandledCount } from "./live-report.mjs";
 
 const running = new Map();
 
@@ -26,7 +26,9 @@ export default class LiveReporter {
     running.delete(test.id || label(test));
     writeRunning(reportDir(), [...running.values()]);
   }
-  onTestRunEnd() {
+  onTestRunEnd(_testModules, unhandledErrors) {
+    const path = process.env.UNHANDLED_REPORT;
+    if (path) writeUnhandledCount(path, Array.isArray(unhandledErrors) ? unhandledErrors.length : 0);
     this.stop?.();
   }
 }

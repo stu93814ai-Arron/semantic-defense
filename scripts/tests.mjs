@@ -38,11 +38,6 @@ function reportShapeBad(report) {
   return !Array.isArray(report.testResults);
 }
 
-function hasUnhandled(report) {
-  const errors = report.unhandledErrors;
-  return Array.isArray(errors) && errors.length > 0;
-}
-
 function suiteLevelFailure(report) {
   for (const file of report.testResults) {
     if (!file || file.status !== "failed") continue;
@@ -72,9 +67,9 @@ function explainedFailures(report, otherRound, flaky) {
   return { seen: ids.length, explained };
 }
 
-/** 非成功時，逐筆以檔案＋完整名稱對上 FLAKY 才放行。suite 錯誤與 unhandled 一律失敗。 */
+/** 非成功時，逐筆以檔案＋完整名稱對上 FLAKY 才放行。suite 錯誤一律失敗。 */
 export function round2ReportFails(exitFail, report, otherRound, flaky) {
-  if (reportShapeBad(report) || hasUnhandled(report) || suiteLevelFailure(report)) return true;
+  if (reportShapeBad(report) || suiteLevelFailure(report)) return true;
   if (!exitFail && report.success === true) return false;
   const reported = Number(report.numFailedTests) || 0;
   if (reported === 0) return true;
@@ -106,16 +101,44 @@ export function loadRoundReport(path, startedAt) {
   return { ok: true, report };
 }
 
+function fileMtime(path) {
+  try {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- 路徑是固定報告檔或測試暫存
+    return statSync(path).mtimeMs;
+  } catch {
+    return -1;
+  }
+}
+
+/** 未處理錯誤筆數檔。讀不到、解析失敗或修改時間早於本輪開始都不是這輪的結果。 */
+export function loadUnhandled(path, startedAt) {
+  const mtime = fileMtime(path);
+  if (mtime < 0) return { ok: false, reason: "missing", count: 0 };
+  if (mtime + 2000 < startedAt) return { ok: false, reason: "stale", count: 0 };
+  const body = readJson(path);
+  const count = body && body.count;
+  if (!Number.isInteger(count) || count < 0) return { ok: false, reason: "parse", count: 0 };
+  return { ok: true, count };
+}
+
+export function unhandledFails(loaded) {
+  return !loaded || loaded.ok !== true || loaded.count > 0;
+}
+
 function run(i, cov) {
   const out = `reports/vitest-run${i}.json`;
+  const unhandledOut = `reports/unhandled-run${i}.json`;
   discardReport(out);
+  discardReport(unhandledOut);
   const args = ["scripts/with-pg.mjs", "npx", "vitest", "run", "--reporter=json", "--reporter=./scripts/vitest-live-reporter.mjs", `--outputFile=${out}`];
   if (cov) args.push("--coverage");
-  let covFail = false;
+  let exitFail = false;
   const startedAt = Date.now();
-  try { execFileSync("node", args, { stdio: "inherit" }); } catch { covFail = true; }
+  const env = { ...process.env, UNHANDLED_REPORT: unhandledOut };
+  try { execFileSync("node", args, { stdio: "inherit", env }); } catch { exitFail = true; }
   const loaded = loadRoundReport(out, startedAt);
-  if (!loaded.ok) return { m: new Map(), exitFail: true, ok: false, numFailedTests: 0, report: null };
+  const unhandled = loadUnhandled(unhandledOut, startedAt);
+  if (!loaded.ok) return { m: new Map(), exitFail: true, ok: false, numFailedTests: 0, report: null, unhandled, startedAt };
   const r = loaded.report;
   const m = new Map();
   const files = Array.isArray(r.testResults) ? r.testResults : [];
@@ -123,7 +146,7 @@ function run(i, cov) {
     const rows = Array.isArray(f && f.assertionResults) ? f.assertionResults : [];
     for (const t of rows) m.set(failureIdentity(f.name, t.fullName), t.status);
   }
-  return { m, exitFail: covFail, ok: r.success, numFailedTests: Number(r.numFailedTests) || 0, report: r };
+  return { m, exitFail, ok: r.success, numFailedTests: Number(r.numFailedTests) || 0, report: r, unhandled, startedAt };
 }
 
 function isFlakyPair(left, right) {
@@ -155,25 +178,74 @@ function logNames(prefix, names) {
   for (const name of names) console.log(`${prefix}${name}`);
 }
 
-function belowFloor(bucket, floor) {
-  return Boolean(bucket) && typeof bucket.pct === "number" && bucket.pct < floor;
+function pctMeets(bucket, floor) {
+  return Boolean(bucket) && typeof bucket.pct === "number" && Number.isFinite(bucket.pct) && bucket.pct >= floor;
 }
 
-/** 覆蓋率摘要的 lines／statements／functions／branches 任一低於門檻。 */
+function summaryShapeBad(summary) {
+  if (!summary || typeof summary !== "object" || Array.isArray(summary)) return true;
+  return !summary.total || typeof summary.total !== "object";
+}
+
+/** 摘要缺、壞、少欄位，或 pct 不是達標的數字，都算覆蓋率不足。 */
 export function coverageBelow(summary, floor = 70) {
-  const total = summary && summary.total;
-  if (!total) return false;
-  return belowFloor(total.lines, floor) || belowFloor(total.statements, floor) || belowFloor(total.functions, floor) || belowFloor(total.branches, floor);
+  if (summaryShapeBad(summary)) return true;
+  const total = summary.total;
+  if (!pctMeets(total.lines, floor) || !pctMeets(total.statements, floor)) return true;
+  return !pctMeets(total.functions, floor) || !pctMeets(total.branches, floor);
 }
 
-function coverageFailed(runResult, failed) {
-  return runResult.exitFail && failed.length === 0 && [...runResult.m.values()].every((status) => status === "passed");
+/** 摘要不存在、解析失敗、修改時間或 startTime 早於本輪開始，都不是這輪的結果。 */
+export function loadCoverageSummary(path, startedAt) {
+  const mtime = fileMtime(path);
+  if (mtime < 0) return { ok: false, reason: "missing" };
+  if (mtime + 2000 < startedAt) return { ok: false, reason: "stale" };
+  const summary = readJson(path);
+  if (!summary || typeof summary !== "object" || Array.isArray(summary)) return { ok: false, reason: "parse" };
+  if (typeof summary.startTime === "number" && summary.startTime + 2000 < startedAt) return { ok: false, reason: "stale" };
+  return { ok: true, summary };
+}
+
+export function round1ExitMessage(summaryIsFail, exitIsFail) {
+  if (summaryIsFail) return "覆蓋率低於 70% 門檻";
+  if (exitIsFail) return "第 1 輪退出碼非 0";
+  return "";
+}
+
+function unexplainedExit(runResult, failed, summaryFail) {
+  if (summaryFail || failed.length > 0) return false;
+  return Boolean(runResult.exitFail) && [...runResult.m.values()].every((status) => status === "passed");
+}
+
+function exitNotes(summaryFail, exitFail, unhandled, total) {
+  const notes = [];
+  const exitNote = round1ExitMessage(summaryFail, exitFail);
+  if (exitNote) notes.push(`❌ ${exitNote}`);
+  if (unhandled) notes.push("❌ 第 1 輪有未處理錯誤");
+  if (total === 0) notes.push("❌ 沒有任何必跑測試");
+  return notes;
 }
 
 /** 第 1 輪未處理錯誤與覆蓋率不足獨立失敗，不會被 FLAKY 吸收。 */
 export function gateStops(flags) {
   if (flags.unhandled || flags.coverageFail) return true;
   return flags.failedCount > 0 || flags.total === 0 || flags.round2Lie;
+}
+
+function judge(a, b) {
+  const { flaky, failed, total } = finish(a, b);
+  const coverage = loadCoverageSummary("reports/coverage/coverage-summary.json", a.startedAt);
+  const summaryFail = !coverage.ok || coverageBelow(coverage.summary);
+  const exitFail = unexplainedExit(a, failed, summaryFail);
+  const unhandled = unhandledFails(a.unhandled) || unhandledFails(b.unhandled);
+  const notes = exitNotes(summaryFail, exitFail, unhandled, total);
+  const explained = flakyExplainedCount(b.m, a.m, flaky);
+  const byReport = round2ReportFails(b.exitFail, b.report, a.m, flaky);
+  const byCount = round2ExitContradicts(b.exitFail, b.ok, b.numFailedTests, explained);
+  const round2Lie = byReport || byCount;
+  if (round2Lie) notes.push("❌ 第 2 輪退出碼非 0 或報告不是成功，且失敗沒有全部對上 FLAKY");
+  const stop = gateStops({ failedCount: failed.length, coverageFail: summaryFail || exitFail, unhandled, total, round2Lie });
+  return { flaky, failed, total, notes, stop };
 }
 
 function main() {
@@ -184,22 +256,13 @@ function main() {
     console.log("❌ 第 2 輪報告不存在、解析失敗，或是開跑前的舊檔");
     process.exit(1);
   }
-  const { flaky, failed, total } = finish(a, b);
+  const { flaky, failed, total, notes, stop } = judge(a, b);
   writeFileSync(".ci/flaky.json", JSON.stringify([...flaky].sort(), null, 2) + "\n");
   logNames("⚠️  FLAKY（已移出必跑清單，須修好再放回）：", flaky);
   logNames("❌ 必跑測試失敗：", failed);
   console.log(`必跑測試：${total} 筆，失敗 ${failed.length}，FLAKY ${flaky.size}`);
-  const coverageFail = coverageBelow(readJson("reports/coverage/coverage-summary.json")) || coverageFailed(a, failed);
-  const unhandled = hasUnhandled(a.report);
-  if (coverageFail) console.log("❌ 覆蓋率低於 70% 門檻");
-  if (unhandled) console.log("❌ 第 1 輪有未處理錯誤");
-  if (total === 0) console.log("❌ 沒有任何必跑測試");
-  const explained = flakyExplainedCount(b.m, a.m, flaky);
-  const byReport = round2ReportFails(b.exitFail, b.report, a.m, flaky);
-  const byCount = round2ExitContradicts(b.exitFail, b.ok, b.numFailedTests, explained);
-  const round2Lie = byReport || byCount;
-  if (round2Lie) console.log("❌ 第 2 輪退出碼非 0 或報告不是成功，且失敗沒有全部對上 FLAKY");
-  process.exit(gateStops({ failedCount: failed.length, coverageFail, unhandled, total, round2Lie }) ? 1 : 0);
+  for (const line of notes) console.log(line);
+  process.exit(stop ? 1 : 0);
 }
 
 const entry = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href : "";

@@ -1,6 +1,6 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- 路徑是 reports/ 或測試的 mkdtemp，非請求輸入 */
 import { mkdirSync, readFileSync, renameSync, writeFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import pg from "pg";
 
 const ACTIVITY_SQL = `SELECT pid, application_name, state, wait_event_type, wait_event,
@@ -98,6 +98,17 @@ function eatDollar(query, i) {
   return { next: at < 0 ? query.length : at + close.length, tag: open[1] };
 }
 
+function eatBlock(query, i) {
+  let depth = 1;
+  let j = i + 2;
+  while (j < query.length && depth > 0) {
+    if (ch(query, j) === "/" && ch(query, j + 1) === "*") { depth += 1; j += 2; continue; }
+    if (ch(query, j) === "*" && ch(query, j + 1) === "/") { depth -= 1; j += 2; continue; }
+    j += 1;
+  }
+  return { next: j, text: depth === 0 ? "/*?*/" : "/*?" };
+}
+
 function eatComment(query, i) {
   if (ch(query, i) === "-" && ch(query, i + 1) === "-") {
     let j = i + 2;
@@ -105,9 +116,12 @@ function eatComment(query, i) {
     return { next: j, text: "--?" };
   }
   if (ch(query, i) !== "/" || ch(query, i + 1) !== "*") return null;
-  const end = query.indexOf("*/", i + 2);
-  if (end < 0) return { next: query.length, text: "/*?" };
-  return { next: end + 2, text: "/*?*/" };
+  return eatBlock(query, i);
+}
+
+export function writeUnhandledCount(path, count) {
+  mkdirSync(dirname(path), { recursive: true });
+  atomicWrite(path, `${JSON.stringify({ count })}\n`);
 }
 
 function eatIdent(query, i) {
