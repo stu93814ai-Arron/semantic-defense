@@ -97,11 +97,27 @@ setInterval(() => {}, 1000);
   kids.push(child);
   await waitUntil(() => existsSync(join(dir, "vitest-live.json")), 2000);
   child.kill("SIGTERM");
-  const exited = await Promise.race([once(child, "exit").then(() => true), delay(3000).then(() => false)]);
-  expect(exited).toBe(true);
+  const exit = await Promise.race([once(child, "exit").then(([code]) => code), delay(3000).then(() => "timeout")]);
+  expect(exit).toBe(143);
   expect(text(join(dir, "vitest-live.json"))).toContain("卡住的測試");
   expect(text(join(dir, "pg-live.json"))).toContain("INSERT INTO case_hits");
   expect(text(join(dir, "pg-live.json"))).toContain("872364203");
+});
+
+it("快照卡住時，TERM 仍以 143 結束", async () => {
+  const dir = scratch();
+  const mod = JSON.stringify(resolve(__dirname, "../live-report.mjs"));
+  const childPath = join(dir, "hang.mjs");
+  writeFileSync(childPath, `import { installKillSnapshot } from ${mod};
+installKillSnapshot(${JSON.stringify(dir)}, () => new Promise(() => {}));
+setInterval(() => {}, 1000);
+`);
+  const child = spawn(process.execPath, [childPath], { stdio: "ignore" });
+  kids.push(child);
+  await delay(100);
+  child.kill("SIGTERM");
+  const exit = await Promise.race([once(child, "exit").then(([code]) => code), delay(4000).then(() => "timeout")]);
+  expect(exit).toBe(143);
 });
 
 it("週期快照寫入 pg-live.json", async () => {
@@ -115,6 +131,36 @@ it("週期快照寫入 pg-live.json", async () => {
     expect(text(join(dir, "pg-live.json"))).toContain("pg_advisory_lock");
     expect(text(join(dir, "pg-live.json"))).toContain("872364201");
   } finally { stop(); }
+});
+
+it("週期快照丟錯時寫進檔案，不會變成未處理的 rejection", async () => {
+  const dir = scratch();
+  const unhandled: unknown[] = [];
+  const onUnhandled = (err: unknown) => { unhandled.push(err); };
+  process.on("unhandledRejection", onUnhandled);
+  const stop = startActivityLoop(dir, async () => { throw new Error("snap-boom"); });
+  try {
+    expect(await waitUntil(() => existsSync(join(dir, "pg-live.json")), 1000)).toBe(true);
+    await delay(30);
+    expect(unhandled).toEqual([]);
+    expect(text(join(dir, "pg-live.json"))).toContain("snap-boom");
+  } finally {
+    stop();
+    process.off("unhandledRejection", onUnhandled);
+  }
+});
+
+it("週期快照的計時器不留住行程", async () => {
+  const dir = scratch();
+  const mod = JSON.stringify(resolve(__dirname, "../live-report.mjs"));
+  const childPath = join(dir, "loop.mjs");
+  writeFileSync(childPath, `import { startActivityLoop } from ${mod};
+startActivityLoop(${JSON.stringify(dir)}, async () => ({ activity: [], locks: [] }));
+`);
+  const child = spawn(process.execPath, [childPath], { stdio: "ignore" });
+  kids.push(child);
+  const exited = await Promise.race([once(child, "exit").then(() => true), delay(2000).then(() => false)]);
+  expect(exited).toBe(true);
 });
 
 it("部分報告含仍在跑的測試與 activity", () => {
@@ -211,7 +257,8 @@ it("SIGTERM 等快照連線成功後才關 postgres，並刪掉 sd-pg 目錄", a
   child.stderr?.on("data", () => {});
   expect(await waitUntil(() => existsSync(ready), 20000)).toBe(true);
   process.kill(-child.pid!, "SIGTERM");
-  expect(await Promise.race([once(child, "exit").then(() => true), delay(8000).then(() => false)])).toBe(true);
+  const exit = await Promise.race([once(child, "exit").then(([code]) => code), delay(8000).then(() => "timeout")]);
+  expect(exit).toBe(143);
   expect(text(snap)).toBe("ok");
   const left = existsSync(base) ? readdirSync(base).filter((name) => name.startsWith("sd-pg-")) : ["missing"];
   expect(left).toEqual([]);
@@ -232,6 +279,12 @@ it("退出碼是 null 時不以 0 收場", () => {
   const matched = src.match(/signal \? (\d+) : code \?\? (\d+)/);
   expect(matched?.[1]).toBe("1");
   expect(matched?.[2]).toBe("1");
+});
+
+it("沒有密文的長查詢也截到 200 字", async () => {
+  const out = await maskedQuery(`SELECT ${"Q".repeat(400)}`);
+  expect(out.length).toBe(200);
+  expect(out.startsWith("SELECT ")).toBe(true);
 });
 
 it("query 截到約 200 字並遮罩字面值", async () => {
