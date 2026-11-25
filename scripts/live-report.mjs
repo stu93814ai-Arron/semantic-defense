@@ -4,7 +4,7 @@ import { join } from "node:path";
 import pg from "pg";
 
 const ACTIVITY_SQL = `SELECT pid, application_name, state, wait_event_type, wait_event,
-  EXTRACT(EPOCH FROM (clock_timestamp() - query_start)) AS query_s, left(query, 200) AS query
+  EXTRACT(EPOCH FROM (clock_timestamp() - query_start)) AS query_s, left(query, 2000) AS query
   FROM pg_stat_activity
   WHERE datname = current_database() AND pid <> pg_backend_pid()`;
 const LOCK_SQL = `SELECT l.pid, l.locktype, l.mode, l.granted, l.objid, l.relation::text AS rel
@@ -65,11 +65,66 @@ export function formatPartial(reportDirName) {
 }
 
 const QUERY_CAP = 200;
-const QUOTED = /'(?:[^']|'')*'/g;
+const ch = (query, i) => query.charAt(i);
 
+function eatStandard(query, i) {
+  let j = i + 1;
+  while (j < query.length) {
+    if (ch(query, j) === "'" && ch(query, j + 1) === "'") { j += 2; continue; }
+    if (ch(query, j) === "'") return j + 1;
+    j += 1;
+  }
+  return query.length;
+}
+
+function eatEscapeString(query, i) {
+  if ((ch(query, i) !== "E" && ch(query, i) !== "e") || ch(query, i + 1) !== "'") return -1;
+  let j = i + 2;
+  while (j < query.length) {
+    if (ch(query, j) === "\\" && j + 1 < query.length) { j += 2; continue; }
+    if (ch(query, j) === "'") return j + 1;
+    j += 1;
+  }
+  return query.length;
+}
+
+function eatDollar(query, i) {
+  if (ch(query, i) !== "$") return null;
+  const open = /^\$([A-Za-z0-9_]*)\$/.exec(query.slice(i));
+  if (!open) return null;
+  const close = `$${open[1]}$`;
+  const from = i + open[0].length;
+  const at = query.indexOf(close, from);
+  return { next: at < 0 ? query.length : at + close.length, tag: open[1] };
+}
+
+function eatNumber(query, i) {
+  if (i > 0 && /[A-Za-z0-9_$]/.test(ch(query, i - 1))) return -1;
+  const found = /^\d+/.exec(query.slice(i));
+  return found ? i + found[0].length : -1;
+}
+
+function maskedSpan(query, i) {
+  const dollar = eatDollar(query, i);
+  if (dollar) return { next: dollar.next, text: `$${dollar.tag}$?$${dollar.tag}$` };
+  const estr = eatEscapeString(query, i);
+  if (estr >= 0) return { next: estr, text: `${ch(query, i)}'?'` };
+  if (ch(query, i) === "'") return { next: eatStandard(query, i), text: "'?'" };
+  const num = eatNumber(query, i);
+  if (num >= 0) return { next: num, text: "?" };
+  return { next: i + 1, text: ch(query, i) };
+}
+
+/** 先遮引號、E 字串、美元引號與數字，沒閉合就遮到結尾，最後才截到 200 字。 */
 export function redactQuery(query) {
-  const masked = String(query ?? "").replace(QUOTED, "'?'");
-  return masked.length > QUERY_CAP ? masked.slice(0, QUERY_CAP) : masked;
+  const source = String(query ?? "");
+  let out = "";
+  for (let i = 0; i < source.length;) {
+    const part = maskedSpan(source, i);
+    out += part.text;
+    i = part.next;
+  }
+  return out.slice(0, QUERY_CAP);
 }
 
 function redactActivity(rows) {

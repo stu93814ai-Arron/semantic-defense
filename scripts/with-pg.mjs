@@ -24,7 +24,10 @@ let cluster = null;
 let tempDir = null;
 let cleaned = null;
 const shutdown = () => {
-  if (!cleaned) cleaned = stopAndRemove(() => (cluster ? cluster.stop() : Promise.resolve()), tempDir);
+  if (!cleaned) {
+    const pid = cluster && cluster.process ? cluster.process.pid : undefined;
+    cleaned = stopAndRemove(() => (cluster ? cluster.stop() : Promise.resolve()), tempDir, pid);
+  }
   return cleaned;
 };
 armClusterTerm({ getChild: currentChild, shutdown, exit: (code) => process.exit(code) });

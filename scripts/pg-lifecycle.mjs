@@ -28,8 +28,32 @@ export function waitChild(child, ms) {
   });
 }
 
-export async function stopAndRemove(stop, dir) {
-  await stop().catch(() => {});
+export const STOP_MS = 5000;
+
+export function killProcessGroup(pid, signal) {
+  if (!pid) return;
+  try {
+    process.kill(-pid, signal);
+  } catch {
+    try { process.kill(pid, signal); } catch { /* 行程已結束 */ }
+  }
+}
+
+export async function stopWithin(stop, pid, ms = STOP_MS, kill = killProcessGroup) {
+  let timer;
+  const limited = new Promise((resolve) => {
+    timer = setTimeout(() => {
+      kill(pid, "SIGKILL");
+      resolve();
+    }, ms);
+  });
+  const stopped = Promise.resolve().then(() => stop()).catch(() => {});
+  await Promise.race([stopped, limited]);
+  clearTimeout(timer);
+}
+
+export async function stopAndRemove(stop, dir, pid) {
+  await stopWithin(stop, pid);
   if (dir) rmSync(dir, { recursive: true, force: true });
 }
 

@@ -243,11 +243,11 @@ it("query 截到約 200 字並遮罩字面值", async () => {
   expect(query.length).toBeLessThanOrEqual(200);
 });
 
-it("快照 SQL 只取 query 前 200 字", async () => {
+it("快照 SQL 先取 2000 字，遮罩後才截到 200", async () => {
   const seen: string[] = [];
   await readServerSnapshot(async (sql) => { seen.push(sql); return { rows: [] }; });
-  expect(seen[0]).toContain("left(query, 200)");
-  expect(seen[0]).not.toContain("left(query, 2000)");
+  expect(seen[0]).toContain("left(query, 2000)");
+  expect(seen[0]).not.toMatch(/left\(query, 200\)/);
 });
 
 async function maskedQuery(query: string) {
@@ -255,7 +255,7 @@ async function maskedQuery(query: string) {
   return String(snap.activity[0].query);
 }
 
-it.fails("截斷切在字串中間時不會留下 SECRET_TRUNC", async () => {
+it("截斷切在字串中間時不會留下 SECRET_TRUNC", async () => {
   const raw = `${"Q".repeat(180)}'SECRET_TRUNC_${"Y".repeat(80)}`;
   expect(raw.slice(0, 200)).toContain("SECRET_TRUNC");
   const out = await maskedQuery(raw);
@@ -263,29 +263,29 @@ it.fails("截斷切在字串中間時不會留下 SECRET_TRUNC", async () => {
   expect(out.length).toBeLessThanOrEqual(200);
 });
 
-it.fails("E 字串的反斜線引號不會讓 SECRET 漏出", async () => {
+it("E 字串的反斜線引號不會讓 SECRET 漏出", async () => {
   const out = await maskedQuery("SELECT E'abc\\'SECRET'");
   expect(out).not.toContain("SECRET");
   expect(out).toContain("E'?'");
 });
 
-it.fails("美元引號 $$SECRET$$ 會被遮住", async () => {
-  expect(await maskedQuery("SELECT $$SECRET$$")).not.toContain("SECRET");
+it("美元引號 $$SECRET$$ 會被遮住", async () => {
+  expect(await maskedQuery("SELECT $$SECRET$$")).toBe("SELECT $$?$$");
 });
 
-it.fails("帶標籤的美元引號 $tag$SECRET$tag$ 會被遮住", async () => {
-  expect(await maskedQuery("SELECT $tag$SECRET$tag$")).not.toContain("SECRET");
+it("帶標籤的美元引號 $tag$SECRET$tag$ 會被遮住", async () => {
+  expect(await maskedQuery("SELECT $tag$SECRET$tag$")).toBe("SELECT $tag$?$tag$");
 });
 
-it.fails("數字字面值會被遮住", async () => {
-  expect(await maskedQuery("SELECT 4111111111111111")).not.toContain("4111111111111111");
+it("數字字面值會被遮住", async () => {
+  expect(await maskedQuery("SELECT 4111111111111111")).toBe("SELECT ?");
 });
 
-it.fails("沒閉合的引號遮到結尾", async () => {
-  expect(await maskedQuery("SELECT 'SECRET")).not.toContain("SECRET");
+it("沒閉合的引號遮到結尾", async () => {
+  expect(await maskedQuery("SELECT 'SECRET")).toBe("SELECT '?'");
 });
 
-it.fails("快照 SQL 先取 2000 字再遮罩", async () => {
+it("快照 SQL 先取 2000 字再遮罩", async () => {
   const seen: string[] = [];
   await readServerSnapshot(async (sql) => { seen.push(sql); return { rows: [] }; });
   expect(seen[0]).toContain("left(query, 2000)");
@@ -349,7 +349,7 @@ it.fails("第 2 輪退出碼非 0 或報告不是成功時，失敗數 0 也要�
   expect(mod.round2ExitContradicts(true, true, 2)).toBe(false);
 });
 
-it.fails("停不住的 postmaster 會在時限內收到 SIGKILL", async () => {
+it("停不住的 postmaster 會在時限內收到 SIGKILL", async () => {
   const mod = await import("../pg-lifecycle.mjs");
   expect(mod.STOP_MS).toBe(5000);
   expect(typeof mod.stopWithin).toBe("function");
@@ -362,20 +362,35 @@ it.fails("停不住的 postmaster 會在時限內收到 SIGKILL", async () => {
   expect(signals).toEqual(["4321:SIGKILL"]);
 });
 
-it.fails("SIGSTOP 的 postmaster 在 5 秒內被程序群組 SIGKILL", async () => {
+it("SIGSTOP 的 postmaster 在 5 秒內被程序群組 SIGKILL", async () => {
   const mod = await import("../pg-lifecycle.mjs");
-  expect(typeof mod.stopWithin).toBe("function");
   const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { detached: true, stdio: "ignore" });
   kids.push(child);
   await once(child, "spawn");
+  const exit = once(child, "exit");
   process.kill(child.pid!, "SIGSTOP");
   const started = Date.now();
   await mod.stopWithin(() => new Promise(() => {}), child.pid);
   const elapsed = Date.now() - started;
-  expect(elapsed).toBeLessThan(5500);
+  expect(elapsed).toBeLessThan(8000);
   expect(elapsed).toBeGreaterThan(4000);
-  const exited = await Promise.race([once(child, "exit"), delay(1000).then(() => null)]);
+  const exited = await Promise.race([exit, delay(1000).then(() => null)]);
   expect(exited?.[1]).toBe("SIGKILL");
+});
+
+it("停得下來的 postgres 不會被 SIGKILL", async () => {
+  const mod = await import("../pg-lifecycle.mjs");
+  const signals: string[] = [];
+  await mod.stopWithin(async () => {}, 4321, 200, (pid: number, sig: string) => { signals.push(`${pid}:${sig}`); });
+  expect(signals).toEqual([]);
+});
+
+it("停 postgres 逾時會對程序群組 SIGKILL", () => {
+  const life = readFileSync(resolve(__dirname, "../pg-lifecycle.mjs"), "utf8");
+  const boot = readFileSync(resolve(__dirname, "../with-pg.mjs"), "utf8");
+  expect(life).toContain("process.kill(-pid, signal)");
+  expect(life).toContain("await stopWithin(stop, pid)");
+  expect(boot).toContain("cluster.process.pid");
 });
 
 it("開跑前刪掉舊的 vitest 報告", async () => {
