@@ -130,28 +130,40 @@ export function unhandledFails(loaded) {
   return !loaded || loaded.ok !== true || loaded.count > 0;
 }
 
-function run(i, cov) {
-  const out = `reports/vitest-run${i}.json`;
-  const unhandledOut = `reports/unhandled-run${i}.json`;
-  discardReport(out);
-  discardReport(unhandledOut);
-  const args = ["scripts/with-pg.mjs", "npx", "vitest", "run", "--reporter=json", "--reporter=./scripts/vitest-live-reporter.mjs", `--outputFile=${out}`];
-  if (cov) args.push("--coverage");
-  let exitFail = false;
-  const startedAt = Date.now();
-  const env = { ...process.env, UNHANDLED_REPORT: unhandledOut };
-  try { execFileSync("node", args, { stdio: "inherit", env }); } catch { exitFail = true; }
-  const loaded = loadRoundReport(out, startedAt);
-  const unhandled = loadUnhandled(unhandledOut, startedAt);
-  if (!loaded.ok) return { m: new Map(), exitFail: true, ok: false, numFailedTests: 0, report: null, unhandled, startedAt };
-  const r = loaded.report;
+function statusMap(report) {
   const m = new Map();
-  const files = Array.isArray(r.testResults) ? r.testResults : [];
+  const files = Array.isArray(report.testResults) ? report.testResults : [];
   for (const f of files) {
     const rows = Array.isArray(f && f.assertionResults) ? f.assertionResults : [];
     for (const t of rows) m.set(failureIdentity(f.name, t.fullName), t.status);
   }
-  return { m, exitFail, ok: r.success, numFailedTests: Number(r.numFailedTests) || 0, report: r, unhandled, startedAt };
+  return m;
+}
+
+function loadSpawnedRound(out, unhandledOut, suiteOut, startedAt, exitFail) {
+  const loaded = loadRoundReport(out, startedAt);
+  const unhandled = loadUnhandled(unhandledOut, startedAt);
+  const suite = loadUnhandled(suiteOut, startedAt);
+  if (!loaded.ok) return { m: new Map(), exitFail: true, ok: false, numFailedTests: 0, report: null, unhandled, suite, startedAt };
+  const r = loaded.report;
+  return { m: statusMap(r), exitFail, ok: r.success, numFailedTests: Number(r.numFailedTests) || 0, report: r, unhandled, suite, startedAt };
+}
+
+export function run(i, cov, spawnSyncFn) {
+  const out = `reports/vitest-run${i}.json`;
+  const unhandledOut = `reports/unhandled-run${i}.json`;
+  const suiteOut = `reports/suite-run${i}.json`;
+  discardReport(out);
+  discardReport(unhandledOut);
+  discardReport(suiteOut);
+  const args = ["scripts/with-pg.mjs", "npx", "vitest", "run", "--reporter=json", "--reporter=./scripts/vitest-live-reporter.mjs", `--outputFile=${out}`];
+  if (cov) args.push("--coverage");
+  let exitFail = false;
+  const startedAt = Date.now();
+  const env = { ...process.env, UNHANDLED_REPORT: unhandledOut, SUITE_REPORT: suiteOut };
+  const spawn = spawnSyncFn ?? execFileSync;
+  try { spawn("node", args, { stdio: "inherit", env }); } catch { exitFail = true; }
+  return loadSpawnedRound(out, unhandledOut, suiteOut, startedAt, exitFail);
 }
 
 function isFlakyPair(left, right) {
@@ -243,6 +255,18 @@ export function gateStops(flags) {
   return flags.failedCount > 0 || flags.total === 0 || flags.round2Lie;
 }
 
+function suiteOutcome(a, b) {
+  const suiteJson = Boolean(a.report) && !reportShapeBad(a.report) && suiteLevelFailure(a.report);
+  const round1Suite = suiteJson || unhandledFails(a.suite);
+  const round2Suite = unhandledFails(b.suite);
+  return { suiteFail: round1Suite || round2Suite, round1Suite, round2Suite };
+}
+
+function appendSuiteNotes(notes, outcome) {
+  if (outcome.round1Suite) notes.push("❌ 第 1 輪有 suite 或 hook 錯誤");
+  if (outcome.round2Suite) notes.push("❌ 第 2 輪有 suite 或 hook 錯誤");
+}
+
 export function judge(a, b, coveragePath) {
   const { flaky, failed, total } = finish(a, b);
   const coverage = loadRoundCoverage(a, coveragePath);
@@ -251,9 +275,10 @@ export function judge(a, b, coveragePath) {
   const round1Unhandled = unhandledFails(a.unhandled);
   const round2Unhandled = unhandledFails(b.unhandled);
   const unhandled = round1Unhandled || round2Unhandled;
-  const suiteFail = Boolean(a.report) && !reportShapeBad(a.report) && suiteLevelFailure(a.report);
+  const suite = suiteOutcome(a, b);
+  const suiteFail = suite.suiteFail;
   const notes = exitNotes(summaryFail, exitFail, round1Unhandled, round2Unhandled, total);
-  if (suiteFail) notes.push("❌ 第 1 輪有 suite 或 hook 錯誤");
+  appendSuiteNotes(notes, suite);
   const explained = flakyExplainedCount(b.m, a.m, flaky);
   const byReport = round2ReportFails(b.exitFail, b.report, a.m, flaky);
   const byCount = round2ExitContradicts(b.exitFail, b.ok, b.numFailedTests, explained);
