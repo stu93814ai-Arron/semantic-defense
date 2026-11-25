@@ -856,12 +856,14 @@ it("停 postgres 逾時會對程序群組 SIGKILL", () => {
   expect(boot).toContain("cluster.process.pid");
 });
 
-function writeFlakyProject(hook: boolean) {
+function writeFlakyProject(hook: boolean | string) {
   const root = mkdtempSync(join(ROOT, "reports", "flaky-"));
   dirs.push(root);
   writeFileSync(join(root, "covered.ts"), "export function covered(n: number) { return n + 1; }\n");
-  const imports = hook ? "afterAll, expect, it" : "expect, it";
-  const hookLine = hook ? "afterAll(() => { if (process.env.HOOK === \"1\") throw new Error(\"hook-boom\"); });\n" : "";
+  const hookLine = hook === true
+    ? "afterAll(() => { if (process.env.HOOK === \"1\") throw new Error(\"hook-boom\"); });\n"
+    : (typeof hook === "string" ? `${hook}\n` : "");
+  const imports = hookLine ? "afterAll, expect, it" : "expect, it";
   writeFileSync(join(root, "flaky.test.ts"), `import { ${imports} } from "vitest";\nimport { covered } from "./covered";\nit("steady", () => { expect(covered(0)).toBe(1); });\nit("case", () => { expect(covered(1)).toBe(process.env.ROUND === "1" ? 1 : 2); });\n${hookLine}`);
   const cov = JSON.stringify(join(root, "cov"));
   const configPath = JSON.stringify(join(ROOT, "vitest.config.ts"));
@@ -895,10 +897,13 @@ it("真 FLAKY 仍寫出覆蓋率摘要且只把該筆列入 flaky", async () => 
     for (const suite of report.testResults) for (const row of suite.assertionResults) m.set(mod.failureIdentity(suite.name, row.fullName), row.status);
     return { m, exitFail, ok: report.success, numFailedTests: report.numFailedTests, report, unhandled: { ok: true, count: 0 }, suite: { ok: true, count: 0 }, startedAt: started };
   };
-  const outcome = mod.judge(round(first.json, true), round(second.json, false), join(root, "cov", "coverage-summary.json"));
+  const left = round(first.json, true);
+  const right = round(second.json, false);
+  const outcome = mod.judge(left, right, join(root, "cov", "coverage-summary.json"));
   const caseId = mod.failureIdentity(join(root, "flaky.test.ts"), "case");
   expect(outcome.stop).toBe(false);
   expect([...outcome.flaky].sort()).toEqual([caseId]);
+  expect(mod.settleMain(left, right, settleIo(join(root, "cov", "coverage-summary.json")))).toBe(0);
 });
 
 it("第 1 輪 afterAll 拋錯加上一筆 FLAKY 時退出碼不是 0", async () => {
@@ -979,6 +984,56 @@ it("同檔空 message 的 afterAll 寫出 suite 錯誤筆數，judge 不放行",
     expect(outcome.flaky).toContain(id);
     expect(outcome.stop).toBe(true);
     expect(outcome.notes.join("\n")).toContain("第 1 輪有 suite 或 hook 錯誤");
+    const rc = mod.settleMain(
+      { m: new Map([[id, "failed"], [okId, "passed"]]), exitFail: true, ok: false, numFailedTests: 1, report, unhandled: { ok: true, count: 0 }, suite: { ok: true, count: suiteCount(probed.suiteFile) }, startedAt: Date.now() - 5000 },
+      { m: new Map([[id, "passed"], [okId, "passed"]]), exitFail: false, ok: true, numFailedTests: 0, report: passed, unhandled: { ok: true, count: 0 }, suite: { ok: true, count: 0 }, startedAt: Date.now() - 5000 },
+      settleIo(freshSummary()),
+    );
+    expect(rc, hook).not.toBe(0);
+  }
+});
+
+it("同檔 afterAll 丟空 message，且第 1 輪只有一筆 FLAKY 時，閘門退出碼不是 0", async () => {
+  const mod = await import("../tests.mjs");
+  const hooks = [
+    "afterAll(() => { if (process.env.ROUND === \"1\") throw new Error(); });",
+    "afterAll(() => { if (process.env.ROUND === \"1\") throw {}; });",
+  ];
+  for (const hook of hooks) {
+    const root = writeFlakyProject(hook);
+    const started = Date.now() - 5000;
+    const runRound = (round: string) => {
+      const json = join(root, `gate-${round}.json`);
+      const suiteFile = join(root, `suite-${round}.json`);
+      const r = spawnSync(process.execPath, [
+        resolve(ROOT, "node_modules/vitest/vitest.mjs"), "run", "--root", root, "--config", join(root, "vitest.config.ts"),
+        "--reporter=json", `--reporter=${resolve(__dirname, "../vitest-live-reporter.mjs")}`, `--outputFile=${json}`,
+      ], {
+        encoding: "utf8",
+        cwd: ROOT,
+        env: { ...process.env, ROUND: round, LIVE_REPORT_DIR: join(root, "live"), SUITE_REPORT: suiteFile, UNHANDLED_REPORT: join(root, `unhandled-${round}.json`) },
+      });
+      return { r, json, suiteFile };
+    };
+    const first = runRound("1");
+    const second = runRound("2");
+    expect(first.r.status, first.r.stdout + first.r.stderr).not.toBe(0);
+    expect(second.r.status, second.r.stdout + second.r.stderr).toBe(0);
+    const body = JSON.parse(text(first.json));
+    expect(String(body.testResults[0].message ?? "").trim(), hook).toBe("");
+    expect(suiteCount(first.suiteFile), hook).toBeGreaterThan(0);
+    expect(suiteCount(second.suiteFile), hook).toBe(0);
+    const asRun = (file: string, suiteFile: string, exitFail: boolean) => {
+      const report = JSON.parse(text(file));
+      const m = new Map<string, string>();
+      for (const suite of report.testResults) for (const row of suite.assertionResults ?? []) m.set(mod.failureIdentity(suite.name, row.fullName), row.status);
+      return { m, exitFail, ok: report.success, numFailedTests: report.numFailedTests, report, unhandled: { ok: true, count: 0 }, suite: { ok: true, count: suiteCount(suiteFile) }, startedAt: started };
+    };
+    const left = asRun(first.json, first.suiteFile, true);
+    const right = asRun(second.json, second.suiteFile, false);
+    const caseId = mod.failureIdentity(join(root, "flaky.test.ts"), "case");
+    expect([...mod.judge(left, right, freshSummary()).flaky], hook).toContain(caseId);
+    expect(mod.settleMain(left, right, settleIo(freshSummary())), hook).not.toBe(0);
   }
 });
 
