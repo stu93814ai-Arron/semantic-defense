@@ -264,6 +264,43 @@ it("SIGTERM 等快照連線成功後才關 postgres，並刪掉 sd-pg 目錄", a
   expect(left).toEqual([]);
 });
 
+function killPostmaster(base: string) {
+  if (!existsSync(base)) return;
+  for (const name of readdirSync(base)) {
+    if (!name.startsWith("sd-pg-")) continue;
+    const pidFile = join(base, name, "data", "postmaster.pid");
+    if (existsSync(pidFile)) {
+      const pid = Number(readFileSync(pidFile, "utf8").split("\n")[0]);
+      if (pid) { try { process.kill(pid, "SIGKILL"); } catch { /* 已結束 */ } }
+    }
+    rmSync(join(base, name), { recursive: true, force: true });
+  }
+}
+
+it.fails("with-pg 被 SIGKILL 後清掉孤兒 postgres 與 sd-pg 目錄", async () => {
+  const base = scratch();
+  const ready = join(base, "ready");
+  const script = join(base, "child.mjs");
+  writeFileSync(script, "import { writeFileSync } from 'node:fs'; writeFileSync(process.env.READY_FILE, '1'); setInterval(() => {}, 1000);\n");
+  const env: NodeJS.ProcessEnv = { ...process.env, TMPDIR: base, READY_FILE: ready };
+  delete env.DATABASE_URL;
+  const child = spawn(process.execPath, [resolve(ROOT, "scripts/with-pg.mjs"), process.execPath, script], {
+    cwd: ROOT, env, detached: true, stdio: ["ignore", "pipe", "pipe"],
+  });
+  kids.push(child);
+  child.stdout?.on("data", () => {});
+  child.stderr?.on("data", () => {});
+  try {
+    expect(await waitUntil(() => existsSync(ready), 20000)).toBe(true);
+    process.kill(child.pid!, "SIGKILL");
+    const gone = await waitUntil(() => readdirSync(base).every((name) => !name.startsWith("sd-pg-")), 3000);
+    expect(gone).toBe(true);
+  } finally {
+    if (child.pid) { try { process.kill(-child.pid, "SIGKILL"); } catch { /* 群組已結束 */ } }
+    killPostmaster(base);
+  }
+});
+
 it("子行程被信號殺掉時不以 0 收場", async () => {
   const code = await runChild(process.execPath, ["-e", "process.kill(process.pid, 'SIGKILL')"], process.env);
   expect(code).not.toBe(0);
