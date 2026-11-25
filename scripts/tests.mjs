@@ -38,9 +38,14 @@ function reportShapeBad(report) {
   return !Array.isArray(report.testResults);
 }
 
+function hookMessage(file) {
+  return typeof file.message === "string" && file.message.trim() !== "";
+}
+
 function suiteLevelFailure(report) {
   for (const file of report.testResults) {
     if (!file || file.status !== "failed") continue;
+    if (hookMessage(file)) return true;
     const rows = Array.isArray(file.assertionResults) ? file.assertionResults : [];
     if (!rows.some((row) => row && row.status === "failed")) return true;
   }
@@ -226,25 +231,32 @@ function exitNotes(summaryFail, exitFail, unhandled, total) {
   return notes;
 }
 
-/** 第 1 輪未處理錯誤與覆蓋率不足獨立失敗，不會被 FLAKY 吸收。 */
+function loadRoundCoverage(runResult, coveragePath) {
+  if (coveragePath) return loadCoverageSummary(coveragePath, runResult.startedAt);
+  return loadCoverageSummary("reports/coverage/coverage-summary.json", runResult.startedAt);
+}
+
+/** 第 1 輪未處理錯誤、覆蓋率不足、suite 或 hook 錯誤都獨立失敗，不會被 FLAKY 吸收。 */
 export function gateStops(flags) {
-  if (flags.unhandled || flags.coverageFail) return true;
+  if (flags.unhandled || flags.coverageFail || flags.suiteFail) return true;
   return flags.failedCount > 0 || flags.total === 0 || flags.round2Lie;
 }
 
-function judge(a, b) {
+export function judge(a, b, coveragePath) {
   const { flaky, failed, total } = finish(a, b);
-  const coverage = loadCoverageSummary("reports/coverage/coverage-summary.json", a.startedAt);
+  const coverage = loadRoundCoverage(a, coveragePath);
   const summaryFail = !coverage.ok || coverageBelow(coverage.summary);
   const exitFail = unexplainedExit(a, failed, summaryFail);
   const unhandled = unhandledFails(a.unhandled) || unhandledFails(b.unhandled);
+  const suiteFail = Boolean(a.report) && !reportShapeBad(a.report) && suiteLevelFailure(a.report);
   const notes = exitNotes(summaryFail, exitFail, unhandled, total);
+  if (suiteFail) notes.push("❌ 第 1 輪有 suite 或 hook 錯誤");
   const explained = flakyExplainedCount(b.m, a.m, flaky);
   const byReport = round2ReportFails(b.exitFail, b.report, a.m, flaky);
   const byCount = round2ExitContradicts(b.exitFail, b.ok, b.numFailedTests, explained);
   const round2Lie = byReport || byCount;
   if (round2Lie) notes.push("❌ 第 2 輪退出碼非 0 或報告不是成功，且失敗沒有全部對上 FLAKY");
-  const stop = gateStops({ failedCount: failed.length, coverageFail: summaryFail || exitFail, unhandled, total, round2Lie });
+  const stop = gateStops({ failedCount: failed.length, coverageFail: summaryFail || exitFail, unhandled, suiteFail, total, round2Lie });
   return { flaky, failed, total, notes, stop };
 }
 

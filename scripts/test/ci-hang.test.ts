@@ -701,7 +701,7 @@ function runFixture(root: string, env: Record<string, string>, outName: string, 
   return { r, json };
 }
 
-it.fails("真 FLAKY 仍寫出覆蓋率摘要且只把該筆列入 flaky", async () => {
+it("真 FLAKY 仍寫出覆蓋率摘要且只把該筆列入 flaky", async () => {
   const src = readFileSync(join(ROOT, "vitest.config.ts"), "utf8");
   expect(src).toContain("reportOnFailure: true");
   const root = writeFlakyProject(false);
@@ -724,7 +724,7 @@ it.fails("真 FLAKY 仍寫出覆蓋率摘要且只把該筆列入 flaky", async 
   expect([...outcome.flaky].sort()).toEqual([caseId]);
 });
 
-it.fails("第 1 輪 afterAll 拋錯加上一筆 FLAKY 時退出碼不是 0", async () => {
+it("第 1 輪 afterAll 拋錯加上一筆 FLAKY 時退出碼不是 0", async () => {
   const root = writeFlakyProject(true);
   const first = runFixture(root, { ROUND: "1", HOOK: "1" }, "run1.json", false);
   const second = runFixture(root, { ROUND: "2" }, "run2.json", false);
