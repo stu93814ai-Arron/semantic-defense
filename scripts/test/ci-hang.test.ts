@@ -349,6 +349,33 @@ it.fails("第 2 輪退出碼非 0 或報告不是成功時，失敗數 0 也要�
   expect(mod.round2ExitContradicts(true, true, 2)).toBe(false);
 });
 
+it.fails("numFailedTests 為 1 且該筆是 FLAKY 時放行", async () => {
+  const mod = await import("../tests.mjs");
+  const name = "suite > one";
+  const explained = mod.flakyExplainedCount(new Map([[name, "failed"]]), new Map([[name, "passed"]]), new Set([name]));
+  expect(explained).toBe(1);
+  expect(mod.round2ExitContradicts(true, false, 1, explained)).toBe(false);
+});
+
+it.fails("numFailedTests 為 2 但只有 1 筆可對應 FLAKY 時失敗", async () => {
+  const mod = await import("../tests.mjs");
+  const flaky = new Set(["suite > one"]);
+  const other = new Map([["suite > one", "passed"], ["suite > two", "failed"]]);
+  const onlyOne = new Map([["suite > one", "failed"]]);
+  const both = new Map([["suite > one", "failed"], ["suite > two", "failed"]]);
+  expect(mod.flakyExplainedCount(onlyOne, other, flaky)).toBe(1);
+  expect(mod.round2ExitContradicts(true, false, 2, 1)).toBe(true);
+  expect(mod.flakyExplainedCount(both, other, flaky)).toBe(1);
+  expect(mod.round2ExitContradicts(true, false, 2, 1)).toBe(true);
+});
+
+it.fails("第 2 輪用報告的 numFailedTests 對可解釋的 FLAKY", () => {
+  const src = readFileSync(resolve(__dirname, "../tests.mjs"), "utf8");
+  expect(src).toContain("numFailedTests: Number(r.numFailedTests) || 0");
+  expect(src).toContain("flakyExplainedCount(b.m, a.m, flaky)");
+  expect(src).not.toContain("round2ExitContradicts(b.exitFail, b.ok, failed.length)");
+});
+
 it("停不住的 postmaster 會在時限內收到 SIGKILL", async () => {
   const mod = await import("../pg-lifecycle.mjs");
   expect(mod.STOP_MS).toBe(5000);
