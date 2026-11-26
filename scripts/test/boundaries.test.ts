@@ -5,6 +5,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { guardedNodeArgs } from "./guard-node.ts";
 
 const SCRIPT = resolve(__dirname, "../boundaries.mjs");
 const dirs: string[] = [];
@@ -26,7 +27,7 @@ function run(files: Files): { code: number; out: string } {
     mkdirSync(dirname(abs), { recursive: true });
     writeFileSync(abs, c);
   }
-  const r = spawnSync(process.execPath, [SCRIPT], { cwd: root, encoding: "utf8" });
+  const r = spawnSync(process.execPath, guardedNodeArgs([SCRIPT]), { cwd: root, encoding: "utf8" });
   return { code: r.status ?? -1, out: r.stdout + r.stderr };
 }
 

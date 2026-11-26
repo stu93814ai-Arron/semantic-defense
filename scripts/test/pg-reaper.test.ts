@@ -6,6 +6,7 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect, it } from "vitest";
 import { postmasterPid, reapDir } from "../pg-reaper.mjs";
+import { guardedNodeArgs } from "./guard-node.ts";
 
 const REAPER = resolve(__dirname, "../pg-reaper.mjs");
 const deadParent = String(Number(readFileSync("/proc/sys/kernel/pid_max", "utf8")) + 1000);
@@ -35,9 +36,9 @@ function hookEnv(log: string): NodeJS.ProcessEnv {
 function proveHook(base: string, preload: string, sleepPid: number): void {
   const log = join(base, "probe.log");
   rmSync(log, { force: true });
-  const probed = spawnSync(process.execPath, [
+  const probed = spawnSync(process.execPath, guardedNodeArgs([
     "--require", preload, "-e", "process.kill(Number(process.argv[1]), 'SIGKILL')", String(sleepPid),
-  ], { encoding: "utf8", env: hookEnv(log), timeout: 3000 });
+  ]), { encoding: "utf8", env: hookEnv(log), timeout: 3000 });
   expect(probed.status, probed.stderr).toBe(0);
   expect(readFileSync(log, "utf8")).toBe(`${sleepPid} SIGKILL\n`);
   expect(pidAlive(sleepPid)).toBe(true);
@@ -46,7 +47,7 @@ function proveHook(base: string, preload: string, sleepPid: number): void {
 function killLog(base: string, preload: string, dir: string): string {
   const log = join(base, "kills.log");
   rmSync(log, { force: true });
-  const ran = spawnSync(process.execPath, ["--require", preload, REAPER, deadParent, dir], {
+  const ran = spawnSync(process.execPath, guardedNodeArgs(["--require", preload, REAPER, deadParent, dir]), {
     encoding: "utf8", env: hookEnv(log), timeout: 3000,
   });
   expect(ran.error, ran.stderr).toBeUndefined();
@@ -130,7 +131,7 @@ process.stdout.write(JSON.stringify(kills));
   try {
     const env = { ...process.env };
     delete env.NODE_OPTIONS;
-    const ran = spawnSync(process.execPath, [driver, base], { encoding: "utf8", env, timeout: 3000 });
+    const ran = spawnSync(process.execPath, guardedNodeArgs([driver, base]), { encoding: "utf8", env, timeout: 3000 });
     expect(ran.status, ran.stderr).toBe(0);
     expect(ran.stdout).toBe(JSON.stringify([
       [[-4242, "SIGKILL"]],

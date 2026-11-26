@@ -44,7 +44,10 @@ const PROBE = [
   "const pid = Number(process.argv[1]);",
   "function hit(target, signal) {",
   "  try { process.kill(target, signal); return \"sent\"; }",
-  "  catch (err) { return String((err && err.code) || \"\") + \" \" + String((err && err.message) || err); }",
+  "  catch (err) {",
+  "    const code = err && err.code ? String(err.code) + \" \" : \"\";",
+  "    return code + String((err && err.message) || err);",
+  "  }",
   "}",
   "process.stdout.write(JSON.stringify({",
   "  positive: hit(pid, \"SIGKILL\"),",
@@ -53,7 +56,7 @@ const PROBE = [
   "}));",
 ].join("\n");
 
-it.fails("守衛子程序擋下 SIGKILL，負 pid 也擋，signal 0 仍是真的探測", () => {
+it("守衛子程序擋下 SIGKILL，負 pid 也擋，signal 0 仍是真的探測", () => {
   const pid = absentPid();
   const ran = spawnSync(process.execPath, [
     "--require", join(__dirname, "guard-real-kill.cjs"), "-e", PROBE, String(pid),
@@ -68,7 +71,7 @@ it.fails("守衛子程序擋下 SIGKILL，負 pid 也擋，signal 0 仍是真的
   expect(groupGone(pid)).toBe(true);
 });
 
-it.fails("allowlist 只放行子程序自己的 pid，自我 SIGKILL 仍送得出去", () => {
+it("allowlist 只放行子程序自己的 pid，自我 SIGKILL 仍送得出去", () => {
   const ran = spawnSync(process.execPath, [
     "--require", join(__dirname, "guard-real-kill.cjs"),
     "-e", "process.kill(process.pid, 'SIGKILL'); process.stdout.write('still-alive')",
@@ -117,11 +120,11 @@ function unguarded(): string[] {
   return hits;
 }
 
-it.fails("每個會派 node 或 bash 子程序的測試都帶上 guard-real-kill", () => {
+it("每個會派 node 或 bash 子程序的測試都帶上 guard-real-kill", () => {
   expect(unguarded()).toEqual([]);
 });
 
-it.fails("guardedNodeArgs 與 guardEnv 一定預載 guard-real-kill", async () => {
+it("guardedNodeArgs 與 guardEnv 一定預載 guard-real-kill", async () => {
   const mod = await import("./guard-node.ts");
   expect(mod.guardedNodeArgs(["-e", "0"]).slice(0, 2)).toEqual(["--require", GUARD]);
   const env = mod.guardEnv({ PATH: "/bin", NODE_OPTIONS: "--trace-exit" });

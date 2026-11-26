@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { runChild } from "../run-child.mjs";
+import { guardEnv, guardedNodeArgs } from "./guard-node.ts";
 import { captureActivity, formatPartial, readServerSnapshot, setReportDir, startActivityLoop, writeRunning, writeSnapshot } from "../live-report.mjs";
 import LiveReporter, { resetLiveReporter } from "../vitest-live-reporter.mjs";
 
@@ -45,12 +46,12 @@ const sleeperUntil = (flag: string) => `const fs=require("fs"); const f=${JSON.s
 
 it("子行程執行期間仍排空其他 stderr，寫滿管道也不會堵住", async () => {
   const flag = join(scratch(), "drained");
-  const logger = spawn(process.execPath, ["-e", LOGGER], { stdio: ["ignore", "ignore", "pipe"] });
+  const logger = spawn(process.execPath, guardedNodeArgs(["-e", LOGGER]), { stdio: ["ignore", "ignore", "pipe"] });
   kids.push(logger);
   if (!logger.stderr) throw new Error("logger stderr missing");
   let bytes = 0;
   logger.stderr.on("data", (c: Buffer) => { bytes += c.length; if (bytes >= DRAIN_BYTES) writeFileSync(flag, "1"); });
-  await runChild(process.execPath, ["-e", sleeperUntil(flag)], process.env);
+  await runChild(process.execPath, guardedNodeArgs(["-e", sleeperUntil(flag)]), process.env);
   expect(bytes).toBe(DRAIN_BYTES);
 });
 
@@ -93,7 +94,7 @@ installKillSnapshot(${JSON.stringify(dir)}, async () => ({
 writeRunning(${JSON.stringify(dir)}, ["apps/control-api/test/judge-tick.test.ts > 卡住的測試"]);
 setInterval(() => {}, 1000);
 `);
-  const child = spawn(process.execPath, [childPath], { stdio: "ignore" });
+  const child = spawn(process.execPath, guardedNodeArgs([childPath]), { stdio: "ignore" });
   kids.push(child);
   await waitUntil(() => existsSync(join(dir, "vitest-live.json")), 2000);
   child.kill("SIGTERM");
@@ -128,7 +129,7 @@ installKillSnapshot(${JSON.stringify(dir)}, () => new Promise(() => {}));
 writeFileSync(${JSON.stringify(ready)}, "1");
 setInterval(() => {}, 1000);
 `);
-  const child = spawn(process.execPath, [childPath], { stdio: "ignore" });
+  const child = spawn(process.execPath, guardedNodeArgs([childPath]), { stdio: "ignore" });
   kids.push(child);
   expect(await waitUntil(() => existsSync(ready), 2000)).toBe(true);
   child.kill("SIGTERM");
@@ -160,7 +161,7 @@ it("週期快照的計時器不留住行程", async () => {
   writeFileSync(childPath, `import { startActivityLoop } from ${mod};
 startActivityLoop(${JSON.stringify(dir)}, async () => ({ activity: [], locks: [] }));
 `);
-  const child = spawn(process.execPath, [childPath], { stdio: "ignore" });
+  const child = spawn(process.execPath, guardedNodeArgs([childPath]), { stdio: "ignore" });
   kids.push(child);
   const exited = await Promise.race([once(child, "exit").then(() => true), delay(2000).then(() => false)]);
   expect(exited).toBe(true);
@@ -179,7 +180,7 @@ it("dump-partial 印出仍在跑的測試與 pg 快照", () => {
   const dir = scratch();
   writeRunning(dir, ["file > stuck"]);
   writeSnapshot(dir, { activity: [{ query: "INSERT", wait_event: null }], locks: [] });
-  const dumped = spawnSync("bash", [resolve(__dirname, "../dump-partial.sh"), dir], { encoding: "utf8" });
+  const dumped = spawnSync("bash", [resolve(__dirname, "../dump-partial.sh"), dir], { encoding: "utf8", env: guardEnv(process.env) });
   expect(dumped.status).toBe(0);
   expect(dumped.stdout).toContain("file > stuck");
   expect(dumped.stdout).toContain("INSERT");
@@ -218,7 +219,7 @@ installKillSnapshot(${JSON.stringify(dir)}, async () => { throw new Error("the d
 writeFileSync(${JSON.stringify(ready)}, "1");
 setInterval(() => {}, 1000);
 `);
-  const child = spawn(process.execPath, [childPath], { stdio: "ignore" });
+  const child = spawn(process.execPath, guardedNodeArgs([childPath]), { stdio: "ignore" });
   kids.push(child);
   expect(await waitUntil(() => existsSync(ready), 2000)).toBe(true);
   child.kill("SIGTERM");
@@ -226,7 +227,7 @@ setInterval(() => {}, 1000);
   const live = text(join(dir, "pg-live.json"));
   expect(live).toContain("kept-row");
   expect(live).not.toContain("shutting down");
-  const dumped = spawnSync("bash", [resolve(__dirname, "../dump-partial.sh"), dir], { encoding: "utf8" });
+  const dumped = spawnSync("bash", [resolve(__dirname, "../dump-partial.sh"), dir], { encoding: "utf8", env: guardEnv(process.env) });
   expect(dumped.stdout).toContain("kept-row");
 });
 
@@ -252,7 +253,7 @@ it("SIGTERM 等快照連線成功後才關 postgres，並刪掉 sd-pg 目錄", a
   writeFileSync(script, TERM_CHILD);
   const env: NodeJS.ProcessEnv = { ...process.env, TMPDIR: base, SNAP_FILE: snap, READY_FILE: ready, REQUIRE_FROM: join(ROOT, "package.json") };
   delete env.DATABASE_URL;
-  const child = spawn(process.execPath, [resolve(ROOT, "scripts/with-pg.mjs"), process.execPath, script], {
+  const child = spawn(process.execPath, guardedNodeArgs([resolve(ROOT, "scripts/with-pg.mjs"), process.execPath, script]), {
     cwd: ROOT, env, detached: true, stdio: ["ignore", "pipe", "pipe"],
   });
   kids.push(child);
@@ -317,7 +318,7 @@ it("with-pg 被 SIGKILL 後清掉孤兒 postgres 與 sd-pg 目錄", async () => 
   writeFileSync(script, "import { writeFileSync } from 'node:fs'; writeFileSync(process.env.READY_FILE, '1'); setInterval(() => {}, 1000);\n");
   const env: NodeJS.ProcessEnv = { ...process.env, TMPDIR: base, READY_FILE: ready };
   delete env.DATABASE_URL;
-  const child = spawn(process.execPath, [resolve(ROOT, "scripts/with-pg.mjs"), process.execPath, script], {
+  const child = spawn(process.execPath, guardedNodeArgs([resolve(ROOT, "scripts/with-pg.mjs"), process.execPath, script]), {
     cwd: ROOT, env, detached: true, stdio: ["ignore", "pipe", "pipe"],
   });
   kids.push(child);
@@ -346,7 +347,7 @@ it("with-pg 被 SIGKILL 後清掉孤兒 postgres 與 sd-pg 目錄", async () => 
 });
 
 it("子行程被信號殺掉時不以 0 收場", async () => {
-  const code = await runChild(process.execPath, ["-e", "process.kill(process.pid, 'SIGKILL')"], process.env);
+  const code = await runChild(process.execPath, guardedNodeArgs(["-e", "process.kill(process.pid, 'SIGKILL')"]), { ...process.env, SD_KILL_ALLOW: "self" });
   expect(code).not.toBe(0);
 });
 
@@ -635,10 +636,10 @@ function unhandledFixture() {
   const countFile = join(root, "live", "unhandled.json");
   const json = join(root, "out.json");
   const started = Date.now();
-  const r = spawnSync(process.execPath, [
+  const r = spawnSync(process.execPath, guardedNodeArgs([
     resolve(ROOT, "node_modules/vitest/vitest.mjs"), "run", "--root", root, "--config", join(root, "vitest.config.ts"),
     "--reporter=json", `--reporter=${resolve(__dirname, "../vitest-live-reporter.mjs")}`, `--outputFile=${json}`,
-  ], { encoding: "utf8", env: { ...process.env, LIVE_REPORT_DIR: join(root, "live"), UNHANDLED_REPORT: countFile }, cwd: ROOT });
+  ]), { encoding: "utf8", env: { ...process.env, LIVE_REPORT_DIR: join(root, "live"), UNHANDLED_REPORT: countFile }, cwd: ROOT });
   return { r, json, countFile, started };
 }
 
@@ -1027,7 +1028,7 @@ it("停不住的 postmaster 會在時限內收到 SIGKILL", async () => {
 
 it("SIGSTOP 的 postmaster 在 5 秒內被程序群組 SIGKILL", async () => {
   const mod = await import("../pg-lifecycle.mjs");
-  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { detached: true, stdio: "ignore" });
+  const child = spawn(process.execPath, guardedNodeArgs(["-e", "setInterval(() => {}, 1000)"]), { detached: true, stdio: "ignore" });
   kids.push(child);
   await once(child, "spawn");
   const exit = once(child, "exit");
@@ -1076,7 +1077,7 @@ function runFixture(root: string, env: Record<string, string>, outName: string, 
   const args = [resolve(ROOT, "node_modules/vitest/vitest.mjs"), "run", "--root", root, "--config", join(root, "vitest.config.ts")];
   if (coverage) args.push("--coverage");
   args.push("--reporter=json", `--outputFile=${json}`);
-  const r = spawnSync(process.execPath, args, { encoding: "utf8", env: { ...process.env, ...env, LIVE_REPORT_DIR: join(root, "live") }, cwd: ROOT });
+  const r = spawnSync(process.execPath, guardedNodeArgs(args), { encoding: "utf8", env: { ...process.env, ...env, LIVE_REPORT_DIR: join(root, "live") }, cwd: ROOT });
   return { r, json };
 }
 
@@ -1145,10 +1146,10 @@ function writeSuiteProbe(source: string) {
 function runSuiteProbe(root: string) {
   const suiteFile = join(root, "suite.json");
   const json = join(root, "out.json");
-  const r = spawnSync(process.execPath, [
+  const r = spawnSync(process.execPath, guardedNodeArgs([
     resolve(ROOT, "node_modules/vitest/vitest.mjs"), "run", "--root", root, "--config", join(root, "vitest.config.ts"),
     "--reporter=json", `--reporter=${resolve(__dirname, "../vitest-live-reporter.mjs")}`, `--outputFile=${json}`,
-  ], { encoding: "utf8", env: { ...process.env, LIVE_REPORT_DIR: join(root, "live"), SUITE_REPORT: suiteFile }, cwd: ROOT });
+  ]), { encoding: "utf8", env: { ...process.env, LIVE_REPORT_DIR: join(root, "live"), SUITE_REPORT: suiteFile }, cwd: ROOT });
   return { r, json, suiteFile };
 }
 
@@ -1208,10 +1209,10 @@ it("同檔 afterAll 丟空 message，且第 1 輪只有一筆 FLAKY 時，閘門
     const runRound = (round: string) => {
       const json = join(root, `gate-${round}.json`);
       const suiteFile = join(root, `suite-${round}.json`);
-      const r = spawnSync(process.execPath, [
+      const r = spawnSync(process.execPath, guardedNodeArgs([
         resolve(ROOT, "node_modules/vitest/vitest.mjs"), "run", "--root", root, "--config", join(root, "vitest.config.ts"),
         "--reporter=json", `--reporter=${resolve(__dirname, "../vitest-live-reporter.mjs")}`, `--outputFile=${json}`,
-      ], {
+      ]), {
         encoding: "utf8",
         cwd: ROOT,
         env: { ...process.env, ROUND: round, LIVE_REPORT_DIR: join(root, "live"), SUITE_REPORT: suiteFile, UNHANDLED_REPORT: join(root, `unhandled-${round}.json`) },
@@ -1348,10 +1349,10 @@ it("json reporter 與 live reporter 可同時跑", async () => {
   writeFileSync(join(dir, "vitest.config.ts"), 'import { defineConfig } from "vitest/config";\nexport default defineConfig({ test: { include: ["ok.test.ts"], watch: false, fileParallelism: false } });\n');
   const json = join(dir, "out.json");
   const live = join(dir, "live");
-  const r = spawnSync(process.execPath, [
+  const r = spawnSync(process.execPath, guardedNodeArgs([
     resolve(ROOT, "node_modules/vitest/vitest.mjs"), "run", "--root", dir, "--config", join(dir, "vitest.config.ts"),
     "--reporter=json", `--reporter=${resolve(__dirname, "../vitest-live-reporter.mjs")}`, `--outputFile=${json}`,
-  ], { encoding: "utf8", env: { ...process.env, LIVE_REPORT_DIR: live }, cwd: ROOT });
+  ]), { encoding: "utf8", env: { ...process.env, LIVE_REPORT_DIR: live }, cwd: ROOT });
   expect(r.status, r.stdout + r.stderr).toBe(0);
   expect(text(json)).toContain("活報告");
   expect(text(join(live, "vitest-live.json"))).toContain("\"running\"");

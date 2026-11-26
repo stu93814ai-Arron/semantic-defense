@@ -11,11 +11,12 @@ import { makeSelfSigned, listenTls } from "./helpers/test-tls.js";
 const SECRET = "s".repeat(32);
 const CN = "webhook.test";
 const CHILD = join(dirname(fileURLToPath(import.meta.url)), "helpers", "send-webhook-once.mjs");
+const GUARD_REAL_KILL = join(dirname(fileURLToPath(import.meta.url)), "../../../scripts/test/guard-real-kill.cjs");
 
 function spawnWebhook(env: NodeJS.ProcessEnv): Promise<{ status: number | null }> {
   const register = join(dirname(fileURLToPath(import.meta.url)), "helpers", "register-ts.mjs");
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, ["--experimental-transform-types", "--import", register, CHILD], { env });
+    const child = spawn(process.execPath, ["--require", GUARD_REAL_KILL, "--experimental-transform-types", "--import", register, CHILD], { env });
     const t = setTimeout(() => { child.kill("SIGTERM"); }, 15_000);
     child.on("exit", (status) => { clearTimeout(t); resolve({ status }); });
   });

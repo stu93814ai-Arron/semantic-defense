@@ -6,6 +6,7 @@ import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { guardEnv, guardedNodeArgs } from "./guard-node.ts";
 import { EXCEPTIONS, evaluateAudit, taipeiToday } from "../audit-allow.mjs";
 
 type Adv = { severity: string; module_name: string; github_advisory_id: string; vulnerable_versions: string; patched_versions: string; findings: { version: string; paths: string[] }[] };
@@ -272,7 +273,7 @@ function runAudit(prodExit: number, fullJson: unknown): { code: number; out: str
   const stub = `#!/usr/bin/env bash\necho "$*" >> "${root}/calls.txt"\ncase "$*" in *--prod*) exit ${prodExit};; *--json*) cat "${root}/full.json"; exit 1;; esac\nexit 0\n`;
   writeFileSync(join(root, "bin", "pnpm"), stub);
   chmodSync(join(root, "bin", "pnpm"), 0o755);
-  const r = spawnSync("bash", [join(root, "scripts", "audit.sh")], { encoding: "utf8", env: { ...process.env, PATH: `${join(root, "bin")}:${process.env.PATH}` } });
+  const r = spawnSync("bash", [join(root, "scripts", "audit.sh")], { encoding: "utf8", env: guardEnv({ ...process.env, PATH: `${join(root, "bin")}:${process.env.PATH}` }) });
   return { code: r.status ?? -1, out: r.stdout + r.stderr, calls: readFileSync(join(root, "calls.txt"), "utf8").trim().split("\n") };
 }
 
@@ -320,7 +321,7 @@ function runAllowCli(opts: { env?: Record<string, string>; args?: string[] }): {
   delete env.AUDIT_ALLOW;
   delete env.SD_AUDIT_EXCEPTIONS;
   Object.assign(env, opts.env ?? {});
-  const r = spawnSync(process.execPath, [join(root, "scripts/audit-allow.mjs"), ...(opts.args ?? [])], {
+  const r = spawnSync(process.execPath, guardedNodeArgs([join(root, "scripts/audit-allow.mjs"), ...(opts.args ?? [])]), {
     encoding: "utf8", cwd: root, env,
   });
   return { code: r.status ?? -1, out: `${r.stdout ?? ""}\n${r.stderr ?? ""}` };
