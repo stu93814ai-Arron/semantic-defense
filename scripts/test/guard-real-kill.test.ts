@@ -1,0 +1,131 @@
+/* eslint-disable security/detect-non-literal-fs-filename -- 掃描測試檔與讀 pid_max，路徑不是使用者輸入 */
+import { spawnSync } from "node:child_process";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { expect, it } from "vitest";
+
+const ROOT = resolve(__dirname, "../..");
+const GUARD = join(__dirname, "guard-real-kill.cjs");
+const SKIP = new Set(["node_modules", "dist", "reports", "coverage", "playwright-report", "test-results", ".git"]);
+
+function cleanEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  const env = { ...process.env, ...extra };
+  delete env.NODE_OPTIONS;
+  return env;
+}
+
+function pidGone(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+function groupGone(pid: number): boolean {
+  try {
+    process.kill(-pid, 0);
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+function absentPid(): number {
+  const max = Number(readFileSync("/proc/sys/kernel/pid_max", "utf8"));
+  const pid = max + 1000;
+  expect(pidGone(pid), String(pid)).toBe(true);
+  expect(groupGone(pid), String(-pid)).toBe(true);
+  return pid;
+}
+
+const PROBE = [
+  "const pid = Number(process.argv[1]);",
+  "function hit(target, signal) {",
+  "  try { process.kill(target, signal); return \"sent\"; }",
+  "  catch (err) { return String((err && err.code) || \"\") + \" \" + String((err && err.message) || err); }",
+  "}",
+  "process.stdout.write(JSON.stringify({",
+  "  positive: hit(pid, \"SIGKILL\"),",
+  "  negative: hit(-pid, \"SIGKILL\"),",
+  "  probe: hit(pid, 0),",
+  "}));",
+].join("\n");
+
+it.fails("守衛子程序擋下 SIGKILL，負 pid 也擋，signal 0 仍是真的探測", () => {
+  const pid = absentPid();
+  const ran = spawnSync(process.execPath, [
+    "--require", join(__dirname, "guard-real-kill.cjs"), "-e", PROBE, String(pid),
+  ], { encoding: "utf8", env: cleanEnv(), timeout: 3000 });
+  expect(ran.status, ran.stderr).toBe(0);
+  const body = JSON.parse(ran.stdout) as { positive: string; negative: string; probe: string };
+  expect(body.positive).toBe(`refusing SIGKILL to ${pid}`);
+  expect(body.negative).toBe(`refusing SIGKILL to ${-pid}`);
+  expect(body.probe).not.toContain("refusing");
+  expect(body.probe).toContain("ESRCH");
+  expect(pidGone(pid)).toBe(true);
+  expect(groupGone(pid)).toBe(true);
+});
+
+it.fails("allowlist 只放行子程序自己的 pid，自我 SIGKILL 仍送得出去", () => {
+  const ran = spawnSync(process.execPath, [
+    "--require", join(__dirname, "guard-real-kill.cjs"),
+    "-e", "process.kill(process.pid, 'SIGKILL'); process.stdout.write('still-alive')",
+  ], { encoding: "utf8", env: cleanEnv({ SD_KILL_ALLOW: "self" }), timeout: 3000 });
+  expect(ran.signal, ran.stderr).toBe("SIGKILL");
+  expect(ran.stdout ?? "").not.toContain("still-alive");
+});
+
+function listTests(dir: string, out: string[]): void {
+  for (const name of readdirSync(dir)) {
+    if (SKIP.has(name)) continue;
+    const path = join(dir, name);
+    if (statSync(path).isDirectory()) listTests(path, out);
+    else if (/\.(?:test|spec)\.[cm]?[jt]sx?$/.test(name)) out.push(path);
+  }
+}
+
+function nodeMiss(source: string, file: string): string[] {
+  const hits: string[] = [];
+  const re = /(?:spawnSync|spawn|execFileSync|execFile|fork|runChild)\(\s*(?:process\.execPath|["']node["'])\s*,\s*([\s\S]{0,240})/g;
+  for (const match of source.matchAll(re)) {
+    const head = match[1] ?? "";
+    if (head.includes("guardedNodeArgs") || head.includes("guard-real-kill.cjs") || head.includes("GUARD_REAL_KILL")) continue;
+    hits.push(`${file}: ${head.slice(0, 60).replace(/\s+/g, " ")}`);
+  }
+  return hits;
+}
+
+function bashMiss(source: string, file: string): string[] {
+  const hits: string[] = [];
+  const re = /(?:spawnSync|spawn|execFileSync|execFile)\(\s*["'](?:bash|sh)["'][\s\S]{0,500}/g;
+  for (const match of source.matchAll(re)) {
+    if (!match[0].includes("guardEnv")) hits.push(`${file}: bash`);
+  }
+  return hits;
+}
+
+function unguarded(): string[] {
+  const files: string[] = [];
+  listTests(ROOT, files);
+  const hits: string[] = [];
+  for (const file of files) {
+    const source = readFileSync(file, "utf8");
+    hits.push(...nodeMiss(source, file), ...bashMiss(source, file));
+  }
+  return hits;
+}
+
+it.fails("每個會派 node 或 bash 子程序的測試都帶上 guard-real-kill", () => {
+  expect(unguarded()).toEqual([]);
+});
+
+it.fails("guardedNodeArgs 與 guardEnv 一定預載 guard-real-kill", async () => {
+  const mod = await import("./guard-node.ts");
+  expect(mod.guardedNodeArgs(["-e", "0"]).slice(0, 2)).toEqual(["--require", GUARD]);
+  const env = mod.guardEnv({ PATH: "/bin", NODE_OPTIONS: "--trace-exit" });
+  expect(env.NODE_OPTIONS).toContain(`--require ${GUARD}`);
+  expect(env.NODE_OPTIONS).toContain("--trace-exit");
+  expect(mod.guardEnv({ NODE_OPTIONS: `--require ${GUARD}` }).NODE_OPTIONS).toBe(`--require ${GUARD}`);
+});
