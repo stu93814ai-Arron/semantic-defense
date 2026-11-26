@@ -83,7 +83,7 @@ export function BlacklistReviewPage({ nowIso }: { nowIso?: string } = {}) {
     void reviewSource.listPending().then((pending) => {
       if (cancelled) return;
       setItems(pending.ok ? pending.value : []);
-      setMessage(pending.ok ? null : pending.message);
+      if (!pending.ok) setMessage(pending.message);
     });
     return () => {
       cancelled = true;

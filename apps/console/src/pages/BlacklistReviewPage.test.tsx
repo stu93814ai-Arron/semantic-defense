@@ -178,16 +178,15 @@ describe("BlacklistReviewPage 核准與退回", () => {
 });
 
 describe("BlacklistReviewPage 決策訊息", () => {
-  // 成功重整會把剛寫下的決策訊息清成 null。擋到重整完成再斷言，每次都紅。
-  // 實作後 it.fails 改回 it()。
-  it.fails("核准後清單重整完成仍顯示已核准", async () => {
+  // 實作後 it.fails 已改回 it()。重整完成後「已核准」與 409 後端原文仍在。
+  it("核准後清單重整完成仍顯示已核准", async () => {
     await expectMessageSurvivesReload(
       () => fireEvent.click(screen.getByTestId(`approve-${CASE}`)),
       "已核准",
     );
   });
 
-  it.fails("駁回 409 後清單重整完成仍顯示後端原文", async () => {
+  it("駁回 409 後清單重整完成仍顯示後端原文", async () => {
     reject.mockResolvedValue(apiErr("conflict", "已自動上榜", 409));
     await expectMessageSurvivesReload(
       () => fireEvent.click(screen.getByTestId(`reject-${CASE}`)),
