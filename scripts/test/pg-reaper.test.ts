@@ -1,11 +1,11 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- 測試夾具：路徑來自 mkdtemp */
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect, it } from "vitest";
-import { postmasterPid } from "../pg-reaper.mjs";
+import { postmasterPid, reapDir } from "../pg-reaper.mjs";
 
 const REAPER = resolve(__dirname, "../pg-reaper.mjs");
 const deadParent = String(Number(readFileSync("/proc/sys/kernel/pid_max", "utf8")) + 1000);
@@ -139,6 +139,179 @@ process.stdout.write(JSON.stringify(kills));
       [],
       [],
     ]));
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+// 只走注入的 kill／cmdline／pgid。process.kill 收到非 0 訊號會丟錯，測試行程不送訊號。
+type KillCall = [number, string];
+type ReapOutcome = { kills: KillCall[]; error: string | null };
+type ReapHooks = {
+  cmdline?: (pid: number) => Buffer | null;
+  pgid?: (pid: number) => number | null;
+};
+
+function postgresArgv(argv0: string, dataDir: string): Buffer {
+  return Buffer.from(`${argv0}\0-D\0${dataDir}\0`);
+}
+
+function guardRealKill(body: () => void): void {
+  const real = process.kill;
+  process.kill = ((pid: number, signal?: NodeJS.Signals | number) => {
+    if (signal === 0) return real.call(process, pid, 0);
+    throw new Error(`refusing ${String(signal)} to ${String(pid)}`);
+  }) as typeof process.kill;
+  try {
+    body();
+  } finally {
+    process.kill = real;
+  }
+}
+
+function reapKills(dir: string, hooks: ReapHooks): ReapOutcome {
+  const kills: KillCall[] = [];
+  let error: string | null = null;
+  try {
+    guardRealKill(() => {
+      reapDir(dir, {
+        ...hooks,
+        kill: (pid: number, sig: string) => { kills.push([pid, String(sig)]); },
+      });
+    });
+  } catch (e) {
+    error = e instanceof Error ? e.message : String(e);
+  }
+  return { kills, error };
+}
+
+function expectNoSignal(got: ReapOutcome, label: string): void {
+  expect(got.kills, label).toEqual([]);
+  expect(got.error ?? "", label).not.toContain("refusing");
+}
+
+it("postmasterPid 拒絕前導零，007 與 0042 都是 null", () => {
+  const samples = ["007", "0042", "007\n", "0042\n"];
+  expect(samples.map((text) => [text, postmasterPid(text)])).toEqual([
+    ["007", null],
+    ["0042", null],
+    ["007\n", null],
+    ["0042\n", null],
+  ]);
+});
+
+it("pid 檔帶前導零時，守望不送任何 kill", () => {
+  const base = mkdtempSync(join(tmpdir(), "sd-reaper-"));
+  try {
+    const hits: string[] = [];
+    for (const [text, numeric] of [["007", 7], ["0042", 42]] as const) {
+      const dir = join(base, text);
+      writePid(dir, `${text}\n`);
+      const got = reapKills(dir, {
+        cmdline: () => postgresArgv("postgres", join(dir, "data")),
+        pgid: () => numeric,
+      });
+      if (got.kills.length > 0 || (got.error ?? "").includes("refusing")) hits.push(`${text} ${JSON.stringify(got)}`);
+    }
+    expect(hits).toEqual([]);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+it("argv0 不是 postgres 本體、也不以 /postgres 結尾，就不殺", () => {
+  const base = mkdtempSync(join(tmpdir(), "sd-reaper-"));
+  try {
+    const hits: string[] = [];
+    const names = ["/x/notpostgres", "postgres-evil", "/x/postgres.sh"] as const;
+    let n = 0;
+    for (const argv0 of names) {
+      const dir = join(base, `bin-${n}`);
+      n += 1;
+      writePid(dir, "4242\n");
+      const got = reapKills(dir, {
+        cmdline: () => postgresArgv(argv0, join(dir, "data")),
+        pgid: () => 4242,
+      });
+      if (got.kills.length > 0 || (got.error ?? "").includes("refusing")) hits.push(`${argv0} ${JSON.stringify(got)}`);
+    }
+    expect(hits).toEqual([]);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+it("pgid 讀不到時只殺已驗證的 pid，不殺整群", () => {
+  const base = mkdtempSync(join(tmpdir(), "sd-reaper-"));
+  try {
+    const hooked = join(base, "hook-null");
+    writePid(hooked, "4242\n");
+    const nullPgid = reapKills(hooked, {
+      cmdline: () => postgresArgv("postgres", join(hooked, "data")),
+      pgid: () => null,
+    });
+    expect(nullPgid.error).toBeNull();
+    expect(nullPgid.kills).toEqual([[4242, "SIGKILL"]]);
+
+    const blew = join(base, "hook-throw");
+    writePid(blew, "4242\n");
+    const thrown = reapKills(blew, {
+      cmdline: () => postgresArgv("postgres", join(blew, "data")),
+      pgid: () => { throw new Error("pgid unreadable"); },
+    });
+    expectNoSignal(thrown, "pgid throw");
+
+    // 不覆寫 pgid，讓 readPgid 讀一個高於 pid_max 的 pid。kill 與 cmdline 仍是 hook。
+    const missingPid = Number(deadParent);
+    const missing = join(base, "proc-missing");
+    writePid(missing, `${missingPid}\n`);
+    const read = reapKills(missing, {
+      cmdline: () => postgresArgv("postgres", join(missing, "data")),
+    });
+    expect(read.error).toBeNull();
+    expect(read.kills).toEqual([[missingPid, "SIGKILL"]]);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+it("cmdline 讀不到時不送任何 kill", () => {
+  const base = mkdtempSync(join(tmpdir(), "sd-reaper-"));
+  try {
+    const missing = join(base, "null");
+    writePid(missing, "4242\n");
+    expectNoSignal(reapKills(missing, {
+      cmdline: () => null,
+      pgid: () => 4242,
+    }), "null");
+    const blew = join(base, "throw");
+    writePid(blew, "4242\n");
+    expectNoSignal(reapKills(blew, {
+      cmdline: () => { throw new Error("cmdline unreadable"); },
+      pgid: () => 4242,
+    }), "throw");
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+it("symlink 目錄只解除連結，不刪目標內容，也不殺程序", () => {
+  const base = mkdtempSync(join(tmpdir(), "sd-reaper-"));
+  try {
+    const target = join(base, "target");
+    writePid(target, "4242\n");
+    writeFileSync(join(target, "payload"), "keep-this-bytes");
+    const link = join(base, "link");
+    symlinkSync(target, link);
+    const got = reapKills(link, {
+      cmdline: () => postgresArgv("postgres", join(link, "data")),
+      pgid: () => 4242,
+    });
+    expectNoSignal(got, "symlink");
+    expect(readFileSync(join(target, "payload"), "utf8")).toBe("keep-this-bytes");
+    expect(readFileSync(join(target, "data", "postmaster.pid"), "utf8")).toBe("4242\n");
+    expect(lstatSync(target).isDirectory()).toBe(true);
+    expect(() => lstatSync(link)).toThrow();
   } finally {
     rmSync(base, { recursive: true, force: true });
   }
