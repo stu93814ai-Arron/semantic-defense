@@ -50,6 +50,24 @@ async function renderReview(): Promise<void> {
   await waitFor(() => expect(listPending).toHaveBeenCalled());
 }
 
+/** 第二次 listPending 先停住。決策訊息出現後才放行，重整完成後訊息仍須在。 */
+async function expectMessageSurvivesReload(click: () => void, expected: string): Promise<void> {
+  let release!: () => void;
+  const reload = new Promise<{ ok: true; value: PendingCandidate[] }>((resolve) => {
+    release = () => resolve({ ok: true, value: [] });
+  });
+  listPending
+    .mockResolvedValueOnce({ ok: true, value: [item()] })
+    .mockImplementationOnce(() => reload);
+  await renderReview();
+  click();
+  await waitFor(() => expect(screen.getByTestId("review-status").textContent).toBe(expected));
+  release();
+  await waitFor(() => expect(screen.getByTestId("empty-state")).toBeTruthy());
+  expect(listPending).toHaveBeenCalledTimes(2);
+  expect(screen.getByTestId("review-status").textContent).toBe(expected);
+}
+
 beforeEach(() => {
   listPending.mockResolvedValue({ ok: true, value: [] });
   approve.mockResolvedValue({ ok: true, value: undefined as never });
@@ -134,6 +152,7 @@ describe("BlacklistReviewPage 核准與退回", () => {
     );
     expect(listPending).toHaveBeenCalledTimes(2);
   });
+
   it("核准或駁回進行中時停用該列按鈕，其他列仍可操作", async () => {
     const otherId = "22222222-2222-4222-8222-222222222222";
     let release!: () => void;
@@ -155,6 +174,25 @@ describe("BlacklistReviewPage 核准與退回", () => {
     release();
     await waitFor(() => expect((approveBtn as HTMLButtonElement).disabled).toBe(false));
     expect((rejectBtn as HTMLButtonElement).disabled).toBe(false);
+  });
+});
+
+describe("BlacklistReviewPage 決策訊息", () => {
+  // 成功重整會把剛寫下的決策訊息清成 null。擋到重整完成再斷言，每次都紅。
+  // 實作後 it.fails 改回 it()。
+  it.fails("核准後清單重整完成仍顯示已核准", async () => {
+    await expectMessageSurvivesReload(
+      () => fireEvent.click(screen.getByTestId(`approve-${CASE}`)),
+      "已核准",
+    );
+  });
+
+  it.fails("駁回 409 後清單重整完成仍顯示後端原文", async () => {
+    reject.mockResolvedValue(apiErr("conflict", "已自動上榜", 409));
+    await expectMessageSurvivesReload(
+      () => fireEvent.click(screen.getByTestId(`reject-${CASE}`)),
+      "已自動上榜",
+    );
   });
 });
 
