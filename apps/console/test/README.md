@@ -71,3 +71,14 @@
 - Cookie 名 `sd_session`；登入 body 用 `username`
 - 短閒置 E2E 可用 **`VITE_IDLE_TIMEOUT_MS`（僅測試建置）**；**伺服器端 idle 為權威**
 - 緊急暫停獨立 API **延至第 4 階段**
+
+## B1 自動上榜開關（驗收 E2E）
+
+`e2e/b1-auto-list.spec.ts`（helper：`e2e/helpers/auto-list.ts`）用 Playwright `route` 模擬 `GET`／`PUT /api/settings/auto-list`。dev `phase2ApiPlugin` 沒有這條路徑，測試不在 src 加路由。契約本文只有 `{ enabled: boolean }`。
+
+- `platform_admin` 在 `/whitelist` 的 `judgment-settings` 看到 `auto-list`（容器，內為 `role=switch`）與 `auto-list-state`。
+- `operator`、`app_owner` 進 `/whitelist` 為無權限：區塊與開關不渲染，且不送 GET。
+- 顯示值以 GET 為準（預設 `enabled:false` → 已關閉）；重新載入再讀後端。
+- 開啟：確認框焦點在「取消」，Esc 不 PUT。確認送 `{enabled:true}`，目前 409，`auto-list-write-error` 為「三向交握佐證尚未上線，暫不能開啟自動上榜。」，狀態維持關閉，且不打 `/api/blacklist` 寫入。
+- 關閉不確認，PUT `{enabled:false}` 成功。讀取失敗顯示 `auto-list-read-error`。
+- 稽核不在 console 可測：回應沒有稽核欄。`settings.auto_list.update`／`update_blocked` 由 control-api 寫入，見 `apps/control-api/test/auto-list-setting.test.ts`。

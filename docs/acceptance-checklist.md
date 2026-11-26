@@ -67,6 +67,19 @@
 | **已測** | 白名單命中不上榜、不進待審 | 同上 |
 | **已測** | 同一 IP 再命中仍只有一筆生效黑名單 | 同上 |
 
+## 自動上榜開關（B1 console，PR #73）
+
+`/whitelist`「判定設定」。dev `phase2ApiPlugin` 未接 `/api/settings/auto-list`，E2E 以 Playwright `route` 模擬契約（不改 src）。
+
+| 狀態 | 準則 | 測試 |
+| --- | --- | --- |
+| **已測（E2E）** | 僅 `platform_admin` 看到 `judgment-settings` 內的 `auto-list`（容器；內有 `role=switch`）與 `auto-list-state`。`operator`／`app_owner` 進 `/whitelist` 為無權限，區塊與開關不渲染，且不送 `GET /api/settings/auto-list` | `apps/console/e2e/b1-auto-list.spec.ts` |
+| **已測（E2E）** | 顯示值來自 GET；預設 `{enabled:false}` 為已關閉；重新載入仍以後端值為準 | 同上 |
+| **已測（E2E）** | 開啟要確認：焦點在「取消」，Esc 不 PUT。確認送 `PUT {enabled:true}`，目前一律 409，`auto-list-write-error` 為「三向交握佐證尚未上線，暫不能開啟自動上榜。」，狀態維持關閉，且不送 `/api/blacklist` 寫入 | 同上 |
+| **已測（E2E）** | 關閉不需確認，`PUT {enabled:false}` 成功 | 同上 |
+| **已測（E2E）** | 讀取失敗顯示 `auto-list-read-error` | 同上 |
+| **console 不可測** | 寫入留下稽核 | HTTP 契約 `AutoListSettingSchema` 只有 `{enabled}`，回應與畫面都沒有稽核欄。`settings.auto_list.update`／`settings.auto_list.update_blocked` 在 control-api（`auto-list-settings.ts`），已由 `apps/control-api/test/auto-list-setting.test.ts` 斷言。 |
+
 ### 第 3 階段未決（阻擋補紅燈，須總召裁示）
 
 1. 黑名單待審／已上榜／撤回、白名單 CRUD、自動上榜門檻調整的 **管理面 HTTP 路徑與本文契約**（附錄只列頁面路由 §7a）。
