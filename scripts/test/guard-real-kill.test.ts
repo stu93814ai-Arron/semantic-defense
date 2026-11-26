@@ -1,6 +1,7 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- 掃描測試檔與讀 pid_max，路徑不是使用者輸入 */
 import { spawnSync } from "node:child_process";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { expect, it } from "vitest";
 
@@ -78,6 +79,102 @@ it("allowlist 只放行子程序自己的 pid，自我 SIGKILL 仍送得出去",
   ], { encoding: "utf8", env: cleanEnv({ SD_KILL_ALLOW: "self" }), timeout: 3000 });
   expect(ran.signal, ran.stderr).toBe("SIGKILL");
   expect(ran.stdout ?? "").not.toContain("still-alive");
+});
+
+// 假 kill 必須先於 guard 載入，guard 存到的底層才是假的。0 與 -1 就算 guard 放行也不會進系統。
+const FAKE_UNDERLYING = [
+  '"use strict";',
+  'const fs = require("fs");',
+  "process.kill = function fakeUnderlyingKill(pid, signal) {",
+  '  fs.appendFileSync(process.env.SD_FAKE_KILL_LOG, String(pid) + " " + String(signal) + "\\n");',
+  '  throw new Error("fake-kill");',
+  "};",
+  "",
+].join("\n");
+
+const SELF_HITS = [
+  "const foreign = Number(process.argv[1]);",
+  "const targets = [foreign, -process.pid, 0, -1, \"self\"];",
+  "function hit(target) {",
+  "  try { process.kill(target, \"SIGKILL\"); return \"sent\"; }",
+  "  catch (err) { return String((err && err.message) || err); }",
+  "}",
+  "process.stdout.write(JSON.stringify({ pid: process.pid, hits: targets.map(hit) }));",
+].join("\n");
+
+const STRING_PID = [
+  "const pid = process.pid;",
+  "let message = \"sent\";",
+  "try { process.kill(String(pid), \"SIGKILL\"); }",
+  "catch (err) { message = String((err && err.message) || err); }",
+  "process.stdout.write(JSON.stringify({ pid: pid, message: message }));",
+].join("\n");
+
+const ONE_PID = [
+  "try { process.kill(Number(process.argv[1]), \"SIGKILL\"); process.stdout.write(\"sent\"); }",
+  "catch (err) { process.stdout.write(String((err && err.message) || err)); }",
+].join("\n");
+
+function withKillStub(run: (dir: string) => void): void {
+  const dir = mkdtempSync(join(tmpdir(), "sd-fake-kill-"));
+  writeFileSync(join(dir, "fake.cjs"), FAKE_UNDERLYING);
+  try {
+    run(dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+function spawnGuarded(dir: string, allow: string, script: string, arg: string) {
+  const log = join(dir, "kills.log");
+  rmSync(log, { force: true });
+  const ran = spawnSync(process.execPath, [
+    "--require", join(dir, "fake.cjs"), "--require", join(__dirname, "guard-real-kill.cjs"), "-e", script, arg,
+  ], { encoding: "utf8", env: cleanEnv({ SD_KILL_ALLOW: allow, SD_FAKE_KILL_LOG: log }), timeout: 3000 });
+  return {
+    status: ran.status,
+    stdout: ran.stdout ?? "",
+    stderr: ran.stderr ?? "",
+    log: existsSync(log) ? readFileSync(log, "utf8") : "",
+  };
+}
+
+it("self 不放行高 pid、-自己、0、-1 與字串 self", () => {
+  const foreign = absentPid();
+  withKillStub((dir) => {
+    const got = spawnGuarded(dir, "self", SELF_HITS, String(foreign));
+    expect(got.status, got.stderr).toBe(0);
+    expect(got.log, got.stdout).toBe("");
+    const body = JSON.parse(got.stdout) as { pid: number; hits: string[] };
+    expect(body.hits).toEqual([
+      `refusing SIGKILL to ${foreign}`,
+      `refusing SIGKILL to ${-body.pid}`,
+      "refusing SIGKILL to 0",
+      "refusing SIGKILL to -1",
+      "refusing SIGKILL to self",
+    ]);
+    expect(pidGone(foreign)).toBe(true);
+  });
+});
+
+it.fails("self 不放行字串形式的自己的 pid", () => {
+  withKillStub((dir) => {
+    const got = spawnGuarded(dir, "self", STRING_PID, "0");
+    expect(got.status, got.stderr).toBe(0);
+    expect(got.log, got.stdout).toBe("");
+    const body = JSON.parse(got.stdout) as { pid: number; message: string };
+    expect(body.message).toBe(`refusing SIGKILL to ${body.pid}`);
+  });
+});
+
+it.fails("SD_KILL_ALLOW 設成 4242 或 -4242 也不放行", () => {
+  withKillStub((dir) => {
+    for (const target of [4242, -4242]) {
+      const got = spawnGuarded(dir, String(target), ONE_PID, String(target));
+      expect(got.log, `${target} ${got.stdout}`).toBe("");
+      expect(got.stdout, got.stderr).toBe(`refusing SIGKILL to ${target}`);
+    }
+  });
 });
 
 function listTests(dir: string, out: string[]): void {
