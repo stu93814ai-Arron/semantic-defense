@@ -93,7 +93,7 @@ const FAKE_UNDERLYING = [
 ].join("\n");
 
 const SELF_HITS = [
-  "const foreign = Number(process.argv[1]);",
+  "const foreign = Number(process.env.SD_KILL_TARGET);",
   "const targets = [foreign, -process.pid, 0, -1, \"self\"];",
   "function hit(target) {",
   "  try { process.kill(target, \"SIGKILL\"); return \"sent\"; }",
@@ -111,7 +111,8 @@ const STRING_PID = [
 ].join("\n");
 
 const ONE_PID = [
-  "try { process.kill(Number(process.argv[1]), \"SIGKILL\"); process.stdout.write(\"sent\"); }",
+  "const target = Number(process.env.SD_KILL_TARGET);",
+  "try { process.kill(target, \"SIGKILL\"); process.stdout.write(\"sent\"); }",
   "catch (err) { process.stdout.write(String((err && err.message) || err)); }",
 ].join("\n");
 
@@ -129,8 +130,12 @@ function spawnGuarded(dir: string, allow: string, script: string, arg: string) {
   const log = join(dir, "kills.log");
   rmSync(log, { force: true });
   const ran = spawnSync(process.execPath, [
-    "--require", join(dir, "fake.cjs"), "--require", join(__dirname, "guard-real-kill.cjs"), "-e", script, arg,
-  ], { encoding: "utf8", env: cleanEnv({ SD_KILL_ALLOW: allow, SD_FAKE_KILL_LOG: log }), timeout: 3000 });
+    "--require", join(dir, "fake.cjs"), "--require", join(__dirname, "guard-real-kill.cjs"), "-e", script,
+  ], {
+    encoding: "utf8",
+    env: cleanEnv({ SD_KILL_ALLOW: allow, SD_FAKE_KILL_LOG: log, SD_KILL_TARGET: arg }),
+    timeout: 3000,
+  });
   return {
     status: ran.status,
     stdout: ran.stdout ?? "",
@@ -157,7 +162,7 @@ it("self 不放行高 pid、-自己、0、-1 與字串 self", () => {
   });
 });
 
-it.fails("self 不放行字串形式的自己的 pid", () => {
+it("self 不放行字串形式的自己的 pid", () => {
   withKillStub((dir) => {
     const got = spawnGuarded(dir, "self", STRING_PID, "0");
     expect(got.status, got.stderr).toBe(0);
@@ -167,7 +172,7 @@ it.fails("self 不放行字串形式的自己的 pid", () => {
   });
 });
 
-it.fails("SD_KILL_ALLOW 設成 4242 或 -4242 也不放行", () => {
+it("SD_KILL_ALLOW 設成 4242 或 -4242 也不放行", () => {
   withKillStub((dir) => {
     for (const target of [4242, -4242]) {
       const got = spawnGuarded(dir, String(target), ONE_PID, String(target));
